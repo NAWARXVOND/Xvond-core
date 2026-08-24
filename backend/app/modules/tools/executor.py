@@ -4,6 +4,7 @@ from backend.app.core.module_access import require_company_module
 
 from backend.app.modules.tools.models import (
     AgentToolAssignment,
+    ToolApprovalRequest,
 )
 from backend.app.modules.tools.registry import (
     tool_registry,
@@ -70,6 +71,7 @@ class ToolExecutor:
         tool_name: str,
         arguments: dict,
         conversation_id: int | None = None,
+        approval_granted: bool = False,
     ) -> dict:
 
         require_company_module(
@@ -113,6 +115,40 @@ class ToolExecutor:
                     "Tool is not registered",
             }
 
+        config = reveal_config(assignment.config)
+        approval_required = bool(
+            config.get("approval_required", False)
+            or tool_name in {
+                "booking",
+                "order",
+                "webhook",
+                "custom_api",
+            }
+        )
+
+        if approval_required and not approval_granted:
+            request = ToolApprovalRequest(
+                company_id=company_id,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                tool_name=tool_name,
+                arguments=arguments or {},
+                status="pending",
+            )
+            db.add(request)
+            db.flush()
+
+            return {
+                "success": False,
+                "tool": tool_name,
+                "data": {
+                    "approval_request_id": request.id,
+                    "status": "pending_approval",
+                },
+                "error": "Tool execution requires human approval",
+                "approval_required": True,
+            }
+
         context = {
             "db":
                 db,
@@ -123,7 +159,7 @@ class ToolExecutor:
             "conversation_id":
                 conversation_id,
             "config":
-                reveal_config(assignment.config),
+                config,
         }
 
         try:
