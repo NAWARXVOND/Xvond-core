@@ -404,6 +404,7 @@ def validate_webhook_request(
         )
 
     db = SessionLocal()
+    matched_channels = 0
 
     try:
         for entry in payload.get("entry", []):
@@ -425,6 +426,7 @@ def validate_webhook_request(
                 if channel is None:
                     continue
 
+                matched_channels += 1
                 config = reveal_config(channel.config)
 
                 if not verify_signature(
@@ -439,7 +441,7 @@ def validate_webhook_request(
     finally:
         db.close()
 
-    return payload
+    return payload, matched_channels
 
 
 @router.post("")
@@ -451,10 +453,16 @@ async def receive_webhook(
         "x-hub-signature-256"
     )
 
-    validate_webhook_request(
+    _, matched_channels = validate_webhook_request(
         raw_body=raw_body,
         signature=signature,
     )
+
+    if matched_channels == 0:
+        return {
+            "status": "ignored",
+            "reason": "unknown_phone_number_id",
+        }
 
     if whatsapp_job_queue.enabled:
         try:
@@ -944,6 +952,48 @@ def process_webhook_payload(
                                 ),
                         },
                     )
+
+                    if not send_result.get(
+                        "success"
+                    ):
+                        # Roll back conversation/message writes so a
+                        # queue retry cannot duplicate stored turns.
+                        db.rollback()
+                        release_message_claim(
+                            db,
+                            message_id,
+                        )
+
+                        audit_service.log(
+                            db=db,
+                            company_id=
+                                channel.company_id,
+                            action=
+                                "whatsapp.reply_retry_scheduled",
+                            resource_type=
+                                "channel",
+                            resource_id=
+                                channel.id,
+                            details={
+                                "message_id":
+                                    message_id,
+                                "status_code":
+                                    send_result.get(
+                                        "status_code"
+                                    ),
+                                "error": str(
+                                    send_result.get(
+                                        "error",
+                                        "",
+                                    )
+                                )[:1000],
+                            },
+                        )
+                        db.commit()
+
+                        raise RuntimeError(
+                            "WhatsApp reply delivery failed"
+                        )
 
                     db.commit()
 
