@@ -2,6 +2,10 @@
 from backend.app.core.config_secrets import reveal_config
 from backend.app.core.module_access import require_company_module
 
+from backend.app.modules.ai_agent.models import (
+    AIAgent,
+    AIConversation,
+)
 from backend.app.modules.tools.models import (
     AgentToolAssignment,
     ToolApprovalRequest,
@@ -79,6 +83,46 @@ class ToolExecutor:
 
         return result
 
+    def validate_execution_scope(
+        self,
+        db,
+        company_id: int,
+        agent_id: int,
+        conversation_id: int | None = None,
+    ) -> str | None:
+        agent = (
+            db.query(AIAgent)
+            .filter(
+                AIAgent.id == agent_id,
+                AIAgent.company_id == company_id,
+            )
+            .first()
+        )
+
+        if agent is None:
+            return "Agent does not belong to this company"
+
+        if conversation_id is None:
+            return None
+
+        conversation = (
+            db.query(AIConversation)
+            .filter(
+                AIConversation.id == conversation_id,
+                AIConversation.company_id == company_id,
+                AIConversation.agent_id == agent_id,
+            )
+            .first()
+        )
+
+        if conversation is None:
+            return (
+                "Conversation does not belong to "
+                "this company and agent"
+            )
+
+        return None
+
     def execute(
         self,
         db,
@@ -89,6 +133,21 @@ class ToolExecutor:
         conversation_id: int | None = None,
         approval_granted: bool = False,
     ) -> dict:
+
+        scope_error = self.validate_execution_scope(
+            db=db,
+            company_id=company_id,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+        )
+
+        if scope_error is not None:
+            return {
+                "success": False,
+                "tool": tool_name,
+                "data": None,
+                "error": scope_error,
+            }
 
         require_company_module(
             db,
