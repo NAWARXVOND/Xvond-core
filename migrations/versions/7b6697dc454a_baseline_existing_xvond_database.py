@@ -10,6 +10,8 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
+from backend.app.core.database.base import Base
+
 
 # revision identifiers, used by Alembic.
 revision: str = '7b6697dc454a'
@@ -19,10 +21,16 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Upgrade schema."""
-    pass
+    """Create the complete Xvond schema on a fresh database."""
+    Base.metadata.create_all(
+        bind=op.get_bind(),
+        checkfirst=True,
+    )
 
 
 def downgrade() -> None:
-    """Downgrade schema."""
-    pass
+    """Remove the complete baseline schema."""
+    Base.metadata.drop_all(
+        bind=op.get_bind(),
+        checkfirst=True,
+    )
