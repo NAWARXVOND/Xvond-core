@@ -48,3 +48,5 @@ jobs:
           done
       - name: Run tests
         run: pytest -q
+      - name: Build production container
+        run: docker build --tag xvond-core:ci .
