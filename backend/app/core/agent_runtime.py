@@ -6,6 +6,7 @@ from backend.app.core.ai.cost_engine import ai_cost_engine
 from backend.app.core.ai.engine import ai_engine
 from backend.app.core.ai.base import ToolOutput
 from backend.app.core.config.settings import settings
+from backend.app.core.module_access import company_module_enabled
 
 from backend.app.models.company import Company
 from backend.app.models.company_module import CompanyModule
@@ -257,21 +258,21 @@ class AgentRuntime:
             conversation.id,
         )
 
-        knowledge = (
-            knowledge_service.get_agent_context(
+        knowledge = ""
+        if company_module_enabled(db, company_id, "knowledge"):
+            knowledge = knowledge_service.get_agent_context(
                 db=db,
                 company_id=company_id,
                 agent_id=agent.id,
                 query=message,
             )
-        )
 
-        available_tools = (
-            tool_executor.get_agent_tools(
+        available_tools = []
+        if company_module_enabled(db, company_id, "tools"):
+            available_tools = tool_executor.get_agent_tools(
                 db=db,
                 agent_id=agent.id,
             )
-        )
 
         tool_definitions = [
             {
