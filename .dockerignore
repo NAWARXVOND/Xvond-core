@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+.env
+.env.*
+__pycache__
+*.py[cod]
+*.zip
+_archive
+.pytest_cache
+.mypy_cache
+.ruff_cache
+coverage.xml
+htmlcov
+XVOND_*.txt
+*AUDIT_REPORT*
