@@ -4,6 +4,7 @@ from backend.app.modules.providers.models import AIProviderRecord
 
 PROVIDERS = [
     ("openai", "OpenAI", 10),
+    ("groq", "Groq", 15),
     ("anthropic", "Anthropic", 20),
     ("google", "Google Gemini", 30),
     ("xai", "xAI", 40),
