@@ -206,6 +206,45 @@ def list_company_agents(
         db.close()
 
 
+@router.get(
+    "/companies/{company_id}/agents/{agent_id}"
+)
+def get_agent_detail(
+    company_id: int,
+    agent_id: int,
+    current_admin: User = Depends(require_xvond_admin),
+):
+    db = SessionLocal()
+    try:
+        agent = (
+            db.query(AIAgent)
+            .filter(
+                AIAgent.id == agent_id,
+                AIAgent.company_id == company_id,
+            )
+            .first()
+        )
+
+        if agent is None:
+            raise HTTPException(
+                status_code=404,
+                detail="AI Agent not found",
+            )
+
+        return {
+            "id": agent.id,
+            "company_id": agent.company_id,
+            "name": agent.name,
+            "description": agent.description,
+            "system_prompt": agent.system_prompt,
+            "provider": agent.provider,
+            "model": agent.model,
+            "enabled": agent.enabled,
+        }
+    finally:
+        db.close()
+
+
 @router.put(
     "/companies/{company_id}/agents/{agent_id}"
 )
