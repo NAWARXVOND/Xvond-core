@@ -13,6 +13,9 @@ class InMemoryRateLimiter:
         self._events = defaultdict(deque)
         self._lock = Lock()
 
+    def healthcheck(self) -> bool:
+        return True
+
     def allow(
         self,
         key: str,
@@ -49,6 +52,12 @@ class RedisRateLimiter:
     def __init__(self, client: Redis, fallback=None):
         self.client = client
         self.fallback = fallback
+
+    def healthcheck(self) -> bool:
+        try:
+            return bool(self.client.ping())
+        except RedisError:
+            return False
 
     def allow(
         self,
