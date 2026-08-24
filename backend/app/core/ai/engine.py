@@ -20,14 +20,15 @@ class AIEngine:
         # MOCK - DEVELOPMENT ONLY
         # --------------------------------
 
-        from backend.app.core.ai.providers.mock import (
-            MockProvider,
-        )
+        if not settings.is_production:
+            from backend.app.core.ai.providers.mock import (
+                MockProvider,
+            )
 
-        provider_registry.register(
-            "mock",
-            MockProvider(),
-        )
+            provider_registry.register(
+                "mock",
+                MockProvider(),
+            )
 
         # --------------------------------
         # OPENAI
