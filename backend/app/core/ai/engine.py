@@ -1,0 +1,183 @@
+
+from backend.app.core.ai.base import (
+    AIProvider,
+    AIResponse,
+)
+from backend.app.core.ai.provider_registry import (
+    provider_registry,
+)
+from backend.app.core.config.settings import settings
+
+
+class AIEngine:
+
+    def __init__(self):
+        self._load_core_providers()
+
+    def _load_core_providers(self):
+
+        # --------------------------------
+        # MOCK - DEVELOPMENT ONLY
+        # --------------------------------
+
+        from backend.app.core.ai.providers.mock import (
+            MockProvider,
+        )
+
+        provider_registry.register(
+            "mock",
+            MockProvider(),
+        )
+
+        # --------------------------------
+        # OPENAI
+        # --------------------------------
+
+        if settings.OPENAI_API_KEY:
+
+            try:
+                from backend.app.core.ai.providers.openai import (
+                    OpenAIProvider,
+                )
+
+                provider_registry.register(
+                    "openai",
+                    OpenAIProvider(),
+                )
+
+            except Exception as exc:
+
+                print(
+                    "Could not load OpenAI provider:",
+                    exc,
+                )
+
+        # --------------------------------
+        # ANTHROPIC
+        # --------------------------------
+
+        if settings.ANTHROPIC_API_KEY:
+
+            try:
+                from backend.app.core.ai.providers.anthropic import (
+                    AnthropicProvider,
+                )
+
+                provider_registry.register(
+                    "anthropic",
+                    AnthropicProvider(),
+                )
+
+            except Exception as exc:
+
+                print(
+                    "Could not load Anthropic provider:",
+                    exc,
+                )
+
+        # --------------------------------
+        # GOOGLE
+        # --------------------------------
+
+        if settings.GOOGLE_API_KEY:
+
+            try:
+                from backend.app.core.ai.providers.google import (
+                    GoogleProvider,
+                )
+
+                provider_registry.register(
+                    "google",
+                    GoogleProvider(),
+                )
+
+            except Exception as exc:
+
+                print(
+                    "Could not load Google provider:",
+                    exc,
+                )
+
+        # --------------------------------
+        # xAI
+        # --------------------------------
+
+        if settings.XAI_API_KEY:
+
+            try:
+                from backend.app.core.ai.providers.xai import (
+                    XAIProvider,
+                )
+
+                provider_registry.register(
+                    "xai",
+                    XAIProvider(),
+                )
+
+            except Exception as exc:
+
+                print(
+                    "Could not load xAI provider:",
+                    exc,
+                )
+
+    def register_provider(
+        self,
+        name: str,
+        provider: AIProvider,
+    ):
+        provider_registry.register(
+            name,
+            provider,
+        )
+
+    def get_provider(
+        self,
+        provider_name: str,
+    ) -> AIProvider:
+
+        provider = provider_registry.get(
+            provider_name
+        )
+
+        if provider is None:
+            raise ValueError(
+                f"AI provider "
+                f"'{provider_name}' "
+                f"is not configured"
+            )
+
+        return provider
+
+    def generate(
+        self,
+        provider_name: str,
+        system_prompt: str,
+        user_message: str,
+        model: str,
+        tools: list[dict] | None = None,
+        tool_outputs: list | None = None,
+        continuation=None,
+    ) -> AIResponse:
+
+        provider = self.get_provider(
+            provider_name
+        )
+
+        return provider.generate(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            model=model,
+            tools=tools,
+            tool_outputs=tool_outputs,
+            continuation=continuation,
+        )
+
+    def list_providers(
+        self,
+    ) -> list[str]:
+
+        return provider_registry.list()
+
+
+ai_engine = AIEngine()

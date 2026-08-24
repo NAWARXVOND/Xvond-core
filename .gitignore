@@ -1,0 +1,51 @@
+# Secrets and environment variables
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs and temporary files
+*.log
+logs/
+tmp/
+temp/
+
+# Editor and operating system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Build output
+build/
+dist/
+*.egg-info/
+
+# Local archives and generated audit files
+_archive/
+*.zip
+knowledge_runtime_trace.txt
+providers_current.txt
+XVOND_ALL_CODE.txt
+XVOND_FULL_AUDIT_REPORT.txt
+Xvond_FULL_CURRENT.txt

@@ -1,0 +1,259 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #f5f7fb;
+    color: #172033;
+}
+
+.hidden {
+    display: none !important;
+}
+
+.login-screen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.login-box {
+    width: 380px;
+    background: white;
+    padding: 35px;
+    border-radius: 14px;
+    box-shadow: 0 10px 35px rgba(0,0,0,.08);
+}
+
+.brand {
+    font-size: 30px;
+    font-weight: 800;
+    margin-bottom: 25px;
+}
+
+input,
+select {
+    width: 100%;
+    padding: 12px;
+    margin: 8px 0;
+    border: 1px solid #d7dce5;
+    border-radius: 7px;
+}
+
+button {
+    cursor: pointer;
+    border: 0;
+    border-radius: 7px;
+    padding: 11px 15px;
+}
+
+.login-box button {
+    width: 100%;
+    margin-top: 10px;
+    background: #111827;
+    color: white;
+}
+
+.error {
+    color: #b91c1c;
+    margin-top: 12px;
+}
+
+.portal {
+    display: flex;
+    min-height: 100vh;
+}
+
+.sidebar {
+    width: 230px;
+    background: #111827;
+    color: white;
+    padding: 25px 18px;
+    display: flex;
+    flex-direction: column;
+}
+
+.logo {
+    font-size: 27px;
+    font-weight: 800;
+}
+
+.portal-label {
+    color: #9ca3af;
+    margin: 5px 0 30px;
+}
+
+.nav-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    color: #d1d5db;
+    margin-bottom: 5px;
+}
+
+.nav-item:hover,
+.nav-item.active {
+    background: #1f2937;
+    color: white;
+}
+
+.logout {
+    margin-top: auto;
+    background: #374151;
+    color: white;
+}
+
+.main {
+    flex: 1;
+    padding: 30px;
+}
+
+.topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 30px;
+}
+
+.topbar h1 {
+    margin: 0;
+}
+
+.topbar p {
+    margin: 5px 0 0;
+    color: #6b7280;
+}
+
+.cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 18px;
+    margin-bottom: 22px;
+}
+
+.card,
+.panel {
+    background: white;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.04);
+}
+
+.card span {
+    display: block;
+    color: #6b7280;
+}
+
+.card strong {
+    display: block;
+    font-size: 30px;
+    margin-top: 10px;
+}
+
+.agent {
+    border-bottom: 1px solid #e5e7eb;
+    padding: 15px 0;
+}
+
+.agent:last-child {
+    border-bottom: 0;
+}
+
+.status {
+    font-size: 13px;
+    font-weight: bold;
+}
+
+.chat-box {
+    min-height: 320px;
+    max-height: 450px;
+    overflow-y: auto;
+    border: 1px solid #e5e7eb;
+    padding: 15px;
+    margin: 15px 0;
+    border-radius: 8px;
+    background: #fafafa;
+}
+
+.chat-row {
+    margin-bottom: 12px;
+}
+
+.chat-row strong {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.chat-input {
+    display: flex;
+    gap: 10px;
+}
+
+.chat-input input {
+    flex: 1;
+}
+
+.chat-input button {
+    background: #111827;
+    color: white;
+    min-width: 100px;
+}
+
+.conversation-item {
+    padding: 12px;
+    border-bottom: 1px solid #e5e7eb;
+    cursor: pointer;
+}
+
+.conversation-item:hover {
+    background: #f9fafb;
+}
+
+.conversation-messages {
+    margin-top: 20px;
+}
+
+@media(max-width: 900px) {
+    .cards {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+
+/* =========================================
+   PASSWORD SECURITY UI
+   ========================================= */
+
+#login-screen button[onclick="showForgotPassword()"] {
+    color: #2563eb !important;
+    background: transparent !important;
+    font-weight: 600;
+}
+
+#forgot-password-form p,
+#reset-password-form p {
+    color: #374151 !important;
+}
+
+#forgot-message,
+#reset-message,
+#change-password-message {
+    color: #dc2626 !important;
+    margin-top: 10px;
+}
+
+#forgot-password-form button,
+#reset-password-form button {
+    color: #ffffff;
+}
+
+#forgot-password-form button[onclick="showNormalLogin()"],
+#reset-password-form button[onclick="showForgotPassword()"] {
+    color: #374151 !important;
+    background: #f3f4f6 !important;
+}
+
