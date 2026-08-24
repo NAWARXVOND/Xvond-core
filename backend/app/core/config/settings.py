@@ -37,6 +37,16 @@ class Settings:
         "HS256",
     )
 
+    JWT_ISSUER = os.getenv(
+        "JWT_ISSUER",
+        "xvond-core",
+    )
+
+    JWT_AUDIENCE = os.getenv(
+        "JWT_AUDIENCE",
+        "xvond-users",
+    )
+
     ACCESS_TOKEN_EXPIRE_MINUTES = int(
         os.getenv(
             "ACCESS_TOKEN_EXPIRE_MINUTES",

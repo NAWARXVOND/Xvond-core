@@ -1,8 +1,8 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
@@ -50,6 +50,7 @@ from backend.app.core.config.settings import settings
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.module_loader import discover_modules
 from backend.app.core.module_manager import module_manager
+from backend.app.core.rate_limit import rate_limiter
 
 
 # ============================================================
@@ -92,6 +93,47 @@ app = FastAPI(
     version=settings.APP_VERSION,
     lifespan=lifespan,
 )
+
+
+_RATE_LIMITS = {
+    ("POST", "/auth/login"): (10, 60),
+    ("POST", "/auth/customer/forgot-password"): (5, 300),
+    ("POST", "/auth/customer/reset-password"): (10, 300),
+    ("POST", "/webhooks/whatsapp"): (240, 60),
+}
+
+
+@app.middleware("http")
+async def protect_public_endpoints(request: Request, call_next):
+    rule = _RATE_LIMITS.get(
+        (request.method.upper(), request.url.path)
+    )
+
+    if rule is None and (
+        request.method.upper() == "POST"
+        and request.url.path.startswith("/ai-agents/")
+        and request.url.path.endswith("/chat")
+    ):
+        rule = (60, 60)
+
+    if rule is not None:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        client_ip = (
+            forwarded.split(",", 1)[0].strip()
+            or request.headers.get("cf-connecting-ip", "").strip()
+            or (request.client.host if request.client else "unknown")
+        )
+        limit, window = rule
+        key = f"{client_ip}:{request.method}:{request.url.path}"
+
+        if not rate_limiter.allow(key, limit, window):
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests"},
+                headers={"Retry-After": str(window)},
+            )
+
+    return await call_next(request)
 
 
 # ============================================================

@@ -5,6 +5,10 @@ from fastapi import HTTPException
 from backend.app.core.ai.cost_engine import ai_cost_engine
 from backend.app.core.ai.engine import ai_engine
 from backend.app.core.ai.base import ToolOutput
+from backend.app.core.config.settings import settings
+
+from backend.app.models.company import Company
+from backend.app.models.company_module import CompanyModule
 
 from backend.app.modules.ai_agent.models import (
     AIAgent,
@@ -14,6 +18,7 @@ from backend.app.modules.ai_agent.models import (
 )
 
 from backend.app.modules.billing.limits import limits_service
+from backend.app.modules.billing.models import Plan, Subscription
 from backend.app.modules.tools.executor import tool_executor
 from backend.app.modules.audit.service import audit_service
 
@@ -23,6 +28,75 @@ from backend.app.modules.knowledge.service import (
 
 
 class AgentRuntime:
+
+    def assert_company_runtime_access(
+        self,
+        db,
+        company_id: int,
+    ) -> None:
+        company = (
+            db.query(Company)
+            .filter(
+                Company.id == company_id,
+                Company.active.is_(True),
+            )
+            .first()
+        )
+
+        if company is None:
+            raise HTTPException(
+                status_code=403,
+                detail="Company is inactive or unavailable",
+            )
+
+        module = (
+            db.query(CompanyModule)
+            .filter(
+                CompanyModule.company_id == company_id,
+                CompanyModule.module_name == "ai_agent",
+                CompanyModule.enabled.is_(True),
+            )
+            .first()
+        )
+
+        if module is None:
+            raise HTTPException(
+                status_code=403,
+                detail="AI Agent module is not enabled",
+            )
+
+        if not settings.is_production:
+            return
+
+        subscription = (
+            db.query(Subscription)
+            .filter(
+                Subscription.company_id == company_id,
+                Subscription.status == "active",
+            )
+            .first()
+        )
+
+        if subscription is None:
+            raise HTTPException(
+                status_code=403,
+                detail="An active subscription is required",
+            )
+
+        plan = (
+            db.query(Plan)
+            .filter(
+                Plan.id == subscription.plan_id,
+                Plan.enabled.is_(True),
+            )
+            .first()
+        )
+
+        if plan is None:
+            raise HTTPException(
+                status_code=403,
+                detail="Subscription plan is unavailable",
+            )
 
     def get_agent(
         self,
@@ -133,6 +207,25 @@ class AgentRuntime:
         message: str,
         conversation_id: int | None = None,
     ) -> dict:
+
+        message = (message or "").strip()
+
+        if not message:
+            raise HTTPException(
+                status_code=400,
+                detail="Message is required",
+            )
+
+        if len(message) > 12000:
+            raise HTTPException(
+                status_code=413,
+                detail="Message is too long",
+            )
+
+        self.assert_company_runtime_access(
+            db,
+            company_id,
+        )
 
         limits_service.check_token_limit(
             db,
