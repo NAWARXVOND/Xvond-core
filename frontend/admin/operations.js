@@ -1,22 +1,12 @@
-﻿let opsCompanyId = null;
+let opsCompanyId = null;
 
 
 function installOperationsUI() {
+    const main = document.querySelector(".main");
 
-    const nav =
-        document.querySelector(
-            ".sidebar nav"
-        );
-
-    const main =
-        document.querySelector(
-            ".main"
-        );
-
-    if (!nav || !main) {
+    if (!main) {
         return;
     }
-
 
     const pages = [
         ["billing-service", "Billing"],
@@ -25,113 +15,33 @@ function installOperationsUI() {
         ["audit-service", "Audit Logs"],
     ];
 
-
     for (const [id, title] of pages) {
-
-        if (
-            !document.getElementById(
-                `nav-${id}`
-            )
-        ) {
-
-            const button =
-                document.createElement(
-                    "button"
-                );
-
-            button.id =
-                `nav-${id}`;
-
-            button.className =
-                "nav-item";
-
-            button.textContent =
-                title;
-
-            button.onclick =
-                () =>
-                    openOperationsPage(
-                        id,
-                        title,
-                        button
-                    );
-
-            nav.appendChild(
-                button
-            );
+        if (document.getElementById(`page-${id}`)) {
+            continue;
         }
 
+        const section = document.createElement("section");
+        section.id = `page-${id}`;
+        section.className = "page hidden";
+        section.innerHTML = `
+            <div class="section-header">
+                <div><h2>${title}</h2></div>
+            </div>
 
-        if (
-            !document.getElementById(
-                `page-${id}`
-            )
-        ) {
-
-            const section =
-                document.createElement(
-                    "section"
-                );
-
-            section.id =
-                `page-${id}`;
-
-            section.className =
-                "page hidden";
-
-            section.innerHTML = `
-
-                <div class="section-header">
-
-                    <div>
-
-                        <h2>
-                            ${title}
-                        </h2>
-
-                    </div>
-
+            <div id="${id}-company-box" class="panel">
+                <div class="form-group">
+                    <label>Company</label>
+                    <select
+                        id="${id}-company"
+                        onchange="operationCompanyChanged('${id}')"
+                    ></select>
                 </div>
+            </div>
 
+            <div id="${id}-content" style="margin-top:20px"></div>
+        `;
 
-                <div
-                    id="${id}-company-box"
-                    class="panel"
-                >
-
-                    <div class="form-group">
-
-                        <label>
-                            Company
-                        </label>
-
-                        <select
-                            id="${id}-company"
-                            onchange="
-                                operationCompanyChanged(
-                                    '${id}'
-                                )
-                            "
-                        >
-                        </select>
-
-                    </div>
-
-                </div>
-
-
-                <div
-                    id="${id}-content"
-                    style="margin-top:20px"
-                >
-                </div>
-            `;
-
-
-            main.appendChild(
-                section
-            );
-        }
+        main.appendChild(section);
     }
 }
 
@@ -173,9 +83,11 @@ async function openOperationsPage(
     );
 
 
-    button.classList.add(
-        "active"
-    );
+    if (button) {
+        button.classList.add(
+            "active"
+        );
+    }
 
 
     document.getElementById(
@@ -1273,10 +1185,3 @@ document.addEventListener(
     "DOMContentLoaded",
     installOperationsUI
 );
-
-
-setTimeout(
-    installOperationsUI,
-    600
-);
-

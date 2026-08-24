@@ -1,69 +1,42 @@
-﻿let businessCompanyId = null;
+let businessCompanyId = null;
+
 
 function installBusinessUI() {
-    const nav = document.querySelector(".sidebar nav");
     const main = document.querySelector(".main");
 
-    if (!nav || !main) return;
-
-    if (!document.getElementById("nav-business")) {
-        const button = document.createElement("button");
-        button.id = "nav-business";
-        button.className = "nav-item";
-        button.textContent = "Business Operations";
-        button.onclick = () => openBusinessPage(button);
-        nav.appendChild(button);
+    if (!main || document.getElementById("page-business")) {
+        return;
     }
 
-    if (!document.getElementById("page-business")) {
-        const section = document.createElement("section");
-        section.id = "page-business";
-        section.className = "page hidden";
-
-        section.innerHTML = `
-            <div class="section-header">
-                <div>
-                    <h2>Business Operations</h2>
-                    <p>Leads, bookings, orders and human handoffs</p>
-                </div>
+    const section = document.createElement("section");
+    section.id = "page-business";
+    section.className = "page hidden";
+    section.innerHTML = `
+        <div class="section-header">
+            <div>
+                <h2>Business Operations</h2>
+                <p>Leads, bookings, orders and human handoffs</p>
             </div>
+        </div>
 
-            <div class="panel">
-                <div class="form-group">
-                    <label>Company</label>
-                    <select id="business-company"
-                            onchange="businessCompanyChanged()">
-                    </select>
-                </div>
+        <div class="panel">
+            <div class="form-group">
+                <label>Company</label>
+                <select id="business-company" onchange="businessCompanyChanged()"></select>
             </div>
+        </div>
 
-            <div class="cards" style="margin-top:20px">
-                <div class="card">
-                    <div class="card-label">Leads</div>
-                    <div id="business-leads-count" class="card-value">0</div>
-                </div>
+        <div class="cards" style="margin-top:20px">
+            <div class="card"><div class="card-label">Leads</div><div id="business-leads-count" class="card-value">0</div></div>
+            <div class="card"><div class="card-label">Bookings</div><div id="business-bookings-count" class="card-value">0</div></div>
+            <div class="card"><div class="card-label">Orders</div><div id="business-orders-count" class="card-value">0</div></div>
+            <div class="card"><div class="card-label">Human Handoffs</div><div id="business-handoffs-count" class="card-value">0</div></div>
+        </div>
 
-                <div class="card">
-                    <div class="card-label">Bookings</div>
-                    <div id="business-bookings-count" class="card-value">0</div>
-                </div>
+        <div id="business-content" style="margin-top:20px"></div>
+    `;
 
-                <div class="card">
-                    <div class="card-label">Orders</div>
-                    <div id="business-orders-count" class="card-value">0</div>
-                </div>
-
-                <div class="card">
-                    <div class="card-label">Human Handoffs</div>
-                    <div id="business-handoffs-count" class="card-value">0</div>
-                </div>
-            </div>
-
-            <div id="business-content" style="margin-top:20px"></div>
-        `;
-
-        main.appendChild(section);
-    }
+    main.appendChild(section);
 }
 
 
@@ -77,7 +50,11 @@ async function openBusinessPage(button) {
     document.getElementById("page-business")
         .classList.remove("hidden");
 
-    button.classList.add("active");
+    if (button) {
+        if (button) {
+        button.classList.add("active");
+    }
+    }
 
     document.getElementById("page-title").textContent =
         "Business Operations";
@@ -301,10 +278,3 @@ document.addEventListener(
     "DOMContentLoaded",
     installBusinessUI
 );
-
-setTimeout(
-    installBusinessUI,
-    600
-);
-
-
