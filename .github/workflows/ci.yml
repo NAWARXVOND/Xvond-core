@@ -50,3 +50,49 @@ jobs:
         run: pytest -q
       - name: Build production container
         run: docker build --tag xvond-core:ci .
+
+  freeze-baseline:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: xvond
+          POSTGRES_PASSWORD: xvond_test_password
+          POSTGRES_DB: xvond_freeze
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U xvond -d xvond_freeze"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+psycopg://xvond:xvond_test_password@localhost:5433/xvond_freeze
+      JWT_SECRET: ci-only-secret-with-at-least-32-characters
+      JWT_ISSUER: xvond-core
+      JWT_AUDIENCE: xvond-users
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - name: Mark empty database at current head
+        run: alembic stamp head
+      - name: Generate frozen schema migration
+        run: |
+          alembic revision --autogenerate -m frozen_schema_export
+          generated_file="$(find migrations/versions -name '*frozen_schema_export.py' -print -quit)"
+          cp "$generated_file" generated_baseline.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frozen-alembic-baseline
+          path: generated_baseline.py
+          if-no-files-found: error
