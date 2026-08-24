@@ -194,6 +194,7 @@ def list_company_agents(
                     "id": agent.id,
                     "name": agent.name,
                     "description": agent.description,
+                    "system_prompt": agent.system_prompt,
                     "provider": agent.provider,
                     "model": agent.model,
                     "enabled": agent.enabled,

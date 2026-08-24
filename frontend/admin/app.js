@@ -654,6 +654,13 @@ async function openCompany(
                                 }
                             </div>
 
+                            <button
+                                class="table-button agent-edit-button"
+                                onclick="openEditAgent(${companyId}, ${agent.id})"
+                            >
+                                Edit Agent
+                            </button>
+
                         </div>
                         `
                     ).join("")
@@ -808,6 +815,13 @@ async function loadAgentsForSelectedCompany() {
                         : "Disabled"
                     }
                 </div>
+
+                <button
+                    class="table-button agent-edit-button"
+                    onclick="openEditAgent(${companyId}, ${agent.id})"
+                >
+                    Edit Agent
+                </button>
 
             </div>
             `
@@ -2700,3 +2714,79 @@ async function saveCompanyAgentAI() {
     }
 }
 
+
+
+async function openEditAgent(companyId, agentId) {
+    try {
+        const [agentData, providerData] = await Promise.all([
+            api(`/admin/companies/${companyId}/agents`),
+            api("/admin/ai/providers"),
+        ]);
+        const agent = (agentData.agents || []).find(
+            item => Number(item.id) === Number(agentId)
+        );
+
+        if (!agent) {
+            throw new Error("AI Agent not found");
+        }
+
+        const providers = providerData.providers || [];
+        const options = providers.map(provider => `
+            <option value="${escapeAdmin(provider)}"
+                ${provider === agent.provider ? "selected" : ""}>
+                ${escapeAdmin(provider)}
+            </option>
+        `).join("");
+
+        openModal("Edit Agent", `
+            <div class="form-group">
+                <label>Name</label>
+                <input id="edit-agent-name" value="${escapeAdmin(agent.name)}">
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <textarea id="edit-agent-description">${escapeAdmin(agent.description || "")}</textarea>
+            </div>
+            <div class="form-group">
+                <label>Provider</label>
+                <select id="edit-agent-provider">${options}</select>
+            </div>
+            <div class="form-group">
+                <label>Model</label>
+                <input id="edit-agent-model" value="${escapeAdmin(agent.model)}">
+                <small>Groq recommended: openai/gpt-oss-20b</small>
+            </div>
+            <div class="form-group">
+                <label>System Prompt</label>
+                <textarea id="edit-agent-prompt">${escapeAdmin(agent.system_prompt)}</textarea>
+            </div>
+            <button class="modal-submit"
+                onclick="saveAgentEdit(${companyId}, ${agentId})">
+                Save Agent
+            </button>
+        `);
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
+
+async function saveAgentEdit(companyId, agentId) {
+    try {
+        await api(`/admin/companies/${companyId}/agents/${agentId}`, {
+            method: "PUT",
+            body: JSON.stringify({
+                name: document.getElementById("edit-agent-name").value.trim(),
+                description: document.getElementById("edit-agent-description").value.trim(),
+                provider: document.getElementById("edit-agent-provider").value,
+                model: document.getElementById("edit-agent-model").value.trim(),
+                system_prompt: document.getElementById("edit-agent-prompt").value.trim(),
+            }),
+        });
+
+        closeModal();
+        await openCompany(companyId);
+    } catch (error) {
+        alert(error.message);
+    }
+}
