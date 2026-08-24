@@ -14,6 +14,22 @@ from backend.app.modules.tools.bootstrap import (
 )
 
 
+SENSITIVE_TOOLS = {
+    "booking",
+    "order",
+    "webhook",
+    "custom_api",
+}
+
+
+def tool_requires_approval(tool_name: str, config: dict | None) -> bool:
+    config = config or {}
+    return bool(
+        tool_name in SENSITIVE_TOOLS
+        or config.get("approval_required", False)
+    )
+
+
 class ToolExecutor:
 
     def __init__(self):
@@ -116,14 +132,9 @@ class ToolExecutor:
             }
 
         config = reveal_config(assignment.config)
-        approval_required = bool(
-            config.get("approval_required", False)
-            or tool_name in {
-                "booking",
-                "order",
-                "webhook",
-                "custom_api",
-            }
+        approval_required = tool_requires_approval(
+            tool_name,
+            config,
         )
 
         if approval_required and not approval_granted:
