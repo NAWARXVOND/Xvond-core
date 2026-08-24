@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
+import logging
 from pathlib import Path
+from time import perf_counter
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -48,6 +50,12 @@ from backend.app.api.whatsapp_webhook import router as whatsapp_webhook_router
 
 from backend.app.core.config.settings import settings
 from backend.app.core.database.connection import SessionLocal
+from backend.app.core.log_config import (
+    configure_logging,
+    reset_request_id,
+    safe_request_id,
+    set_request_id,
+)
 from backend.app.core.module_loader import discover_modules
 from backend.app.core.module_manager import module_manager
 from backend.app.core.rate_limit import rate_limiter
@@ -88,11 +96,59 @@ async def lifespan(app: FastAPI):
 # FastAPI
 # ============================================================
 
+configure_logging(
+    level=settings.LOG_LEVEL,
+    json_logs=settings.LOG_JSON,
+)
+logger = logging.getLogger("xvond.http")
+
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def request_observability(request: Request, call_next):
+    request_id = safe_request_id(
+        request.headers.get("x-request-id")
+    )
+    token = set_request_id(request_id)
+    started = perf_counter()
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception(
+            "Unhandled request failure",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "client_ip": request_client_ip(request),
+            },
+        )
+        raise
+    finally:
+        reset_request_id(token)
+
+    duration_ms = round(
+        (perf_counter() - started) * 1000,
+        2,
+    )
+    response.headers["X-Request-ID"] = request_id
+    logger.info(
+        "Request completed",
+        extra={
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": duration_ms,
+            "client_ip": request_client_ip(request),
+        },
+    )
+    return response
 
 
 _RATE_LIMITS = {
