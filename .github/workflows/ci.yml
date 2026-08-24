@@ -27,6 +27,8 @@ jobs:
     env:
       APP_ENV: test
       DATABASE_URL: postgresql+psycopg://xvond:xvond_test_password@localhost:5432/xvond_test
+      DATABASE_URL_DOCKER: postgresql+psycopg://xvond:xvond_test_password@postgres:5432/xvond_test
+      POSTGRES_PASSWORD: xvond_test_password
       JWT_SECRET: ci-only-secret-with-at-least-32-characters
       JWT_ISSUER: xvond-core
       JWT_AUDIENCE: xvond-users
@@ -46,6 +48,13 @@ jobs:
           for file in frontend/admin/*.js; do
             node --check "$file"
           done
+      - name: Check shell script syntax
+        run: |
+          for file in scripts/*.sh; do
+            sh -n "$file"
+          done
+      - name: Validate production Compose
+        run: docker compose -f docker-compose.production.yml config --quiet
       - name: Run tests
         run: pytest -q
       - name: Build production container
