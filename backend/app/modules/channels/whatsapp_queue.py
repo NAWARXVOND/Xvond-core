@@ -1,6 +1,6 @@
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from redis import Redis
 from redis.exceptions import RedisError
@@ -45,7 +45,7 @@ class WhatsAppJobQueue:
             "body": body,
             "signature": signature,
             "attempts": 0,
-            "enqueued_at": datetime.utcnow().isoformat(),
+            "enqueued_at": datetime.now(timezone.utc).isoformat(),
         }
         self.client.lpush(
             self.queue_key,
@@ -89,6 +89,91 @@ class WhatsAppJobQueue:
                 raw,
             )
 
+    def stats(self) -> dict:
+        if self.client is None:
+            return {
+                "configured": False,
+                "queued": 0,
+                "processing": 0,
+                "dead": 0,
+            }
+
+        return {
+            "configured": True,
+            "queued": int(
+                self.client.llen(self.queue_key)
+            ),
+            "processing": int(
+                self.client.llen(self.processing_key)
+            ),
+            "dead": int(
+                self.client.llen(self.dead_key)
+            ),
+        }
+
+    def dead_jobs(self, limit: int = 50) -> list[dict]:
+        if self.client is None:
+            return []
+
+        safe_limit = max(1, min(int(limit), 200))
+        items = self.client.lrange(
+            self.dead_key,
+            0,
+            safe_limit - 1,
+        )
+        result = []
+
+        for raw in items:
+            try:
+                job = json.loads(raw)
+            except (TypeError, ValueError):
+                result.append({
+                    "id": None,
+                    "attempts": None,
+                    "last_error": "Invalid dead-letter payload",
+                })
+                continue
+
+            # Never expose message bodies or webhook signatures.
+            result.append({
+                "id": job.get("id"),
+                "attempts": job.get("attempts"),
+                "enqueued_at": job.get("enqueued_at"),
+                "last_failed_at": job.get("last_failed_at"),
+                "last_error": job.get("last_error"),
+            })
+
+        return result
+
+    def requeue_dead(self, limit: int = 100) -> int:
+        if self.client is None:
+            return 0
+
+        safe_limit = max(1, min(int(limit), 500))
+        requeued = 0
+
+        for _ in range(safe_limit):
+            raw = self.client.rpop(self.dead_key)
+            if raw is None:
+                break
+
+            try:
+                job = json.loads(raw)
+            except (TypeError, ValueError):
+                self.client.rpush(self.dead_key, raw)
+                break
+
+            job["attempts"] = 0
+            job.pop("last_error", None)
+            job.pop("last_failed_at", None)
+            self.client.lpush(
+                self.queue_key,
+                json.dumps(job),
+            )
+            requeued += 1
+
+        return requeued
+
     def retry_or_dead_letter(
         self,
         raw: str,
@@ -107,7 +192,7 @@ class WhatsAppJobQueue:
 
         job["attempts"] = int(job.get("attempts", 0)) + 1
         job["last_error"] = str(error)[:1000]
-        job["last_failed_at"] = datetime.utcnow().isoformat()
+        job["last_failed_at"] = datetime.now(timezone.utc).isoformat()
         encoded = json.dumps(job)
 
         if job["attempts"] >= max_attempts:
