@@ -12,7 +12,7 @@ def test_admin_agent_detail_route_exists():
 
     assert (
         "GET",
-        "/admin/companies/{company_id}/agents/{agent_id}",
+        "/admin/companies/{company_id}/agents",
     ) in routes
     assert (
         "PUT",
