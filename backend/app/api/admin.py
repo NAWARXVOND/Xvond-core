@@ -88,7 +88,7 @@ def create_company(
 
         company = Company(
             name=name,
-            active=True,
+            active=False,
         )
 
         db.add(company)
