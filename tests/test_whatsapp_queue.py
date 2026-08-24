@@ -12,6 +12,20 @@ class FakeRedis:
     def lpush(self, key, value):
         self.data.setdefault(key, []).insert(0, value)
 
+    def rpush(self, key, value):
+        self.data.setdefault(key, []).append(value)
+
+    def rpop(self, key):
+        items = self.data.setdefault(key, [])
+        return items.pop() if items else None
+
+    def llen(self, key):
+        return len(self.data.setdefault(key, []))
+
+    def lrange(self, key, start, end):
+        items = self.data.setdefault(key, [])
+        return items[start:end + 1]
+
     def brpoplpush(self, source, destination, timeout=0):
         items = self.data.setdefault(source, [])
         if not items:
@@ -94,3 +108,71 @@ def test_interrupted_jobs_are_recovered_on_worker_start():
     assert queue.recover_interrupted() == 1
     assert queue.client.data[queue.processing_key] == []
     assert len(queue.client.data[queue.queue_key]) == 1
+
+
+
+def test_stats_report_queue_depths():
+    queue = make_queue()
+    queue.enqueue(body="{}", signature="secret")
+    queue.client.lpush(
+        queue.dead_key,
+        json.dumps({
+            "id": "dead-1",
+            "body": "private customer message",
+            "signature": "private signature",
+            "attempts": 5,
+            "last_error": "delivery failed",
+        }),
+    )
+
+    assert queue.stats() == {
+        "configured": True,
+        "queued": 1,
+        "processing": 0,
+        "dead": 1,
+    }
+
+
+def test_dead_job_view_never_exposes_body_or_signature():
+    queue = make_queue()
+    queue.client.lpush(
+        queue.dead_key,
+        json.dumps({
+            "id": "dead-1",
+            "body": "private customer message",
+            "signature": "private signature",
+            "attempts": 5,
+            "last_error": "delivery failed",
+        }),
+    )
+
+    item = queue.dead_jobs()[0]
+
+    assert item["id"] == "dead-1"
+    assert item["last_error"] == "delivery failed"
+    assert "body" not in item
+    assert "signature" not in item
+
+
+def test_admin_retry_resets_attempts_and_requeues():
+    queue = make_queue()
+    queue.client.lpush(
+        queue.dead_key,
+        json.dumps({
+            "id": "dead-1",
+            "body": "{}",
+            "signature": "sha256=test",
+            "attempts": 5,
+            "last_error": "delivery failed",
+            "last_failed_at": "2026-08-24T12:00:00+00:00",
+        }),
+    )
+
+    assert queue.requeue_dead(limit=1) == 1
+
+    queued = json.loads(
+        queue.client.data[queue.queue_key][0]
+    )
+    assert queued["attempts"] == 0
+    assert "last_error" not in queued
+    assert queue.client.data[queue.dead_key] == []

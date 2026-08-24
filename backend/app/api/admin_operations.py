@@ -1,5 +1,6 @@
 ﻿from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
+from redis.exceptions import RedisError
 
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
@@ -17,6 +18,9 @@ from backend.app.modules.ai_agent.models import (
 from backend.app.modules.billing.models import (
     Plan,
     Subscription,
+)
+from backend.app.modules.channels.whatsapp_queue import (
+    whatsapp_job_queue,
 )
 
 
@@ -309,3 +313,60 @@ def subscriptions(
 
     finally:
         db.close()
+
+
+@router.get("/workers/whatsapp")
+def whatsapp_worker_status(
+    current_admin: User = Depends(
+        require_xvond_admin
+    ),
+):
+    try:
+        return whatsapp_job_queue.stats()
+    except RedisError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="WhatsApp worker queue unavailable",
+        ) from exc
+
+
+@router.get("/workers/whatsapp/dead")
+def whatsapp_dead_jobs(
+    limit: int = 50,
+    current_admin: User = Depends(
+        require_xvond_admin
+    ),
+):
+    try:
+        return {
+            "jobs": whatsapp_job_queue.dead_jobs(
+                limit=limit
+            )
+        }
+    except RedisError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="WhatsApp worker queue unavailable",
+        ) from exc
+
+
+@router.post("/workers/whatsapp/dead/retry")
+def retry_whatsapp_dead_jobs(
+    limit: int = 100,
+    current_admin: User = Depends(
+        require_xvond_admin
+    ),
+):
+    try:
+        requeued = whatsapp_job_queue.requeue_dead(
+            limit=limit
+        )
+        return {
+            "status": "requeued",
+            "requeued": requeued,
+        }
+    except RedisError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="WhatsApp worker queue unavailable",
+        ) from exc
