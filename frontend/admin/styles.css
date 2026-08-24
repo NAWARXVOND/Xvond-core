@@ -472,3 +472,15 @@ th {
     }
 
 }
+
+
+.agent-edit-button {
+    margin-top: 14px;
+    width: 100%;
+}
+
+.form-group small {
+    display: block;
+    margin-top: 6px;
+    color: #6b7280;
+}
