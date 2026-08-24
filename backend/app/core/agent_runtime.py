@@ -126,6 +126,12 @@ class AgentRuntime:
                 detail="AI Agent is disabled",
             )
 
+        if settings.is_production and agent.provider == "mock":
+            raise HTTPException(
+                status_code=503,
+                detail="Mock AI provider is disabled in production",
+            )
+
         return agent
 
     def get_or_create_conversation(
