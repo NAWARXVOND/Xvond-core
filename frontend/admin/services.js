@@ -4,16 +4,6 @@ let serviceAgentId = null;
 
 function installServicesUI() {
 
-    const nav =
-        document.querySelector(
-            ".sidebar nav"
-        );
-
-    if (!nav) {
-        return;
-    }
-
-
     const items = [
         ["knowledge", "Knowledge"],
         ["tools-service", "Tools"],
@@ -22,47 +12,19 @@ function installServicesUI() {
     ];
 
 
-    for (const [id, title] of items) {
 
-        if (
-            document.getElementById(
-                `nav-${id}`
-            )
-        ) {
-            continue;
-        }
 
-        const button =
-            document.createElement(
-                "button"
-            );
 
-        button.id =
-            `nav-${id}`;
-
-        button.className =
-            "nav-item";
-
-        button.textContent =
-            title;
-
-        button.onclick =
-            () => openServicePage(
-                id,
-                title,
-                button
-            );
-
-        nav.appendChild(
-            button
-        );
-    }
 
 
     const main =
         document.querySelector(
             ".main"
         );
+
+    if (!main) {
+        return;
+    }
 
 
     for (const [id, title] of items) {
@@ -174,9 +136,11 @@ async function openServicePage(
     );
 
 
-    button.classList.add(
-        "active"
-    );
+    if (button) {
+        button.classList.add(
+            "active"
+        );
+    }
 
 
     document.getElementById(
@@ -2779,11 +2743,5 @@ function escapeTextareaService(
 document.addEventListener(
     "DOMContentLoaded",
     installServicesUI
-);
-
-
-setTimeout(
-    installServicesUI,
-    500
 );
 
