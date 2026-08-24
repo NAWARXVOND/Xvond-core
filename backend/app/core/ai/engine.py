@@ -54,6 +54,29 @@ class AIEngine:
                 )
 
         # --------------------------------
+        # GROQ
+        # --------------------------------
+
+        if settings.GROQ_API_KEY:
+
+            try:
+                from backend.app.core.ai.providers.groq import (
+                    GroqProvider,
+                )
+
+                provider_registry.register(
+                    "groq",
+                    GroqProvider(),
+                )
+
+            except Exception as exc:
+
+                print(
+                    "Could not load Groq provider:",
+                    exc,
+                )
+
+        # --------------------------------
         # ANTHROPIC
         # --------------------------------
 
