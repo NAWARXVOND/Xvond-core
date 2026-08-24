@@ -55,9 +55,37 @@ class WhatsAppSession(Base):
         nullable=False,
     )
 
+    automation_state: Mapped[str] = mapped_column(
+        String(20),
+        default="ai",
+        nullable=False,
+    )
+
+    handoff_reason: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    human_takeover_until: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+    last_human_message_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
         nullable=False,
     )
 

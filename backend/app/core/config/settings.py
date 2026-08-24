@@ -32,6 +32,16 @@ class Settings:
         "",
     )
 
+    WHATSAPP_HUMAN_HANDOFF_MINUTES = max(
+        5,
+        int(
+            os.getenv(
+                "WHATSAPP_HUMAN_HANDOFF_MINUTES",
+                "60",
+            )
+        ),
+    )
+
     # Forwarded client headers are trusted only behind a configured
     # reverse proxy. Keeping this disabled prevents IP spoofing from
     # bypassing public-endpoint rate limits.
