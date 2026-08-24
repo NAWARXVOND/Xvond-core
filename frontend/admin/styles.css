@@ -484,3 +484,36 @@ th {
     margin-top: 6px;
     color: #6b7280;
 }
+
+
+.agent-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.agent-actions .table-button {
+    flex: 1;
+}
+
+.agent-test-transcript {
+    max-height: 330px;
+    overflow-y: auto;
+    padding: 12px;
+    margin-bottom: 15px;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    background: #f9fafb;
+}
+
+.test-message {
+    padding: 10px;
+    margin-bottom: 9px;
+    border-radius: 9px;
+    white-space: pre-wrap;
+}
+
+.test-user { background: #e8f2ff; }
+.test-assistant { background: #eaf7ee; }
+.test-error { background: #fbeaec; color: #a52d3a; }
+.test-message small { display: block; margin-top: 7px; color: #6b7280; }
