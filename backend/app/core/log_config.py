@@ -101,6 +101,7 @@ def configure_logging(level: str = "INFO", json_logs: bool = True):
             )
         )
 
+    handler.addFilter(RequestIdFilter())
     root.handlers.clear()
     root.addHandler(handler)
 
