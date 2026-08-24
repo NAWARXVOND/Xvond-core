@@ -3,6 +3,7 @@ from backend.app.core.ai.engine import ai_engine
 from backend.app.core.config_secrets import (
     configured_secret_fields,
     public_config,
+    reveal_config,
 )
 
 from backend.app.models.company import Company
@@ -152,7 +153,7 @@ def company_readiness(
             validate_config(
                 validate_integration_config,
                 item.integration_type,
-                item.config or {},
+                reveal_config(item.config),
             )
         )
 
@@ -261,7 +262,7 @@ def company_readiness(
                 validate_config(
                     validate_channel_config,
                     channel.channel_type,
-                    channel.config or {},
+                    reveal_config(channel.config),
                 )
             )
 
