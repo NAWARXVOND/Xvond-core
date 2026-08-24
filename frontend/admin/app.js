@@ -657,7 +657,7 @@ async function openCompany(
                             <div class="agent-actions">
                                 <button
                                     class="table-button"
-                                    onclick="openAgentTestChat(${companyId}, ${agent.id}, '${escapeAdmin(agent.name)}')"
+                                    onclick="openAgentTestChat(${companyId}, ${agent.id})"
                                 >
                                     Test Chat
                                 </button>
@@ -827,7 +827,7 @@ async function loadAgentsForSelectedCompany() {
                 <div class="agent-actions">
                     <button
                         class="table-button"
-                        onclick="openAgentTestChat(${companyId}, ${agent.id}, '${escapeAdmin(agent.name)}')"
+                        onclick="openAgentTestChat(${companyId}, ${agent.id})"
                     >
                         Test Chat
                     </button>
@@ -2811,9 +2811,9 @@ async function saveAgentEdit(companyId, agentId) {
 let agentTestConversationId = null;
 
 
-function openAgentTestChat(companyId, agentId, agentName) {
+function openAgentTestChat(companyId, agentId) {
     agentTestConversationId = null;
-    openModal(`Test Chat — ${escapeAdmin(agentName)}`, `
+    openModal("Test Chat", `
         <div id="agent-test-transcript" class="agent-test-transcript">
             <p class="meta">Send a message to test the configured AI provider.</p>
         </div>
