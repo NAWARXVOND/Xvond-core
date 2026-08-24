@@ -32,6 +32,19 @@ class Settings:
         "",
     )
 
+    # Forwarded client headers are trusted only behind a configured
+    # reverse proxy. Keeping this disabled prevents IP spoofing from
+    # bypassing public-endpoint rate limits.
+    TRUST_PROXY_HEADERS = os.getenv(
+        "TRUST_PROXY_HEADERS",
+        "false",
+    ).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
     JWT_SECRET = os.getenv(
         "JWT_SECRET",
         "",
