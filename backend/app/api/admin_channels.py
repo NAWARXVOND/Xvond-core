@@ -12,6 +12,7 @@ from backend.app.core.config_secrets import (
     configured_secret_fields,
     merge_config,
     public_config,
+    reveal_config,
 )
 
 from backend.app.models.user import User
@@ -67,7 +68,7 @@ def _channel_configured(
     try:
         validate_channel_config(
             channel.channel_type,
-            channel.config or {},
+            reveal_config(channel.config),
         )
         return True
 
@@ -364,7 +365,7 @@ def configure_whatsapp(
         try:
             validate_channel_config(
                 "whatsapp",
-                new_config,
+                reveal_config(new_config),
             )
 
         except ValueError as exc:
