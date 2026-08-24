@@ -108,6 +108,22 @@ def my_usage(
 
         summary = query.first()
 
+        failed_query = (
+            db.query(func.count(AIUsage.id))
+            .filter(
+                AIUsage.company_id == current_user.company_id,
+                AIUsage.status == "failed",
+            )
+        )
+
+        if cycle_start is not None:
+            failed_query = failed_query.filter(
+                AIUsage.created_at >= cycle_start,
+                AIUsage.created_at < cycle_end,
+            )
+
+        failed_requests = int(failed_query.scalar() or 0)
+
         plan = None
 
         if subscription is not None:
@@ -142,6 +158,12 @@ def my_usage(
 
             "requests":
                 int(summary[0] or 0),
+
+            "successful_requests":
+                max(int(summary[0] or 0) - failed_requests, 0),
+
+            "failed_requests":
+                failed_requests,
 
             "input_tokens":
                 int(summary[1] or 0),
