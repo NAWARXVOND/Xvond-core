@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import (
     IntegrityError,
 )
+from redis.exceptions import RedisError
 
 from backend.app.core.config_secrets import reveal_config
 from backend.app.models.company_module import CompanyModule
@@ -44,6 +45,9 @@ from backend.app.modules.channels.whatsapp import (
 from backend.app.modules.channels.whatsapp_models import (
     WhatsAppInboundMessage,
     WhatsAppSession,
+)
+from backend.app.modules.channels.whatsapp_queue import (
+    whatsapp_job_queue,
 )
 
 
@@ -376,14 +380,111 @@ def verify_webhook(
         db.close()
 
 
+def validate_webhook_request(
+    raw_body: bytes,
+    signature: str | None,
+) -> dict:
+    try:
+        payload = json.loads(
+            raw_body.decode("utf-8")
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON payload",
+        )
+
+    if (
+        payload.get("object")
+        != "whatsapp_business_account"
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid WhatsApp webhook object",
+        )
+
+    db = SessionLocal()
+
+    try:
+        for entry in payload.get("entry", []):
+            for change in entry.get("changes", []):
+                value = change.get("value", {}) or {}
+                metadata = value.get("metadata", {}) or {}
+                phone_number_id = str(
+                    metadata.get("phone_number_id", "")
+                )
+
+                if not phone_number_id:
+                    continue
+
+                channel = find_channel_by_phone_number_id(
+                    db,
+                    phone_number_id,
+                )
+
+                if channel is None:
+                    continue
+
+                config = reveal_config(channel.config)
+
+                if not verify_signature(
+                    raw_body,
+                    signature,
+                    config.get("app_secret"),
+                ):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Invalid webhook signature",
+                    )
+    finally:
+        db.close()
+
+    return payload
+
+
 @router.post("")
 async def receive_webhook(
     request: Request,
 ):
-
-    raw_body = (
-        await request.body()
+    raw_body = await request.body()
+    signature = request.headers.get(
+        "x-hub-signature-256"
     )
+
+    validate_webhook_request(
+        raw_body=raw_body,
+        signature=signature,
+    )
+
+    if whatsapp_job_queue.enabled:
+        try:
+            job_id = whatsapp_job_queue.enqueue(
+                body=raw_body.decode("utf-8"),
+                signature=signature or "",
+            )
+        except (RedisError, ValueError) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="WhatsApp processing queue unavailable",
+            ) from exc
+
+        return {
+            "status": "accepted",
+            "job_id": job_id,
+        }
+
+    # Development/test fallback. Production configuration
+    # requires Redis and therefore always uses the worker.
+    return process_webhook_payload(
+        raw_body=raw_body,
+        signature=signature,
+    )
+
+
+def process_webhook_payload(
+    raw_body: bytes,
+    signature: str | None,
+):
 
     try:
 
@@ -470,12 +571,6 @@ async def receive_webhook(
                     reveal_config(
                     channel.config
                 )
-                )
-
-                signature = (
-                    request.headers.get(
-                        "x-hub-signature-256"
-                    )
                 )
 
                 if not verify_signature(
