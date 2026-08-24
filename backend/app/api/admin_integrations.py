@@ -19,6 +19,7 @@ from backend.app.models.company import Company
 from backend.app.models.user import User
 
 from backend.app.modules.integrations.catalog import (
+    get_integration_definition,
     validate_integration_config,
 )
 from backend.app.modules.integrations.models import (
@@ -111,13 +112,36 @@ def create_integration(
                 detail="Company not found",
             )
 
+        integration_type = data.integration_type.strip().lower()
+        name = data.name.strip()
+
+        if get_integration_definition(integration_type) is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported integration type",
+            )
+
+        if not name:
+            raise HTTPException(
+                status_code=400,
+                detail="Integration name is required",
+            )
+
+        try:
+            validate_integration_config(
+                integration_type,
+                data.config or {},
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            )
+
         integration = CompanyIntegration(
             company_id=company_id,
-            integration_type=
-                data.integration_type
-                .strip()
-                .lower(),
-            name=data.name.strip(),
+            integration_type=integration_type,
+            name=name,
             config=data.config,
             enabled=True,
         )
@@ -230,10 +254,23 @@ def update_integration(
             item.name = name
 
         if data.config is not None:
-            item.config = merge_config(
+            new_config = merge_config(
                 item.config,
                 data.config,
             )
+
+            try:
+                validate_integration_config(
+                    item.integration_type,
+                    reveal_config(new_config),
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=str(exc),
+                )
+
+            item.config = new_config
 
         if data.enabled is not None:
             item.enabled = data.enabled
