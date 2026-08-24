@@ -17,8 +17,19 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _column_names() -> set[str]:
+    inspector = sa.inspect(op.get_bind())
+    return {
+        column["name"]
+        for column in inspector.get_columns("ai_usage")
+    }
+
+
 def upgrade() -> None:
-    op.add_column(
+    columns = _column_names()
+
+    if "status" not in columns:
+        op.add_column(
         "ai_usage",
         sa.Column(
             "status",
@@ -27,29 +38,38 @@ def upgrade() -> None:
             server_default="success",
         ),
     )
-    op.add_column(
-        "ai_usage",
-        sa.Column(
-            "error_message",
-            sa.Text(),
-            nullable=True,
-        ),
-    )
-    op.add_column(
-        "ai_usage",
-        sa.Column(
-            "latency_ms",
-            sa.Integer(),
-            nullable=False,
-            server_default="0",
-        ),
-    )
-    op.create_index(
+    if "error_message" not in columns:
+        op.add_column(
+            "ai_usage",
+            sa.Column(
+                "error_message",
+                sa.Text(),
+                nullable=True,
+            ),
+        )
+
+    if "latency_ms" not in columns:
+        op.add_column(
+            "ai_usage",
+            sa.Column(
+                "latency_ms",
+                sa.Integer(),
+                nullable=False,
+                server_default="0",
+            ),
+        )
+
+    indexes = {
+        index["name"]
+        for index in sa.inspect(op.get_bind()).get_indexes("ai_usage")
+    }
+    if "ix_ai_usage_status" not in indexes:
+        op.create_index(
         "ix_ai_usage_status",
         "ai_usage",
         ["status"],
-        unique=False,
-    )
+            unique=False,
+        )
 
 
 def downgrade() -> None:
