@@ -3,15 +3,14 @@
 
 function installOperationsUI() {
 
-    const nav =
-        document.querySelector(
-            ".sidebar nav"
-        );
-
     const main =
         document.querySelector(
             ".main"
         );
+
+    if (!main) {
+        return;
+    }
 
     if (!nav || !main) {
         return;
@@ -28,9 +27,7 @@ function installOperationsUI() {
 
     for (const [id, title] of pages) {
 
-        if (
-            !document.getElementById(
-                `nav-${id}`
+`
             )
         ) {
 
@@ -173,9 +170,11 @@ async function openOperationsPage(
     );
 
 
-    button.classList.add(
-        "active"
-    );
+    if (button) {
+        button.classList.add(
+            "active"
+        );
+    }
 
 
     document.getElementById(
@@ -1273,10 +1272,3 @@ document.addEventListener(
     "DOMContentLoaded",
     installOperationsUI
 );
-
-
-setTimeout(
-    installOperationsUI,
-    600
-);
-
