@@ -1,4 +1,6 @@
 
+from backend.app.core.config_secrets import reveal_config
+
 from backend.app.modules.tools.models import (
     AgentToolAssignment,
 )
@@ -114,7 +116,7 @@ class ToolExecutor:
             "conversation_id":
                 conversation_id,
             "config":
-                assignment.config or {},
+                reveal_config(assignment.config),
         }
 
         try:
