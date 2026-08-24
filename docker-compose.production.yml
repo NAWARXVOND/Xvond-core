@@ -15,50 +15,7 @@ services:
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     depends_on:
-      whatsapp-worker:
-    image: xvond-core:latest
-    container_name: xvond-whatsapp-worker
-    restart: unless-stopped
-    entrypoint: []
-    command: ["python", "-m", "scripts.whatsapp_worker"]
-    env_file:
-      - .env
-    environment:
-      APP_ENV: production
-      DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER is required}
-      REDIS_URL: redis://redis:6379/0
-    depends_on:
-      app:
-        condition: service_healthy
-      postgres-backup:
-    image: postgres:17
-    container_name: xvond-postgres-backup
-    restart: unless-stopped
-    environment:
-      PGHOST: postgres
-      PGPORT: 5432
-      PGUSER: ${POSTGRES_USER:-xvond}
-      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
-      PGDATABASE: ${POSTGRES_DB:-xvond}
-      BACKUP_DIR: /backups
-      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
-      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
-    volumes:
-      - xvond_backups:/backups
-      - ./scripts:/opt/xvond/scripts:ro
-    entrypoint:
-      [
-        "/bin/sh",
-        "/opt/xvond/scripts/backup_loop.sh"
-      ]
-    depends_on:
       postgres:
-        condition: service_healthy
-
-  redis:
-        condition: service_healthy
-
-  postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -74,6 +31,24 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+
+  whatsapp-worker:
+    image: xvond-core:latest
+    container_name: xvond-whatsapp-worker
+    restart: unless-stopped
+    entrypoint: []
+    command: ["python", "-m", "scripts.whatsapp_worker"]
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER is required}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      app:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   postgres:
     image: postgres:17
@@ -94,6 +69,27 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  postgres-backup:
+    image: postgres:17
+    container_name: xvond-postgres-backup
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-xvond}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      PGDATABASE: ${POSTGRES_DB:-xvond}
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    volumes:
+      - xvond_backups:/backups
+      - ./scripts:/opt/xvond/scripts:ro
+    entrypoint: ["/bin/sh", "/opt/xvond/scripts/backup_loop.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   redis:
     image: redis:7.4-alpine
