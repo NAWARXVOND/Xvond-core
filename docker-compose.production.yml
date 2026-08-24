@@ -30,7 +30,32 @@ services:
     depends_on:
       app:
         condition: service_healthy
-      redis:
+      postgres-backup:
+    image: postgres:17
+    container_name: xvond-postgres-backup
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-xvond}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      PGDATABASE: ${POSTGRES_DB:-xvond}
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    volumes:
+      - xvond_backups:/backups
+      - ./scripts:/opt/xvond/scripts:ro
+    entrypoint:
+      [
+        "/bin/sh",
+        "/opt/xvond/scripts/backup_loop.sh"
+      ]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
         condition: service_healthy
 
   postgres:
@@ -86,3 +111,4 @@ services:
 volumes:
   xvond_postgres_data:
   xvond_redis_data:
+  xvond_backups:
