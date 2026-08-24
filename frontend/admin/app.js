@@ -2718,10 +2718,17 @@ async function saveCompanyAgentAI() {
 
 async function openEditAgent(companyId, agentId) {
     try {
-        const [agent, providerData] = await Promise.all([
-            api(`/admin/companies/${companyId}/agents/${agentId}`),
+        const [agentData, providerData] = await Promise.all([
+            api(`/admin/companies/${companyId}/agents`),
             api("/admin/ai/providers"),
         ]);
+        const agent = (agentData.agents || []).find(
+            item => Number(item.id) === Number(agentId)
+        );
+
+        if (!agent) {
+            throw new Error("AI Agent not found");
+        }
 
         const providers = providerData.providers || [];
         const options = providers.map(provider => `
