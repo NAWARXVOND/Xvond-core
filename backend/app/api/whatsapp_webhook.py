@@ -31,6 +31,13 @@ from backend.app.modules.audit.service import (
 from backend.app.modules.channels.models import (
     AgentChannel,
 )
+from backend.app.modules.channels.handoff import (
+    activate_human_handoff,
+    echo_recipient,
+    extend_human_handoff,
+    human_handoff_active,
+    requests_human,
+)
 from backend.app.modules.channels.whatsapp import (
     whatsapp_sender,
 )
@@ -220,6 +227,73 @@ def lock_contact(
             "key": key,
         },
     )
+
+
+def process_business_app_echo(
+    db,
+    channel: AgentChannel,
+    value: dict,
+) -> list[dict]:
+    processed = []
+
+    for echo in value.get("message_echoes", []) or []:
+        wa_id = echo_recipient(echo)
+        message_id = str(echo.get("id") or "")
+
+        if not wa_id:
+            continue
+
+        session = (
+            db.query(WhatsAppSession)
+            .filter(
+                WhatsAppSession.company_id == channel.company_id,
+                WhatsAppSession.agent_id == channel.agent_id,
+                WhatsAppSession.phone_number_id
+                == str(
+                    value.get("metadata", {}).get(
+                        "phone_number_id",
+                        "",
+                    )
+                ),
+                WhatsAppSession.wa_id == wa_id,
+            )
+            .first()
+        )
+
+        if session is None:
+            processed.append({
+                "message_id": message_id,
+                "status": "human_echo_without_session",
+            })
+            continue
+
+        activate_human_handoff(
+            session,
+            reason="business_app_reply",
+            human_message=True,
+        )
+
+        audit_service.log(
+            db=db,
+            company_id=channel.company_id,
+            action="whatsapp.human_reply_detected",
+            resource_type="channel",
+            resource_id=channel.id,
+            details={
+                "message_id": message_id,
+                "conversation_id": session.conversation_id,
+                "wa_id": wa_id,
+                "source": "whatsapp_business_app",
+            },
+        )
+
+        processed.append({
+            "message_id": message_id,
+            "conversation_id": session.conversation_id,
+            "status": "human_active",
+        })
+
+    return processed
 
 
 @router.get("")
@@ -419,6 +493,22 @@ async def receive_webhook(
                         ),
                     )
 
+                field = change.get("field")
+
+                if field == "smb_message_echoes":
+                    processed.extend(
+                        process_business_app_echo(
+                            db=db,
+                            channel=channel,
+                            value=value,
+                        )
+                    )
+                    db.commit()
+                    continue
+
+                if field not in (None, "messages"):
+                    continue
+
                 for message in (
                     value.get(
                         "messages",
@@ -574,6 +664,85 @@ async def receive_webhook(
                             )
 
                             db.flush()
+
+                        if requests_human(
+                            incoming_text
+                        ):
+                            activate_human_handoff(
+                                session,
+                                reason="customer_request",
+                            )
+
+                            send_result = (
+                                whatsapp_sender.send_text(
+                                    config=config,
+                                    to=wa_id,
+                                    text=(
+                                        "تم تحويل المحادثة إلى موظف. "
+                                        "سيتم الرد عليك من واتساب بزنس."
+                                    ),
+                                )
+                            )
+
+                            audit_service.log(
+                                db=db,
+                                company_id=channel.company_id,
+                                action="whatsapp.handoff_requested",
+                                resource_type="channel",
+                                resource_id=channel.id,
+                                details={
+                                    "message_id": message_id,
+                                    "conversation_id":
+                                        session.conversation_id,
+                                    "acknowledgement_sent":
+                                        bool(
+                                            send_result.get(
+                                                "success"
+                                            )
+                                        ),
+                                },
+                            )
+
+                            db.commit()
+
+                            processed.append({
+                                "message_id": message_id,
+                                "conversation_id":
+                                    session.conversation_id,
+                                "status": "waiting_for_human",
+                            })
+                            continue
+
+                        if human_handoff_active(
+                            session
+                        ):
+                            extend_human_handoff(
+                                session
+                            )
+
+                            audit_service.log(
+                                db=db,
+                                company_id=channel.company_id,
+                                action="whatsapp.message_routed_to_human",
+                                resource_type="channel",
+                                resource_id=channel.id,
+                                details={
+                                    "message_id": message_id,
+                                    "conversation_id":
+                                        session.conversation_id,
+                                    "wa_id": wa_id,
+                                },
+                            )
+
+                            db.commit()
+
+                            processed.append({
+                                "message_id": message_id,
+                                "conversation_id":
+                                    session.conversation_id,
+                                "status": "waiting_for_human",
+                            })
+                            continue
 
                         result = (
                             agent_runtime.chat(
