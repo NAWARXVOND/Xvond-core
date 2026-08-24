@@ -54,7 +54,9 @@ jobs:
             sh -n "$file"
           done
       - name: Validate production Compose
-        run: docker compose -f docker-compose.production.yml config --quiet
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.production.yml config --quiet
       - name: Run tests
         run: pytest -q
       - name: Build production container
