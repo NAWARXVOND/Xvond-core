@@ -1,5 +1,6 @@
 
 from backend.app.core.config_secrets import reveal_config
+from backend.app.core.module_access import require_company_module
 
 from backend.app.modules.tools.models import (
     AgentToolAssignment,
@@ -70,6 +71,12 @@ class ToolExecutor:
         arguments: dict,
         conversation_id: int | None = None,
     ) -> dict:
+
+        require_company_module(
+            db,
+            company_id,
+            "tools",
+        )
 
         assignment = (
             db.query(AgentToolAssignment)
