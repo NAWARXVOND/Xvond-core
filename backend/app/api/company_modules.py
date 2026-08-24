@@ -120,12 +120,17 @@ def install_company_module(
         )
 
         if existing is not None:
+            if not existing.enabled:
+                existing.enabled = True
+                db.commit()
+                db.refresh(existing)
+
             return {
                 "id": existing.id,
                 "company_id": existing.company_id,
                 "module_name": existing.module_name,
                 "enabled": existing.enabled,
-                "status": "already_installed",
+                "status": "already_enabled",
             }
 
         item = CompanyModule(
