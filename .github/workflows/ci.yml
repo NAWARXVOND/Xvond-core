@@ -1,0 +1,45 @@
+name: Xvond Core CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: xvond
+          POSTGRES_PASSWORD: xvond_test_password
+          POSTGRES_DB: xvond_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U xvond -d xvond_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+psycopg://xvond:xvond_test_password@localhost:5432/xvond_test
+      JWT_SECRET: ci-only-secret-with-at-least-32-characters
+      JWT_ISSUER: xvond-core
+      JWT_AUDIENCE: xvond-users
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - name: Build fresh database from migrations
+        run: alembic upgrade head
+      - name: Run tests
+        run: pytest -q
