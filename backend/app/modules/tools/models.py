@@ -11,6 +11,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import (
     Mapped,
     mapped_column,
+    validates,
 )
 
 from backend.app.core.database.base import Base
@@ -54,6 +55,12 @@ class AgentToolAssignment(Base):
         default=True,
         nullable=False,
     )
+
+
+    @validates("config")
+    def protect_stored_config(self, _key, value):
+        from backend.app.core.config_secrets import protect_config
+        return protect_config(value or {})
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
