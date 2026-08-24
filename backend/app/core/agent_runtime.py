@@ -1,4 +1,5 @@
 from decimal import Decimal
+from time import perf_counter
 
 from fastapi import HTTPException
 
@@ -339,20 +340,63 @@ class AgentRuntime:
         )
 
         final_text = ""
+        started_at = perf_counter()
 
         for _round in range(
             self.MAX_TOOL_ROUNDS
         ):
 
-            result = ai_engine.generate(
-                provider_name=agent.provider,
-                system_prompt=agent.system_prompt,
-                user_message=runtime_message,
-                model=agent.model,
-                tools=tool_definitions,
-                tool_outputs=tool_outputs,
-                continuation=continuation,
-            )
+            try:
+                result = ai_engine.generate(
+                    provider_name=agent.provider,
+                    system_prompt=agent.system_prompt,
+                    user_message=runtime_message,
+                    model=agent.model,
+                    tools=tool_definitions,
+                    tool_outputs=tool_outputs,
+                    continuation=continuation,
+                )
+            except Exception as exc:
+                latency_ms = int(
+                    (perf_counter() - started_at) * 1000
+                )
+                error_message = str(exc)[:2000]
+
+                db.rollback()
+                db.add(
+                    AIUsage(
+                        company_id=company_id,
+                        agent_id=agent_id,
+                        provider=agent.provider,
+                        model=agent.model,
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
+                        total_tokens=total_tokens,
+                        provider_cost=total_provider_cost,
+                        status="failed",
+                        error_message=error_message,
+                        latency_ms=latency_ms,
+                    )
+                )
+                audit_service.log(
+                    db=db,
+                    company_id=company_id,
+                    action="agent.chat_failed",
+                    resource_type="ai_agent",
+                    resource_id=agent_id,
+                    details={
+                        "provider": agent.provider,
+                        "model": agent.model,
+                        "error": error_message,
+                        "latency_ms": latency_ms,
+                    },
+                )
+                db.commit()
+
+                raise HTTPException(
+                    status_code=502,
+                    detail="AI provider request failed",
+                ) from exc
 
             total_input_tokens += (
                 result.input_tokens
@@ -513,6 +557,10 @@ class AgentRuntime:
                 total_tokens,
             provider_cost=
                 total_provider_cost,
+            status="success",
+            latency_ms=int(
+                (perf_counter() - started_at) * 1000
+            ),
         )
 
         db.add(usage)
@@ -534,6 +582,8 @@ class AgentRuntime:
                     len(executed_tools),
                 "total_tokens":
                     total_tokens,
+                "latency_ms":
+                    usage.latency_ms,
             },
         )
 
@@ -584,6 +634,8 @@ class AgentRuntime:
                     total_tokens,
                 "provider_cost":
                     total_provider_cost,
+                "latency_ms":
+                    usage.latency_ms,
             },
         }
 
