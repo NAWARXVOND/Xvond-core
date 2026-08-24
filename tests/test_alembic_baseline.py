@@ -13,6 +13,7 @@ def test_baseline_uses_explicit_operations():
     assert "from backend.app.core.database.base import Base" not in BASELINE
     assert "op.create_table(" in BASELINE
     assert "op.drop_table(" in BASELINE
+    assert BASELINE.count("op.create_table(") >= 20
 
 
 def test_baseline_revision_identity_is_stable():
