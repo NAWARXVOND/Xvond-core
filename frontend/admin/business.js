@@ -1,19 +1,11 @@
 ﻿let businessCompanyId = null;
 
 function installBusinessUI() {
-    const nav = document.querySelector(".sidebar nav");
     const main = document.querySelector(".main");
 
     if (!nav || !main) return;
 
-    if (!document.getElementById("nav-business")) {
-        const button = document.createElement("button");
-        button.id = "nav-business";
-        button.className = "nav-item";
-        button.textContent = "Business Operations";
-        button.onclick = () => openBusinessPage(button);
-        nav.appendChild(button);
-    }
+
 
     if (!document.getElementById("page-business")) {
         const section = document.createElement("section");
@@ -77,7 +69,9 @@ async function openBusinessPage(button) {
     document.getElementById("page-business")
         .classList.remove("hidden");
 
-    button.classList.add("active");
+    if (button) {
+        button.classList.add("active");
+    }
 
     document.getElementById("page-title").textContent =
         "Business Operations";
@@ -301,10 +295,3 @@ document.addEventListener(
     "DOMContentLoaded",
     installBusinessUI
 );
-
-setTimeout(
-    installBusinessUI,
-    600
-);
-
-
