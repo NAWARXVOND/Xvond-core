@@ -12,9 +12,9 @@ def test_safe_tools_execute_without_approval_by_default():
         assert tool_requires_approval(name, {}) is False
 
 
-def test_assignment_can_explicitly_override_approval_policy():
+def test_assignment_can_require_more_approval_but_cannot_bypass_sensitive_policy():
     assert tool_requires_approval("lead", {"approval_required": True}) is True
-    assert tool_requires_approval("booking", {"approval_required": False}) is False
+    assert tool_requires_approval("booking", {"approval_required": False}) is True
 
 
 def test_tool_approval_request_carries_execution_context():
