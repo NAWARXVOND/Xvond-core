@@ -89,6 +89,16 @@ class Settings:
         "",
     )
 
+    GROQ_API_KEY = os.getenv(
+        "GROQ_API_KEY",
+        "",
+    )
+
+    CONFIG_ENCRYPTION_KEY = os.getenv(
+        "CONFIG_ENCRYPTION_KEY",
+        "",
+    )
+
     SMTP_HOST = os.getenv(
         "SMTP_HOST",
         "",
@@ -154,6 +164,11 @@ class Settings:
             if self.JWT_SECRET in weak_secrets:
                 errors.append(
                     "JWT_SECRET is using a development value"
+                )
+
+            if len(self.CONFIG_ENCRYPTION_KEY) < 32:
+                errors.append(
+                    "CONFIG_ENCRYPTION_KEY must contain at least 32 characters in production"
                 )
 
             if not self.SUPERADMIN_EMAIL:

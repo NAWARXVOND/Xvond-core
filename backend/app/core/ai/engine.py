@@ -20,14 +20,15 @@ class AIEngine:
         # MOCK - DEVELOPMENT ONLY
         # --------------------------------
 
-        from backend.app.core.ai.providers.mock import (
-            MockProvider,
-        )
+        if not settings.is_production:
+            from backend.app.core.ai.providers.mock import (
+                MockProvider,
+            )
 
-        provider_registry.register(
-            "mock",
-            MockProvider(),
-        )
+            provider_registry.register(
+                "mock",
+                MockProvider(),
+            )
 
         # --------------------------------
         # OPENAI
@@ -49,6 +50,29 @@ class AIEngine:
 
                 print(
                     "Could not load OpenAI provider:",
+                    exc,
+                )
+
+        # --------------------------------
+        # GROQ
+        # --------------------------------
+
+        if settings.GROQ_API_KEY:
+
+            try:
+                from backend.app.core.ai.providers.groq import (
+                    GroqProvider,
+                )
+
+                provider_registry.register(
+                    "groq",
+                    GroqProvider(),
+                )
+
+            except Exception as exc:
+
+                print(
+                    "Could not load Groq provider:",
                     exc,
                 )
 
