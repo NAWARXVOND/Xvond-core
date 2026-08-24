@@ -103,6 +103,19 @@ _RATE_LIMITS = {
 }
 
 
+def request_client_ip(request: Request) -> str:
+    if settings.TRUST_PROXY_HEADERS:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        proxy_ip = (
+            forwarded.split(",", 1)[0].strip()
+            or request.headers.get("cf-connecting-ip", "").strip()
+        )
+        if proxy_ip:
+            return proxy_ip
+
+    return request.client.host if request.client else "unknown"
+
+
 @app.middleware("http")
 async def protect_public_endpoints(request: Request, call_next):
     rule = _RATE_LIMITS.get(
@@ -117,12 +130,7 @@ async def protect_public_endpoints(request: Request, call_next):
         rule = (60, 60)
 
     if rule is not None:
-        forwarded = request.headers.get("x-forwarded-for", "")
-        client_ip = (
-            forwarded.split(",", 1)[0].strip()
-            or request.headers.get("cf-connecting-ip", "").strip()
-            or (request.client.host if request.client else "unknown")
-        )
+        client_ip = request_client_ip(request)
         limit, window = rule
         key = f"{client_ip}:{request.method}:{request.url.path}"
 
@@ -230,28 +238,46 @@ def root():
     }
 
 
-@app.get("/health")
-def health():
+@app.get("/health/live")
+def liveness():
+    return {
+        "status": "alive",
+        "version": settings.APP_VERSION,
+    }
 
+
+@app.get("/health")
+@app.get("/health/ready")
+def health():
     db = SessionLocal()
+    database_ok = False
 
     try:
-
-        db.execute(
-            text("SELECT 1")
-        )
-
-        return {
-            "status": "healthy",
-            "database": "ok",
-            "environment":
-                settings.APP_ENV,
-            "version":
-                settings.APP_VERSION,
-        }
-
+        db.execute(text("SELECT 1"))
+        database_ok = True
+    except Exception:
+        database_ok = False
     finally:
         db.close()
+
+    redis_ok = rate_limiter.healthcheck()
+    ready = database_ok and redis_ok
+
+    payload = {
+        "status": "healthy" if ready else "unhealthy",
+        "database": "ok" if database_ok else "unavailable",
+        "redis": "ok" if redis_ok else "unavailable",
+        "environment": settings.APP_ENV,
+        "version": settings.APP_VERSION,
+    }
+
+    if not ready:
+        return JSONResponse(
+            status_code=503,
+            content=payload,
+        )
+
+    return payload
 
 
 # ============================================================
