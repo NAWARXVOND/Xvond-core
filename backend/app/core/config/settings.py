@@ -27,6 +27,11 @@ class Settings:
         "",
     )
 
+    REDIS_URL = os.getenv(
+        "REDIS_URL",
+        "",
+    )
+
     JWT_SECRET = os.getenv(
         "JWT_SECRET",
         "",
@@ -148,6 +153,11 @@ class Settings:
             )
 
         if self.is_production:
+
+            if not self.REDIS_URL:
+                errors.append(
+                    "REDIS_URL is required in production"
+                )
 
             if len(self.JWT_SECRET) < 32:
                 errors.append(
