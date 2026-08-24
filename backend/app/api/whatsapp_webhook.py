@@ -16,6 +16,7 @@ from sqlalchemy.exc import (
 )
 
 from backend.app.core.config_secrets import reveal_config
+from backend.app.models.company_module import CompanyModule
 
 from backend.app.core.agent_runtime import (
     agent_runtime,
@@ -53,10 +54,19 @@ def get_whatsapp_channels(
         db.query(
             AgentChannel
         )
+        .join(
+            CompanyModule,
+            CompanyModule.company_id
+            == AgentChannel.company_id,
+        )
         .filter(
             AgentChannel.channel_type
             == "whatsapp",
             AgentChannel.enabled
+            .is_(True),
+            CompanyModule.module_name
+            == "channels",
+            CompanyModule.enabled
             .is_(True),
         )
         .all()
