@@ -22,6 +22,21 @@ class Settings:
         "development",
     ).strip().lower()
 
+    LOG_LEVEL = os.getenv(
+        "LOG_LEVEL",
+        "INFO",
+    ).strip().upper()
+
+    LOG_JSON = os.getenv(
+        "LOG_JSON",
+        "true" if APP_ENV in {"production", "prod"} else "false",
+    ).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
     DATABASE_URL = os.getenv(
         "DATABASE_URL",
         "",
