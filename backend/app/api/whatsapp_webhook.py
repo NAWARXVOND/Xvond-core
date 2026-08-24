@@ -15,6 +15,8 @@ from sqlalchemy.exc import (
     IntegrityError,
 )
 
+from backend.app.core.config_secrets import reveal_config
+
 from backend.app.core.agent_runtime import (
     agent_runtime,
 )
@@ -75,8 +77,9 @@ def find_channel_by_phone_number_id(
             )
             if str(
                 (
+                    reveal_config(
                     channel.config
-                    or {}
+                )
                 ).get(
                     "phone_number_id",
                     "",
@@ -252,8 +255,9 @@ def verify_webhook(
         ):
 
             config = (
-                channel.config
-                or {}
+                reveal_config(
+                    channel.config
+                )
             )
 
             stored_token = str(
@@ -379,8 +383,9 @@ async def receive_webhook(
                     continue
 
                 config = (
+                    reveal_config(
                     channel.config
-                    or {}
+                )
                 )
 
                 signature = (
