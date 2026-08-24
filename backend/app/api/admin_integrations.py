@@ -12,11 +12,15 @@ from backend.app.core.config_secrets import (
     configured_secret_fields,
     merge_config,
     public_config,
+    reveal_config,
 )
 
 from backend.app.models.company import Company
 from backend.app.models.user import User
 
+from backend.app.modules.integrations.catalog import (
+    validate_integration_config,
+)
 from backend.app.modules.integrations.models import (
     CompanyIntegration,
 )
@@ -42,6 +46,17 @@ class IntegrationUpdate(BaseModel):
     enabled: bool | None = None
 
 
+def _integration_configured(item: CompanyIntegration) -> bool:
+    try:
+        validate_integration_config(
+            item.integration_type,
+            reveal_config(item.config),
+        )
+        return True
+    except ValueError:
+        return False
+
+
 def serialize_integration(
     item: CompanyIntegration,
 ) -> dict:
@@ -63,9 +78,7 @@ def serialize_integration(
                 item.config
             ),
 
-        "configured": bool(
-            item.config
-        ),
+        "configured": _integration_configured(item),
 
         "enabled": item.enabled,
         "created_at": item.created_at,
