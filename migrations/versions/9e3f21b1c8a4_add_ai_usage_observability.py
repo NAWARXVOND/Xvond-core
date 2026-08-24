@@ -30,14 +30,15 @@ def upgrade() -> None:
 
     if "status" not in columns:
         op.add_column(
-        "ai_usage",
-        sa.Column(
-            "status",
-            sa.String(length=20),
-            nullable=False,
-            server_default="success",
-        ),
-    )
+            "ai_usage",
+            sa.Column(
+                "status",
+                sa.String(length=20),
+                nullable=False,
+                server_default="success",
+            ),
+        )
+
     if "error_message" not in columns:
         op.add_column(
             "ai_usage",
@@ -63,11 +64,12 @@ def upgrade() -> None:
         index["name"]
         for index in sa.inspect(op.get_bind()).get_indexes("ai_usage")
     }
+
     if "ix_ai_usage_status" not in indexes:
         op.create_index(
-        "ix_ai_usage_status",
-        "ai_usage",
-        ["status"],
+            "ix_ai_usage_status",
+            "ai_usage",
+            ["status"],
             unique=False,
         )
 
