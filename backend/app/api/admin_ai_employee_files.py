@@ -1,6 +1,6 @@
 from io import BytesIO
 
-import fitz
+import pymupdf
 import pytesseract
 from PIL import Image
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -23,7 +23,7 @@ MIN_NATIVE_TEXT_CHARS = 24
 def _ocr_page(document, page_index: int) -> str:
     try:
         page = document.load_page(page_index)
-        matrix = fitz.Matrix(2.0, 2.0)
+        matrix = pymupdf.Matrix(2.0, 2.0)
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         image = Image.open(BytesIO(pix.tobytes("png")))
         text = pytesseract.image_to_string(image, lang="ara+eng", config="--psm 6")
@@ -95,7 +95,7 @@ async def upload_pdf_knowledge(
         ocr_pages = {}
         if ocr_indexes:
             try:
-                rendered = fitz.open(stream=raw, filetype="pdf")
+                rendered = pymupdf.open(stream=raw, filetype="pdf")
             except Exception as exc:
                 raise HTTPException(400, "PDF could not be rendered for OCR") from exc
             try:
