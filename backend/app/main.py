@@ -36,6 +36,7 @@ from backend.app.api.admin_analytics_builder import router as admin_analytics_bu
 from backend.app.api.admin_service_billing import router as admin_service_billing_router
 from backend.app.api.admin_service_plan_management import router as admin_service_plan_management_router
 from backend.app.api.public_channels import router as public_channels_router
+from backend.app.api.website_widget import router as website_widget_router
 from backend.app.api.agent_factory import router as agent_factory_router
 from backend.app.api.ai_agents import router as ai_agents_router
 from backend.app.api.company_modules import router as company_modules_router
@@ -83,110 +84,44 @@ async def request_observability(request: Request, call_next):
     logger.info("Request completed", extra={"request_id": request_id, "method": request.method, "path": request.url.path, "status_code": response.status_code, "duration_ms": duration_ms, "client_ip": request_client_ip(request)})
     return response
 
-_RATE_LIMITS = {
-    ("POST", "/auth/login"): (10, 60),
-    ("POST", "/auth/customer/forgot-password"): (5, 300),
-    ("POST", "/auth/customer/reset-password"): (10, 300),
-    ("POST", "/webhooks/whatsapp"): (240, 60),
-}
+_RATE_LIMITS = {("POST", "/auth/login"): (10, 60), ("POST", "/auth/customer/forgot-password"): (5, 300), ("POST", "/auth/customer/reset-password"): (10, 300), ("POST", "/webhooks/whatsapp"): (240, 60)}
 
 def request_client_ip(request: Request) -> str:
     if settings.TRUST_PROXY_HEADERS:
-        forwarded = request.headers.get("x-forwarded-for", "")
-        proxy_ip = forwarded.split(",", 1)[0].strip() or request.headers.get("cf-connecting-ip", "").strip()
-        if proxy_ip:
-            return proxy_ip
+        forwarded=request.headers.get("x-forwarded-for","");proxy_ip=forwarded.split(",",1)[0].strip() or request.headers.get("cf-connecting-ip","").strip()
+        if proxy_ip:return proxy_ip
     return request.client.host if request.client else "unknown"
 
 @app.middleware("http")
 async def protect_public_endpoints(request: Request, call_next):
-    rule = _RATE_LIMITS.get((request.method.upper(), request.url.path))
-    if rule is None and request.method.upper() == "POST":
-        if request.url.path.startswith("/ai-agents/") and request.url.path.endswith("/chat"):
-            rule = (60, 60)
-        elif request.url.path.startswith("/channels/website/") and request.url.path.endswith("/chat"):
-            rule = (90, 60)
-        elif request.url.path.startswith("/channels/voice/") and request.url.path.endswith("/turn"):
-            rule = (180, 60)
+    rule=_RATE_LIMITS.get((request.method.upper(),request.url.path))
+    if rule is None and request.method.upper()=="POST":
+        if request.url.path.startswith("/ai-agents/") and request.url.path.endswith("/chat"):rule=(60,60)
+        elif request.url.path.startswith("/channels/website/") and request.url.path.endswith("/chat"):rule=(90,60)
+        elif request.url.path.startswith("/channels/voice/") and request.url.path.endswith("/turn"):rule=(180,60)
     if rule is not None:
-        client_ip = request_client_ip(request)
-        limit, window = rule
-        key = f"{client_ip}:{request.method}:{request.url.path}"
-        if not rate_limiter.allow(key, limit, window):
-            return JSONResponse(status_code=429, content={"detail": "Too many requests"}, headers={"Retry-After": str(window)})
+        client_ip=request_client_ip(request);limit,window=rule;key=f"{client_ip}:{request.method}:{request.url.path}"
+        if not rate_limiter.allow(key,limit,window):return JSONResponse(status_code=429,content={"detail":"Too many requests"},headers={"Retry-After":str(window)})
     return await call_next(request)
 
-app.include_router(auth_router)
-app.include_router(users_router)
-app.include_router(admin_router)
-app.include_router(admin_ai_router)
-app.include_router(admin_ai_employee_router)
-app.include_router(admin_ai_employee_files_router)
-app.include_router(admin_ai_employee_knowledge_router)
-app.include_router(admin_audit_router)
-app.include_router(admin_billing_router)
-app.include_router(admin_business_router)
-app.include_router(admin_channels_router)
-app.include_router(admin_company_view_router)
-app.include_router(admin_dashboard_router)
-app.include_router(admin_handoff_router)
-app.include_router(admin_integrations_router)
-app.include_router(admin_knowledge_router)
-app.include_router(admin_operations_router)
-app.include_router(admin_production_router)
-app.include_router(admin_providers_router)
-app.include_router(admin_setup_router)
-app.include_router(admin_solutions_router)
-app.include_router(admin_tool_execution_router)
-app.include_router(admin_tools_router)
-app.include_router(admin_automation_router)
-app.include_router(admin_analytics_builder_router)
-app.include_router(admin_service_billing_router)
-app.include_router(admin_service_plan_management_router)
-app.include_router(agent_factory_router)
-app.include_router(ai_agents_router)
-app.include_router(public_channels_router)
-app.include_router(modules_router)
-app.include_router(company_modules_router)
-app.include_router(customer_agents_router)
-app.include_router(customer_business_router)
-app.include_router(customer_portal_router)
-app.include_router(usage_router)
-app.include_router(whatsapp_webhook_router)
+for r in [auth_router,users_router,admin_router,admin_ai_router,admin_ai_employee_router,admin_ai_employee_files_router,admin_ai_employee_knowledge_router,admin_audit_router,admin_billing_router,admin_business_router,admin_channels_router,admin_company_view_router,admin_dashboard_router,admin_handoff_router,admin_integrations_router,admin_knowledge_router,admin_operations_router,admin_production_router,admin_providers_router,admin_setup_router,admin_solutions_router,admin_tool_execution_router,admin_tools_router,admin_automation_router,admin_analytics_builder_router,admin_service_billing_router,admin_service_plan_management_router,agent_factory_router,ai_agents_router,public_channels_router,website_widget_router,modules_router,company_modules_router,customer_agents_router,customer_business_router,customer_portal_router,usage_router,whatsapp_webhook_router]:app.include_router(r)
 
-app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
-
+app.mount("/static",StaticFiles(directory=str(FRONTEND_DIR)),name="static")
 @app.get("/")
-def root():
-    return {"name": settings.APP_NAME, "version": settings.APP_VERSION, "status": "online"}
-
+def root():return {"name":settings.APP_NAME,"version":settings.APP_VERSION,"status":"online"}
 @app.get("/health/live")
-def liveness():
-    return {"status": "alive", "version": settings.APP_VERSION}
-
+def liveness():return {"status":"alive","version":settings.APP_VERSION}
 @app.get("/health")
 @app.get("/health/ready")
 def health():
-    db = SessionLocal()
-    database_ok = False
-    try:
-        db.execute(text("SELECT 1"))
-        database_ok = True
-    except Exception:
-        database_ok = False
-    finally:
-        db.close()
-    redis_ok = rate_limiter.healthcheck()
-    ready = database_ok and redis_ok
-    payload = {"status": "healthy" if ready else "unhealthy", "database": "ok" if database_ok else "unavailable", "redis": "ok" if redis_ok else "unavailable", "environment": settings.APP_ENV, "version": settings.APP_VERSION}
-    if not ready:
-        return JSONResponse(status_code=503, content=payload)
+    db=SessionLocal();database_ok=False
+    try:db.execute(text("SELECT 1"));database_ok=True
+    except Exception:database_ok=False
+    finally:db.close()
+    redis_ok=rate_limiter.healthcheck();ready=database_ok and redis_ok;payload={"status":"healthy" if ready else "unhealthy","database":"ok" if database_ok else "unavailable","redis":"ok" if redis_ok else "unavailable","environment":settings.APP_ENV,"version":settings.APP_VERSION}
+    if not ready:return JSONResponse(status_code=503,content=payload)
     return payload
-
 @app.get("/admin-ui")
-def admin_ui():
-    return RedirectResponse(url="/static/admin/index.html")
-
+def admin_ui():return RedirectResponse(url="/static/admin/index.html")
 @app.get("/customer-ui")
-def customer_ui():
-    return RedirectResponse(url="/static/customer/index.html")
+def customer_ui():return RedirectResponse(url="/static/customer/index.html")
