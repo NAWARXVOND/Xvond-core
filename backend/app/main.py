@@ -54,7 +54,12 @@ from backend.app.api.usage import router as usage_router
 from backend.app.api.whatsapp_webhook import router as whatsapp_webhook_router
 from backend.app.core.config.settings import settings
 from backend.app.core.database.connection import SessionLocal
-from backend.app.core.log_config import configure_logging, reset_request_id, safe_request_id, set_request_id
+from backend.app.core.log_config import (
+    configure_logging,
+    reset_request_id,
+    safe_request_id,
+    set_request_id,
+)
 from backend.app.core.module_loader import discover_modules
 from backend.app.core.module_manager import module_manager
 from backend.app.core.rate_limit import rate_limiter
@@ -65,7 +70,7 @@ FRONTEND_DIR = PROJECT_ROOT / "frontend"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    for module in discover_modules():
+    for module in discover_modules(strict=settings.is_production):
         module_manager.install(module)
         module_manager.enable(module.name)
     yield
@@ -73,13 +78,21 @@ async def lifespan(app: FastAPI):
 
 configure_logging(level=settings.LOG_LEVEL, json_logs=settings.LOG_JSON)
 logger = logging.getLogger("xvond.http")
-app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION, lifespan=lifespan)
+app = FastAPI(
+    title=settings.APP_NAME,
+    version=settings.APP_VERSION,
+    lifespan=lifespan,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Xvond-Widget-Key"],
+    allow_headers=[
+        "Content-Type",
+        "X-Xvond-Widget-Key",
+        "X-Xvond-Visitor-Token",
+    ],
 )
 
 
@@ -129,7 +142,10 @@ _RATE_LIMITS = {
 def request_client_ip(request: Request) -> str:
     if settings.TRUST_PROXY_HEADERS:
         forwarded = request.headers.get("x-forwarded-for", "")
-        proxy_ip = forwarded.split(",", 1)[0].strip() or request.headers.get("cf-connecting-ip", "").strip()
+        proxy_ip = (
+            forwarded.split(",", 1)[0].strip()
+            or request.headers.get("cf-connecting-ip", "").strip()
+        )
         if proxy_ip:
             return proxy_ip
     return request.client.host if request.client else "unknown"
@@ -139,11 +155,17 @@ def request_client_ip(request: Request) -> str:
 async def protect_public_endpoints(request: Request, call_next):
     rule = _RATE_LIMITS.get((request.method.upper(), request.url.path))
     if rule is None and request.method.upper() == "POST":
-        if request.url.path.startswith("/ai-agents/") and request.url.path.endswith("/chat"):
+        if request.url.path.startswith("/ai-agents/") and request.url.path.endswith(
+            "/chat"
+        ):
             rule = (60, 60)
-        elif request.url.path.startswith("/channels/website/") and request.url.path.endswith("/chat"):
+        elif request.url.path.startswith(
+            "/channels/website/"
+        ) and request.url.path.endswith("/chat"):
             rule = (90, 60)
-        elif request.url.path.startswith("/channels/voice/") and request.url.path.endswith("/turn"):
+        elif request.url.path.startswith(
+            "/channels/voice/"
+        ) and request.url.path.endswith("/turn"):
             rule = (180, 60)
     if rule is not None:
         client_ip = request_client_ip(request)
@@ -210,7 +232,11 @@ app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 @app.get("/")
 def root():
-    return {"name": settings.APP_NAME, "version": settings.APP_VERSION, "status": "online"}
+    return {
+        "name": settings.APP_NAME,
+        "version": settings.APP_VERSION,
+        "status": "online",
+    }
 
 
 @app.get("/health/live")
