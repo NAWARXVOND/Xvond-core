@@ -1,11 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 
+from backend.app.core.config.settings import settings
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.automation.models import AutomationWorkflow, AutomationRun
+from backend.app.modules.billing.service_limits import service_limits
 
 router = APIRouter(prefix="/admin/automation", tags=["Xvond Admin - Automation"])
 
@@ -78,6 +81,13 @@ def create_workflow(company_id: int, data: WorkflowCreate, current_admin: User =
     db = SessionLocal()
     try:
         require_company(db, company_id)
+        if settings.is_production:
+            current = db.query(func.count(AutomationWorkflow.id)).filter(
+                AutomationWorkflow.company_id == company_id
+            ).scalar() or 0
+            service_limits.check_current(
+                db, company_id, "automation", "workflows", current
+            )
         name = data.name.strip()
         if not name:
             raise HTTPException(status_code=400, detail="Workflow name is required")
@@ -115,6 +125,8 @@ def update_workflow(workflow_id: int, data: WorkflowUpdate, current_admin: User 
         if data.steps is not None:
             item.steps = data.steps
         if data.enabled is not None:
+            if data.enabled and settings.is_production:
+                service_limits.entitlement(db, item.company_id, "automation")
             item.enabled = data.enabled
         db.commit()
         db.refresh(item)
