@@ -2,8 +2,12 @@ name: Xvond Core CI
 
 on:
   push:
-    branches: [main, company-platform-v2]
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: xvond-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
