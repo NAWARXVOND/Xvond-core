@@ -38,6 +38,30 @@ class ServiceLimits:
             raise HTTPException(status_code=403, detail="Service plan is unavailable")
         return subscription, plan
 
+    def limit_value(self, plan: ServicePlan, metric: str):
+        raw = (plan.limits or {}).get(metric)
+        if raw in (None, 0, "0"):
+            return None
+        return Decimal(str(raw))
+
+    def check_current(self, db, company_id: int, service_code: str, metric: str, current, quantity=1):
+        subscription, plan = self.entitlement(db, company_id, service_code)
+        limit = self.limit_value(plan, metric)
+        if limit is None:
+            return subscription, plan
+        if Decimal(str(current)) + Decimal(str(quantity)) > limit:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": "Service capacity limit reached",
+                    "service": service_code,
+                    "metric": metric,
+                    "used": str(current),
+                    "limit": str(limit),
+                },
+            )
+        return subscription, plan
+
     def used(self, db, subscription: ServiceSubscription, metric: str) -> Decimal:
         value = (
             db.query(func.coalesce(func.sum(ServiceUsageEvent.quantity), 0))
@@ -54,19 +78,20 @@ class ServiceLimits:
 
     def check(self, db, company_id: int, service_code: str, metric: str, quantity=1):
         subscription, plan = self.entitlement(db, company_id, service_code)
-        raw_limit = (plan.limits or {}).get(metric)
-        if raw_limit in (None, 0, "0"):
+        limit = self.limit_value(plan, metric)
+        if limit is None:
             return subscription, plan
 
-        limit = Decimal(str(raw_limit))
         requested = Decimal(str(quantity))
-        if self.used(db, subscription, metric) + requested > limit:
+        used = self.used(db, subscription, metric)
+        if used + requested > limit:
             raise HTTPException(
                 status_code=403,
                 detail={
                     "message": "Monthly service limit reached",
                     "service": service_code,
                     "metric": metric,
+                    "used": str(used),
                     "limit": str(limit),
                 },
             )
