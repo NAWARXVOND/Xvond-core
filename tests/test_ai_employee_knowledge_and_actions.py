@@ -8,7 +8,7 @@ def test_grounding_policy_prevents_unsolicited_catalog_dump():
     assert "greeting" in policy
     assert "do not advertise" in policy
     assert "incomplete or ambiguous" in policy
-    assert "do not invent" in policy
+    assert "never invent" in policy
 
 
 def test_knowledge_intent_routing_for_prices_and_booking():
