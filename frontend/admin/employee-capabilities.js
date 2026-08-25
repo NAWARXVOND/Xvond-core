@@ -1,37 +1,26 @@
-function capabilityModeOptions(selected=""){
-  const value=selected==="xvond_internal"?"xvond_internal":"";
-  return `<option value="" ${value===""?"selected":""}>Not enabled — transfer requests to human</option><option value="xvond_internal" ${value==="xvond_internal"?"selected":""}>Xvond Internal — execute and save automatically</option>`
-}
-
 function employeeForm(d={},edit=false){
-  return `<div class="form-group"><label>Employee Name</label><input id="simple-employee-name" value="${f(d.name||"WhatsApp AI Employee")}"></div>
-  <div class="form-group"><label>Business Name</label><input id="simple-business-name" value="${f(d.business_name)}"></div>
+  return `<p style="margin-top:0">Configure only the employee identity and conversation behavior here. Business facts belong in Knowledge; bookings, orders and leads belong in Actions.</p>
+  <div class="form-group"><label>Employee Name</label><input id="simple-employee-name" value="${f(d.name||"AI Employee")}"><small>Internal/display name for this employee. It does not replace the business identity.</small></div>
+  <div class="form-group"><label>Business Name</label><input id="simple-business-name" value="${f(d.business_name)}"><small>The verified business identity the employee represents.</small></div>
   <div class="form-group"><label>Business Type</label><select id="simple-business-type">${businessTypeOptions(d.business_type||"")}</select></div>
-  <div class="form-group"><label>Business Description</label><textarea id="simple-business-description">${f(d.business_description)}</textarea></div>
-  <div class="form-group"><label>Working Hours</label><input id="simple-working-hours" value="${f(d.working_hours)}"></div>
-  <div class="form-group"><label>Reply Language</label><select id="simple-language"><option value="auto">Automatic</option><option value="ar">Arabic</option><option value="en">English</option><option value="ar_en">Arabic & English</option></select></div>
-  <div class="form-group"><label>Business Information</label><textarea id="simple-business-info">${f(d.business_information)}</textarea><small>General facts only. Put services, prices, menu, policies and FAQs in Knowledge so they stay structured and maintainable.</small></div>
-  <div class="form-group"><label>Website</label><input id="simple-website" value="${f(d.website)}"></div>
-  <div class="form-group"><label>Booking</label><select id="simple-booking-system">${capabilityModeOptions(d.booking_system||"")}</select><small>Xvond Internal creates real booking records and checks availability. If disabled, booking requests are transferred to a human.</small></div>
-  <div class="form-group"><label>Orders</label><select id="simple-order-system">${capabilityModeOptions(d.order_system||"")}</select><small>Xvond Internal creates real order records. Requested items must exist in Knowledge.</small></div>
-  <div class="form-group"><label>Special Instructions</label><textarea id="simple-employee-instructions">${f(d.instructions)}</textarea></div>
-  <button class="modal-submit" onclick="${edit?`saveAIEmployeeSettings(${d.agent_id})`:`createSimpleAIEmployee()`}">${edit?"Save Changes":"Create WhatsApp AI"}</button>`
+  <div class="form-group"><label>Reply Language</label><select id="simple-language"><option value="auto">Automatic — match customer</option><option value="ar">Arabic</option><option value="en">English</option><option value="ar_en">Arabic & English</option></select></div>
+  <div class="form-group"><label>Conversation Style</label><select id="simple-conversation-style"><option value="professional_friendly">Professional & Friendly</option><option value="professional">Professional</option><option value="warm">Warm & Conversational</option><option value="concise">Concise</option></select><small>Controls tone only. It never changes business facts.</small></div>
+  <div class="form-group"><label>Greeting</label><textarea id="simple-greeting" placeholder="Leave empty for a natural automatic greeting">${f(d.greeting)}</textarea><small>Optional. If empty, Xvond greets naturally using the Business Name and customer language.</small></div>
+  <div class="form-group"><label>Special Instructions</label><textarea id="simple-employee-instructions" placeholder="Behavior rules that are unique to this employee">${f(d.instructions)}</textarea><small>Behavior only. Do not put prices, hours, services, menu, policies or other business facts here — add those once in Knowledge.</small></div>
+  <div style="padding:12px;border:1px solid #e5e7eb;border-radius:10px;margin:12px 0"><strong>Where do the other settings go?</strong><div class="meta" style="margin-top:6px">Knowledge: description, hours, website, services, prices, menu, products, branches, policies, FAQs and other business facts.</div><div class="meta">Actions: booking, orders/requests, leads, required customer details and execution mode.</div><div class="meta">Channels: Website Chat, WhatsApp and other delivery channels.</div></div>
+  <button class="modal-submit" onclick="${edit?`saveAIEmployeeSettings(${d.agent_id})`:`createSimpleAIEmployee()`}">${edit?"Save Profile":"Create AI Employee"}</button>`
 }
 
 function collectEmployee(){
-  const value=id=>document.getElementById(id).value.trim();
+  const value=id=>document.getElementById(id)?.value.trim()||"";
   return {
     channel:"whatsapp",
     name:value("simple-employee-name"),
     business_name:value("simple-business-name"),
     business_type:value("simple-business-type"),
-    business_description:value("simple-business-description")||null,
-    working_hours:value("simple-working-hours")||null,
-    reply_language:document.getElementById("simple-language").value,
-    business_information:value("simple-business-info")||null,
-    website:value("simple-website")||null,
-    booking_system:value("simple-booking-system")||null,
-    order_system:value("simple-order-system")||null,
+    reply_language:document.getElementById("simple-language")?.value||"auto",
+    conversation_style:document.getElementById("simple-conversation-style")?.value||"professional_friendly",
+    greeting:value("simple-greeting")||null,
     instructions:value("simple-employee-instructions")||null
   }
 }
