@@ -18,8 +18,11 @@ def test_whatsapp_runtime_defers_commit_until_delivery():
     assert "WhatsApp reply delivery failed" in source
 
 
-def test_groq_provider_does_not_use_unsupported_previous_response_id():
+def test_groq_provider_does_not_use_unsupported_previous_response_id(monkeypatch):
+    from backend.app.core.config.settings import settings
+    monkeypatch.setattr(settings, "GROQ_API_KEY", "test-key")
+    provider = GroqProvider()
     source = inspect.getsource(GroqProvider.generate)
     assert "previous_response_id" not in source
     assert "tool_call_id" in source
-    assert "chat/completions" in GroqProvider._request_url.__code__.co_consts
+    assert provider._request_url().endswith("/chat/completions")
