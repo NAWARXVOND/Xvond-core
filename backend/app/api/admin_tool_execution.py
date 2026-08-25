@@ -42,16 +42,16 @@ def execute_agent_tool(
             arguments=data.arguments,
             approval_granted=True,
         )
-        if not result.success:
+        if not result.get("success"):
             db.rollback()
             raise HTTPException(
                 status_code=400,
-                detail=result.error or "Tool execution failed",
+                detail=result.get("error") or "Tool execution failed",
             )
         db.commit()
         return {
             "success": True,
-            "data": result.data,
+            "data": result.get("data"),
         }
     except HTTPException:
         raise
