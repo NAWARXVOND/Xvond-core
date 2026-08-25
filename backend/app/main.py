@@ -29,6 +29,7 @@ from backend.app.api.admin_operations import router as admin_operations_router
 from backend.app.api.admin_production import router as admin_production_router
 from backend.app.api.admin_providers import router as admin_providers_router
 from backend.app.api.admin_setup import router as admin_setup_router
+from backend.app.api.admin_solutions import router as admin_solutions_router
 from backend.app.api.admin_tool_execution import router as admin_tool_execution_router
 from backend.app.api.admin_tools import router as admin_tools_router
 
@@ -226,6 +227,7 @@ app.include_router(admin_operations_router)
 app.include_router(admin_production_router)
 app.include_router(admin_providers_router)
 app.include_router(admin_setup_router)
+app.include_router(admin_solutions_router)
 app.include_router(admin_tool_execution_router)
 app.include_router(admin_tools_router)
 

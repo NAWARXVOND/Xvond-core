@@ -102,6 +102,13 @@
 
             <button
                 class="nav-item"
+                onclick="showSolutionsPage(this)"
+            >
+                Solutions
+            </button>
+
+            <button
+                class="nav-item"
                 onclick="showPage('templates', this)"
             >
                 Agent Factory
@@ -243,6 +250,36 @@
 
         </section>
 
+
+
+        <!-- ================================================= -->
+        <!-- COMPANY SOLUTIONS -->
+        <!-- ================================================= -->
+
+        <section id="page-solutions" class="page hidden">
+            <div class="section-header">
+                <div>
+                    <h2>Company Solutions</h2>
+                    <p>Assign Xvond services and provision AI employees by company.</p>
+                </div>
+                <button onclick="openCreateSolution()">+ Create Solution</button>
+            </div>
+
+            <div class="panel">
+                <div class="form-row">
+                    <select id="solutions-company" onchange="loadCompanySolutions()"></select>
+                </div>
+                <div id="company-solutions-list" class="agent-grid"></div>
+            </div>
+
+            <div class="section-header" style="margin-top:28px">
+                <div>
+                    <h2>Xvond Service Catalog</h2>
+                    <p>The eight business AI services delivered by Xvond.</p>
+                </div>
+            </div>
+            <div id="service-catalog-grid" class="agent-grid"></div>
+        </section>
 
         <!-- ================================================= -->
         <!-- AGENTS -->
@@ -424,6 +461,7 @@
 <script src="/static/admin/app.js"></script>
 
 <script src="/static/admin/services.js"></script>
+<script src="/static/admin/solutions.js"></script>
 <script src="/static/admin/operations.js"></script>
 <script src="/static/admin/business.js"></script>
 </body>
