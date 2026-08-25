@@ -192,6 +192,12 @@ async function createSolution() {
         const automation = document.createElement('script');
         automation.src = '/static/admin/company_workspace_automation.js';
         automation.dataset.xvondCompanyWorkspaceAutomation = '1';
+        automation.onload = () => {
+            const plans = document.createElement('script');
+            plans.src = '/static/admin/company_workspace_plans.js';
+            plans.dataset.xvondCompanyWorkspacePlans = '1';
+            document.body.appendChild(plans);
+        };
         document.body.appendChild(automation);
     };
     document.body.appendChild(workspace);
