@@ -1,4 +1,5 @@
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -12,6 +13,8 @@ class WhatsAppJobQueue:
     queue_key = "xvond:whatsapp:jobs"
     processing_key = "xvond:whatsapp:processing"
     dead_key = "xvond:whatsapp:dead"
+    retry_key = "xvond:whatsapp:retry"
+    retry_delays = (5, 30, 120, 600)
 
     def __init__(self, redis_url: str | None = None):
         self.redis_url = redis_url or settings.REDIS_URL
@@ -67,9 +70,37 @@ class WhatsAppJobQueue:
                 return recovered
             recovered += 1
 
+    def promote_due(self, now: float | None = None, limit: int = 100) -> int:
+        if self.client is None:
+            return 0
+
+        script = """
+        local items = redis.call(
+            'ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1],
+            'LIMIT', 0, ARGV[2]
+        )
+        for _, item in ipairs(items) do
+            redis.call('ZREM', KEYS[1], item)
+            redis.call('LPUSH', KEYS[2], item)
+        end
+        return #items
+        """
+        return int(
+            self.client.eval(
+                script,
+                2,
+                self.retry_key,
+                self.queue_key,
+                now if now is not None else time.time(),
+                max(1, min(int(limit), 1000)),
+            )
+        )
+
     def reserve(self, timeout: int = 5):
         if self.client is None:
             return None
+
+        self.promote_due()
 
         raw = self.client.brpoplpush(
             self.queue_key,
@@ -95,6 +126,7 @@ class WhatsAppJobQueue:
                 "configured": False,
                 "queued": 0,
                 "processing": 0,
+                "retrying": 0,
                 "dead": 0,
             }
 
@@ -105,6 +137,9 @@ class WhatsAppJobQueue:
             ),
             "processing": int(
                 self.client.llen(self.processing_key)
+            ),
+            "retrying": int(
+                self.client.zcard(self.retry_key)
             ),
             "dead": int(
                 self.client.llen(self.dead_key)
@@ -166,6 +201,7 @@ class WhatsAppJobQueue:
             job["attempts"] = 0
             job.pop("last_error", None)
             job.pop("last_failed_at", None)
+            job.pop("retry_after_seconds", None)
             self.client.lpush(
                 self.queue_key,
                 json.dumps(job),
@@ -202,9 +238,19 @@ class WhatsAppJobQueue:
             )
             return "dead"
 
-        self.client.lpush(
-            self.queue_key,
-            encoded,
+        delay_index = min(
+            job["attempts"] - 1,
+            len(self.retry_delays) - 1,
+        )
+        delay_seconds = self.retry_delays[delay_index]
+        job["retry_after_seconds"] = delay_seconds
+        encoded = json.dumps(job)
+
+        self.client.zadd(
+            self.retry_key,
+            {
+                encoded: time.time() + delay_seconds,
+            },
         )
         return "retry"
 
