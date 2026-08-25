@@ -13,12 +13,17 @@ const KNOWLEDGE_CATEGORIES=[
   ["custom","Custom Information"]
 ];
 function knowledgeCategoryOptions(selected="custom"){return KNOWLEDGE_CATEGORIES.map(([v,l])=>`<option value="${v}" ${v===selected?"selected":""}>${l}</option>`).join("")}
+function knowledgeActions(x,companyId,agentId){
+  if(x.protected)return `<span class="meta">Managed in Edit</span>`;
+  if(x.category==="pdf")return `<button class="table-button" onclick="toggleKnowledgeItem(${companyId},${agentId},${x.id})">${x.enabled?"Disable":"Enable"}</button><button class="table-button" onclick="deleteKnowledgeItem(${companyId},${agentId},${x.id})">Delete</button>`;
+  return `<button class="table-button" onclick="openKnowledgeEditor(${companyId},${agentId},${x.id})">Edit</button><button class="table-button" onclick="toggleKnowledgeItem(${companyId},${agentId},${x.id})">${x.enabled?"Disable":"Enable"}</button><button class="table-button" onclick="deleteKnowledgeItem(${companyId},${agentId},${x.id})">Delete</button>`
+}
 async function openKnowledgeManager(companyId,agentId){
   simpleCompanyId=+companyId;
   try{
     const r=await api(`/admin/ai-employees/companies/${companyId}/${agentId}/knowledge`);
     const items=r.items||[];
-    openModal("Knowledge",`<div class="section-header"><div><p>Everything this AI employee is allowed to know about the business.</p></div><div class="agent-actions"><button class="table-button" onclick="openKnowledgeEditor(${companyId},${agentId})">+ Add Information</button><button class="table-button" onclick="openPDFKnowledge(${companyId},${agentId})">+ Add PDF</button></div></div><div style="margin-top:14px">${items.length?items.map(x=>`<div class="agent-card" style="margin-bottom:10px"><div class="section-header"><div><strong>${f(x.title)}</strong><div class="meta">${f(x.category)} · ${x.characters} chars · ${x.enabled?"Active":"Disabled"}</div></div><div class="agent-actions">${x.protected?`<span class="meta">Managed in Edit</span>`:`<button class="table-button" onclick="openKnowledgeEditor(${companyId},${agentId},${x.id})">Edit</button><button class="table-button" onclick="toggleKnowledgeItem(${companyId},${agentId},${x.id})">${x.enabled?"Disable":"Enable"}</button><button class="table-button" onclick="deleteKnowledgeItem(${companyId},${agentId},${x.id})">Delete</button>`}</div></div><div class="meta" style="white-space:pre-wrap;margin-top:8px">${f(x.preview)}</div></div>`).join(""):`<p>No knowledge has been added yet.</p>`}</div>`)
+    openModal("Knowledge",`<div class="section-header"><div><p>Everything this AI employee is allowed to know about the business.</p></div><div class="agent-actions"><button class="table-button" onclick="openKnowledgeEditor(${companyId},${agentId})">+ Add Information</button><button class="table-button" onclick="openPDFKnowledge(${companyId},${agentId})">+ Add PDF</button></div></div><div style="margin-top:14px">${items.length?items.map(x=>`<div class="agent-card" style="margin-bottom:10px"><div class="section-header"><div><strong>${f(x.title)}</strong><div class="meta">${f(x.category)} · ${x.characters} chars · ${x.enabled?"Active":"Disabled"}</div></div><div class="agent-actions">${knowledgeActions(x,companyId,agentId)}</div></div><div class="meta" style="white-space:pre-wrap;margin-top:8px">${f(x.preview)}</div></div>`).join(""):`<p>No knowledge has been added yet.</p>`}</div>`)
   }catch(e){alert(e.message)}
 }
 async function openKnowledgeEditor(companyId,agentId,documentId=null){
