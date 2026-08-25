@@ -6,6 +6,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-ara \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system xvond \
     && useradd --system --gid xvond --home-dir /app xvond
 
