@@ -3,7 +3,7 @@ loadCompanyControlCenter=async function(companyId,tab=null){
   xvondWorkspace.companyId=Number(companyId);
   if(tab)xvondWorkspace.tab=tab;
 
-  const [view,channelResult,moduleResult,catalog,integrations,requests,conversations,usage,profile,setup,handoffs,audit,billing,plans,users]=await Promise.all([
+  const [view,channelResult,moduleResult,catalog,integrations,requests,conversations,usage,profile,setup,handoffs,audit,serviceBilling,servicePlans,users]=await Promise.all([
     api(`/admin/company-view/${companyId}`),
     api(`/admin/channels/companies/${companyId}`),
     api(`/admin/companies/${companyId}/modules`),
@@ -16,8 +16,8 @@ loadCompanyControlCenter=async function(companyId,tab=null){
     api('/admin/setup/catalog'),
     wsOptional(`/admin/handoff/companies/${companyId}/sessions`,{sessions:[]}),
     wsOptional(`/admin/audit/?company_id=${companyId}&limit=100`,{logs:[],total:0}),
-    wsOptional(`/admin/billing/companies/${companyId}/subscription`,{subscription:null}),
-    wsOptional('/admin/billing/plans',{plans:[]}),
+    wsOptional(`/admin/service-billing/companies/${companyId}`,{services:[]}),
+    wsOptional('/admin/service-billing/plans',{plans:[]}),
     wsOptional(`/admin/company-users/companies/${companyId}`,{users:[]})
   ]);
 
@@ -36,6 +36,8 @@ loadCompanyControlCenter=async function(companyId,tab=null){
     };
   }));
 
+  const billingServices=serviceBilling.services||[];
+  const aiBilling=billingServices.find(x=>x.service_code==='ai_agents')||null;
   xvondWorkspace.data={
     view,
     channels:channelResult.channels||[],
@@ -49,8 +51,9 @@ loadCompanyControlCenter=async function(companyId,tab=null){
     setup,
     handoffs:handoffs.sessions||[],
     audit:audit.logs||[],
-    billing:billing.subscription||null,
-    plans:plans.plans||[],
+    billing:aiBilling,
+    billingServices,
+    plans:servicePlans.plans||[],
     users:(users.users&&users.users.length?users.users:view.users)||[],
     agentMeta
   };
