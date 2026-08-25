@@ -59,13 +59,13 @@ GitHub CI also builds a completely fresh PostgreSQL database with Alembic before
 - Configure SMTP before enabling password reset.
 - Put the API behind HTTPS and a trusted reverse proxy.
 - Run `alembic upgrade head` before starting the new release.
-- Use a shared Redis-backed rate limiter before running multiple API workers.
+- Use Redis-backed runtime services before running multiple API workers.
 - Keep `.env`, database backups, logs, and provider credentials out of Git.
+- Keep an encrypted off-server database backup in storage approved for the deployment's data-residency requirements.
 
 ## Deployment flow
 
 `VS Code -> GitHub -> server`. Commit and push reviewed changes, pull the tagged release on the server, apply migrations, and restart the service.
-
 
 ## First customer acceptance
 
@@ -81,7 +81,7 @@ Run the non-billable production gate for the customer:
 python -m scripts.production_acceptance --company-id COMPANY_ID
 ```
 
-Then perform one explicit billable live-AI check:
+Then perform one explicit billable provider health check using the employee's resolved production route. This call does not create a customer conversation and does not run customer tools:
 
 ```bash
 python -m scripts.production_acceptance \
@@ -92,3 +92,25 @@ python -m scripts.production_acceptance \
 
 Do not activate customer traffic unless the report returns
 `"overall_ok": true`.
+
+## Encrypted off-server PostgreSQL backups
+
+Local PostgreSQL dumps are created first in the `xvond_backups` volume. The optional `offsite-backup` profile then sends that backup set to a Restic repository. Restic encrypts repository contents client-side using `RESTIC_PASSWORD`.
+
+Configure `RESTIC_REPOSITORY` and `RESTIC_PASSWORD` in `.env`. For S3-compatible repositories, also configure the required AWS-style credentials and region. Choose a repository location that satisfies the deployment's data-residency requirements.
+
+Start production with encrypted offsite backup enabled:
+
+```bash
+docker compose -f docker-compose.production.yml \
+  --profile offsite-backup up -d
+```
+
+Verify that the remote repository can actually be restored and that the restored PostgreSQL dump checksum is valid:
+
+```bash
+docker compose -f docker-compose.production.yml \
+  --profile offsite-verify run --rm offsite-restore-verify
+```
+
+A successful upload is not considered a verified backup until the restore verification command succeeds.
