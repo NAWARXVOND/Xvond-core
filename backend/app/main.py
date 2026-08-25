@@ -32,6 +32,9 @@ from backend.app.api.admin_setup import router as admin_setup_router
 from backend.app.api.admin_solutions import router as admin_solutions_router
 from backend.app.api.admin_tool_execution import router as admin_tool_execution_router
 from backend.app.api.admin_tools import router as admin_tools_router
+from backend.app.api.admin_automation import router as admin_automation_router
+from backend.app.api.admin_analytics_builder import router as admin_analytics_builder_router
+from backend.app.api.admin_service_billing import router as admin_service_billing_router
 
 from backend.app.api.agent_factory import router as agent_factory_router
 from backend.app.api.ai_agents import router as ai_agents_router
@@ -76,20 +79,9 @@ FRONTEND_DIR = PROJECT_ROOT / "frontend"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-
-    # Discover modules at startup.
-    #
-    # Existing Xvond behavior is intentionally preserved:
-    # discovered modules are installed and enabled.
-    #
-    # module_loader already prevents test_module from being
-    # discovered in production.
     for module in discover_modules():
         module_manager.install(module)
-        module_manager.enable(
-            module.name
-        )
-
+        module_manager.enable(module.name)
     yield
 
 
@@ -97,10 +89,7 @@ async def lifespan(app: FastAPI):
 # FastAPI
 # ============================================================
 
-configure_logging(
-    level=settings.LOG_LEVEL,
-    json_logs=settings.LOG_JSON,
-)
+configure_logging(level=settings.LOG_LEVEL, json_logs=settings.LOG_JSON)
 logger = logging.getLogger("xvond.http")
 
 app = FastAPI(
@@ -112,9 +101,7 @@ app = FastAPI(
 
 @app.middleware("http")
 async def request_observability(request: Request, call_next):
-    request_id = safe_request_id(
-        request.headers.get("x-request-id")
-    )
+    request_id = safe_request_id(request.headers.get("x-request-id"))
     token = set_request_id(request_id)
     started = perf_counter()
 
@@ -133,10 +120,7 @@ async def request_observability(request: Request, call_next):
     finally:
         reset_request_id(token)
 
-    duration_ms = round(
-        (perf_counter() - started) * 1000,
-        2,
-    )
+    duration_ms = round((perf_counter() - started) * 1000, 2)
     response.headers["X-Request-ID"] = request_id
     logger.info(
         "Request completed",
@@ -175,9 +159,7 @@ def request_client_ip(request: Request) -> str:
 
 @app.middleware("http")
 async def protect_public_endpoints(request: Request, call_next):
-    rule = _RATE_LIMITS.get(
-        (request.method.upper(), request.url.path)
-    )
+    rule = _RATE_LIMITS.get((request.method.upper(), request.url.path))
 
     if rule is None and (
         request.method.upper() == "POST"
@@ -230,6 +212,9 @@ app.include_router(admin_setup_router)
 app.include_router(admin_solutions_router)
 app.include_router(admin_tool_execution_router)
 app.include_router(admin_tools_router)
+app.include_router(admin_automation_router)
+app.include_router(admin_analytics_builder_router)
+app.include_router(admin_service_billing_router)
 
 
 # ============================================================
@@ -262,9 +247,7 @@ app.include_router(usage_router)
 # Routers - Public Webhooks
 # ============================================================
 
-app.include_router(
-    whatsapp_webhook_router
-)
+app.include_router(whatsapp_webhook_router)
 
 
 # ============================================================
@@ -273,11 +256,7 @@ app.include_router(
 
 app.mount(
     "/static",
-    StaticFiles(
-        directory=str(
-            FRONTEND_DIR
-        )
-    ),
+    StaticFiles(directory=str(FRONTEND_DIR)),
     name="static",
 )
 
@@ -288,7 +267,6 @@ app.mount(
 
 @app.get("/")
 def root():
-
     return {
         "name": settings.APP_NAME,
         "version": settings.APP_VERSION,
@@ -330,10 +308,7 @@ def health():
     }
 
     if not ready:
-        return JSONResponse(
-            status_code=503,
-            content=payload,
-        )
+        return JSONResponse(status_code=503, content=payload)
 
     return payload
 
@@ -344,15 +319,9 @@ def health():
 
 @app.get("/admin-ui")
 def admin_ui():
-
-    return RedirectResponse(
-        url="/static/admin/index.html"
-    )
+    return RedirectResponse(url="/static/admin/index.html")
 
 
 @app.get("/customer-ui")
 def customer_ui():
-
-    return RedirectResponse(
-        url="/static/customer/index.html"
-    )
+    return RedirectResponse(url="/static/customer/index.html")
