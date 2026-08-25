@@ -30,7 +30,25 @@ function collectEmployee(){
 }
 
 async function openEditAIEmployee(c,a){try{simpleCompanyId=Number(c);const d=await api(`/admin/ai-employee-profile/companies/${c}/${a}`);d.agent_id=a;openModal("AI Employee Profile",employeeForm(d,true));document.getElementById("simple-language").value=d.reply_language||"auto";document.getElementById("simple-conversation-style").value=d.conversation_style||"professional_friendly"}catch(e){alert(e.message)}}
-
 async function saveAIEmployeeSettings(a){try{const payload=collectEmployee();await api(`/admin/ai-employee-profile/companies/${simpleCompanyId}/${a}`,{method:"PUT",body:JSON.stringify(payload)});closeModal();await openSimpleCompany(simpleCompanyId)}catch(e){alert(e.message)}}
-
 async function createSimpleAIEmployee(){try{const payload=collectEmployee();await api(`/admin/ai-employee-profile/companies/${simpleCompanyId}`,{method:"POST",body:JSON.stringify(payload)});closeModal();await openSimpleCompany(simpleCompanyId)}catch(e){alert(e.message)}}
+
+async function createWhatsAppChannelForEmployee(companyId,agentId){try{const created=await api(`/admin/channels/agents/${agentId}`,{method:'POST',body:JSON.stringify({channel_type:'whatsapp',config:{}})});await openSimpleCompany(companyId);openWhatsAppSetup(agentId,created.id)}catch(e){alert(e.message)}}
+
+const xvondChannelIndependentCompanyOpen=openSimpleCompany;
+openSimpleCompany=async function(companyId){
+  const result=await xvondChannelIndependentCompanyOpen(companyId);
+  try{
+    const [view,channelResult]=await Promise.all([api(`/admin/company-view/${companyId}`),api(`/admin/channels/companies/${companyId}`)]);
+    const channels=channelResult.channels||[],cards=[...document.querySelectorAll('#company-detail .agent-card')];
+    (view.agents||[]).forEach((agent,index)=>{
+      if(channels.some(ch=>+ch.agent_id===+agent.id&&ch.channel_type==='whatsapp'))return;
+      const card=cards[index];if(!card)return;
+      const channelHeading=[...card.querySelectorAll('strong')].find(x=>x.textContent.trim()==='Channels');
+      const area=channelHeading?.parentElement;if(!area||area.querySelector('.xvond-add-whatsapp'))return;
+      const row=document.createElement('div');row.className='agent-actions xvond-add-whatsapp';row.innerHTML=`<button class="table-button">Connect WhatsApp</button>`;row.querySelector('button').onclick=()=>createWhatsAppChannelForEmployee(companyId,agent.id);area.appendChild(row);
+    });
+  }catch(_e){}
+  return result;
+};
+window.openCompany=openSimpleCompany;
