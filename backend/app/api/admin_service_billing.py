@@ -1,22 +1,23 @@
-from datetime import datetime
-from decimal import Decimal
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from backend.app.core.company_catalog import normalize_currency
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.billing.cycle import _add_month
-from backend.app.modules.billing.models import Plan, Subscription
 from backend.app.modules.billing.service_limits import service_limits
 from backend.app.modules.billing.service_models import ServicePlan, ServiceSubscription
 from backend.app.modules.solutions.catalog import PACKAGE_TIERS, SERVICE_CATALOG
 
-router = APIRouter(prefix="/admin/service-billing", tags=["Xvond Admin - Service Billing"])
-
-RUNTIME_BRIDGE_PLAN = "Xvond Service Billing Runtime"
+router = APIRouter(
+    prefix="/admin/service-billing",
+    tags=["Xvond Admin - Service Billing"],
+)
 
 
 class ServicePlanInput(BaseModel):
@@ -32,6 +33,29 @@ class ServiceSubscriptionInput(BaseModel):
     plan_id: int
 
 
+def _utcnow_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _validated_limits(value: dict | None) -> dict:
+    result = {}
+    for key, raw in (value or {}).items():
+        metric = str(key or "").strip().lower()
+        if not metric or len(metric) > 100:
+            raise HTTPException(400, "Service limit metric is invalid")
+        try:
+            amount = Decimal(str(raw))
+        except (InvalidOperation, ValueError, TypeError) as exc:
+            raise HTTPException(
+                400,
+                f"Service limit '{metric}' must be numeric",
+            ) from exc
+        if amount < 0:
+            raise HTTPException(400, "Service limits cannot be negative")
+        result[metric] = str(amount.normalize()) if amount else 0
+    return result
+
+
 def plan_data(item):
     return {
         "id": item.id,
@@ -45,67 +69,52 @@ def plan_data(item):
     }
 
 
-def ensure_runtime_bridge(db, company_id: int):
-    """Keep legacy runtime guards compatible while service billing replaces them.
-
-    Runtime access still contains the original umbrella-subscription check. This
-    internal zero-price unlimited plan is never sold to customers; per-service
-    ServiceSubscription remains the real entitlement and limit source.
-    """
-    bridge_plan = db.query(Plan).filter(Plan.name == RUNTIME_BRIDGE_PLAN).first()
-    if bridge_plan is None:
-        bridge_plan = Plan(
-            name=RUNTIME_BRIDGE_PLAN,
-            price=Decimal("0"),
-            agent_limit=0,
-            token_limit=0,
-            channel_limit=0,
-            enabled=True,
-        )
-        db.add(bridge_plan)
-        db.flush()
-
-    legacy = db.query(Subscription).filter(
-        Subscription.company_id == company_id
-    ).first()
-    if legacy is None:
-        legacy = Subscription(
-            company_id=company_id,
-            plan_id=bridge_plan.id,
-            status="active",
-            started_at=datetime.utcnow(),
-        )
-        db.add(legacy)
-    elif legacy.status != "active":
-        legacy.status = "active"
-        legacy.started_at = datetime.utcnow()
-    return legacy
+def _effective_status(item: ServiceSubscription) -> str:
+    if item.status == "active" and item.current_period_end <= _utcnow_naive():
+        return "expired"
+    return item.status
 
 
 @router.get("/plans")
 def list_plans(current_admin: User = Depends(require_xvond_admin)):
     db = SessionLocal()
     try:
-        items = db.query(ServicePlan).order_by(ServicePlan.service_code, ServicePlan.monthly_price).all()
+        items = (
+            db.query(ServicePlan)
+            .order_by(ServicePlan.service_code, ServicePlan.monthly_price)
+            .all()
+        )
         return {"plans": [plan_data(item) for item in items]}
     finally:
         db.close()
 
 
 @router.post("/plans")
-def create_plan(data: ServicePlanInput, current_admin: User = Depends(require_xvond_admin)):
+def create_plan(
+    data: ServicePlanInput,
+    current_admin: User = Depends(require_xvond_admin),
+):
     service_code = data.service_code.strip().lower()
     tier = data.tier.strip().lower()
     if service_code not in SERVICE_CATALOG:
         raise HTTPException(status_code=400, detail="Unsupported service")
     if tier not in PACKAGE_TIERS:
         raise HTTPException(status_code=400, detail="Unsupported package tier")
+    try:
+        currency = normalize_currency(data.currency) or "OMR"
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
     db = SessionLocal()
     try:
-        duplicate = db.query(ServicePlan).filter(
-            ServicePlan.service_code == service_code,
-            ServicePlan.tier == tier,
-        ).first()
+        duplicate = (
+            db.query(ServicePlan)
+            .filter(
+                ServicePlan.service_code == service_code,
+                ServicePlan.tier == tier,
+            )
+            .first()
+        )
         if duplicate:
             raise HTTPException(status_code=400, detail="Service plan already exists")
         item = ServicePlan(
@@ -113,8 +122,8 @@ def create_plan(data: ServicePlanInput, current_admin: User = Depends(require_xv
             tier=tier,
             name=data.name.strip() or PACKAGE_TIERS[tier],
             monthly_price=data.monthly_price,
-            currency=(data.currency or "OMR").strip().upper(),
-            limits=data.limits or {},
+            currency=currency,
+            limits=_validated_limits(data.limits),
             enabled=True,
         )
         db.add(item)
@@ -139,21 +148,27 @@ def subscribe_service(
     try:
         if db.get(Company, company_id) is None:
             raise HTTPException(status_code=404, detail="Company not found")
-        plan = db.query(ServicePlan).filter(
-            ServicePlan.id == data.plan_id,
-            ServicePlan.service_code == service_code,
-            ServicePlan.enabled.is_(True),
-        ).first()
+        plan = (
+            db.query(ServicePlan)
+            .filter(
+                ServicePlan.id == data.plan_id,
+                ServicePlan.service_code == service_code,
+                ServicePlan.enabled.is_(True),
+            )
+            .first()
+        )
         if plan is None:
             raise HTTPException(status_code=404, detail="Service plan not found")
 
-        ensure_runtime_bridge(db, company_id)
-
-        now = datetime.utcnow()
-        item = db.query(ServiceSubscription).filter(
-            ServiceSubscription.company_id == company_id,
-            ServiceSubscription.service_code == service_code,
-        ).first()
+        now = _utcnow_naive()
+        item = (
+            db.query(ServiceSubscription)
+            .filter(
+                ServiceSubscription.company_id == company_id,
+                ServiceSubscription.service_code == service_code,
+            )
+            .first()
+        )
         if item is None:
             item = ServiceSubscription(
                 company_id=company_id,
@@ -188,8 +203,10 @@ def company_service_data(db, item, plan=None):
         "id": item.id,
         "company_id": item.company_id,
         "service_code": item.service_code,
-        "service_name": SERVICE_CATALOG.get(item.service_code, {}).get("name", item.service_code),
-        "status": item.status,
+        "service_name": SERVICE_CATALOG.get(item.service_code, {}).get(
+            "name", item.service_code
+        ),
+        "status": _effective_status(item),
         "plan": plan_data(plan),
         "current_period_start": item.current_period_start,
         "current_period_end": item.current_period_end,
@@ -198,27 +215,44 @@ def company_service_data(db, item, plan=None):
 
 
 @router.get("/companies/{company_id}")
-def company_services(company_id: int, current_admin: User = Depends(require_xvond_admin)):
+def company_services(
+    company_id: int,
+    current_admin: User = Depends(require_xvond_admin),
+):
     db = SessionLocal()
     try:
         if db.get(Company, company_id) is None:
             raise HTTPException(status_code=404, detail="Company not found")
-        items = db.query(ServiceSubscription).filter(
-            ServiceSubscription.company_id == company_id
-        ).order_by(ServiceSubscription.service_code).all()
-        return {"company_id": company_id, "services": [company_service_data(db, item) for item in items]}
+        items = (
+            db.query(ServiceSubscription)
+            .filter(ServiceSubscription.company_id == company_id)
+            .order_by(ServiceSubscription.service_code)
+            .all()
+        )
+        return {
+            "company_id": company_id,
+            "services": [company_service_data(db, item) for item in items],
+        }
     finally:
         db.close()
 
 
 @router.patch("/companies/{company_id}/services/{service_code}/pause")
-def pause_service(company_id: int, service_code: str, current_admin: User = Depends(require_xvond_admin)):
+def pause_service(
+    company_id: int,
+    service_code: str,
+    current_admin: User = Depends(require_xvond_admin),
+):
     db = SessionLocal()
     try:
-        item = db.query(ServiceSubscription).filter(
-            ServiceSubscription.company_id == company_id,
-            ServiceSubscription.service_code == service_code.strip().lower(),
-        ).first()
+        item = (
+            db.query(ServiceSubscription)
+            .filter(
+                ServiceSubscription.company_id == company_id,
+                ServiceSubscription.service_code == service_code.strip().lower(),
+            )
+            .first()
+        )
         if item is None:
             raise HTTPException(status_code=404, detail="Service subscription not found")
         item.status = "paused"
