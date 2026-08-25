@@ -3,6 +3,7 @@ from backend.app.core.database.connection import SessionLocal
 from backend.app.modules.providers.models import AIProviderRecord
 
 PROVIDERS = [
+    ("groq", "Groq", 5),
     ("openai", "OpenAI", 10),
     ("groq", "Groq", 15),
     ("anthropic", "Anthropic", 20),

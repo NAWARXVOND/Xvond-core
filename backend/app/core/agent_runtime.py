@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from backend.app.core.ai.cost_engine import ai_cost_engine
 from backend.app.core.ai.engine import ai_engine
+from backend.app.core.ai.provider_policy import runtime_selections
 from backend.app.core.ai.base import ToolOutput
 from backend.app.core.config.settings import settings
 from backend.app.core.module_access import company_module_enabled
@@ -246,6 +247,15 @@ class AgentRuntime:
             agent_id,
         )
 
+        selections = runtime_selections(
+            db,
+            company_id,
+            agent.provider,
+            agent.model,
+        )
+        active_provider = selections[0].provider
+        active_model = selections[0].model
+
         conversation = self.get_or_create_conversation(
             db=db,
             company_id=company_id,
@@ -347,15 +357,38 @@ class AgentRuntime:
         ):
 
             try:
-                result = ai_engine.generate(
-                    provider_name=agent.provider,
-                    system_prompt=agent.system_prompt,
-                    user_message=runtime_message,
-                    model=agent.model,
-                    tools=tool_definitions,
-                    tool_outputs=tool_outputs,
-                    continuation=continuation,
-                )
+                try:
+                    result = ai_engine.generate(
+                        provider_name=active_provider,
+                        system_prompt=agent.system_prompt,
+                        user_message=runtime_message,
+                        model=active_model,
+                        tools=tool_definitions,
+                        tool_outputs=tool_outputs,
+                        continuation=continuation,
+                    )
+                except Exception as primary_exc:
+                    if _round != 0 or len(selections) < 2:
+                        raise
+
+                    fallback = selections[1]
+                    active_provider = fallback.provider
+                    active_model = fallback.model
+
+                    try:
+                        result = ai_engine.generate(
+                            provider_name=active_provider,
+                            system_prompt=agent.system_prompt,
+                            user_message=runtime_message,
+                            model=active_model,
+                            tools=tool_definitions,
+                            tool_outputs=None,
+                            continuation=None,
+                        )
+                    except Exception as fallback_exc:
+                        raise RuntimeError(
+                            "Primary and fallback AI providers failed"
+                        ) from fallback_exc
             except Exception as exc:
                 latency_ms = int(
                     (perf_counter() - started_at) * 1000
@@ -367,8 +400,8 @@ class AgentRuntime:
                     AIUsage(
                         company_id=company_id,
                         agent_id=agent_id,
-                        provider=agent.provider,
-                        model=agent.model,
+                        provider=active_provider,
+                        model=active_model,
                         input_tokens=total_input_tokens,
                         output_tokens=total_output_tokens,
                         total_tokens=total_tokens,
@@ -385,8 +418,8 @@ class AgentRuntime:
                     resource_type="ai_agent",
                     resource_id=agent_id,
                     details={
-                        "provider": agent.provider,
-                        "model": agent.model,
+                        "provider": active_provider,
+                        "model": active_model,
                         "error": error_message,
                         "latency_ms": latency_ms,
                     },
@@ -413,8 +446,8 @@ class AgentRuntime:
             calculated_cost = (
                 ai_cost_engine.calculate(
                     db=db,
-                    provider_name=agent.provider,
-                    model_name=agent.model,
+                    provider_name=active_provider,
+                    model_name=active_model,
                     input_tokens=
                         result.input_tokens,
                     output_tokens=
@@ -547,8 +580,8 @@ class AgentRuntime:
         usage = AIUsage(
             company_id=company_id,
             agent_id=agent.id,
-            provider=agent.provider,
-            model=agent.model,
+            provider=active_provider,
+            model=active_model,
             input_tokens=
                 total_input_tokens,
             output_tokens=

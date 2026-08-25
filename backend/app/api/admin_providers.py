@@ -8,6 +8,7 @@ from fastapi import (
 from pydantic import BaseModel
 
 from backend.app.core.ai.engine import ai_engine
+from backend.app.core.ai.provider_policy import require_provider_model
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 
@@ -271,6 +272,41 @@ def update_company_ai_profile(
                 status_code=404,
                 detail="Company not found",
             )
+
+        configured_pairs = [
+            (
+                data.default_provider,
+                data.default_model,
+                "default",
+            ),
+            (
+                data.fallback_provider,
+                data.fallback_model,
+                "fallback",
+            ),
+        ]
+
+        for provider, model, label in configured_pairs:
+            if bool(provider) != bool(model):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Both {label} provider and model "
+                        "must be configured together"
+                    ),
+                )
+            if provider and model:
+                try:
+                    require_provider_model(
+                        db,
+                        provider,
+                        model,
+                    )
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid {label} provider/model",
+                    ) from exc
 
         profile = (
             db.query(CompanyAIProfile)

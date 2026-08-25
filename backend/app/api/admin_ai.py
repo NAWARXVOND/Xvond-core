@@ -6,6 +6,7 @@
 from pydantic import BaseModel
 
 from backend.app.core.ai.engine import ai_engine
+from backend.app.core.ai.provider_policy import require_provider_model
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 
@@ -121,14 +122,17 @@ def create_agent(
             company_id,
         )
 
-        if (
-            data.provider
-            not in ai_engine.list_providers()
-        ):
+        try:
+            require_provider_model(
+                db,
+                data.provider,
+                data.model,
+            )
+        except ValueError as exc:
             raise HTTPException(
                 status_code=400,
-                detail="AI provider is not configured",
-            )
+                detail=str(exc),
+            ) from exc
 
         agent = AIAgent(
             company_id=company_id,
@@ -236,19 +240,35 @@ def update_agent(
                 detail="AI Agent not found",
             )
 
-        if data.provider is not None:
-            if (
-                data.provider
-                not in ai_engine.list_providers()
-            ):
+        selected_provider = (
+            data.provider
+            if data.provider is not None
+            else agent.provider
+        )
+        selected_model = (
+            data.model
+            if data.model is not None
+            else agent.model
+        )
+
+        if (
+            data.provider is not None
+            or data.model is not None
+        ):
+            try:
+                require_provider_model(
+                    db,
+                    selected_provider,
+                    selected_model,
+                )
+            except ValueError as exc:
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        "AI provider is not configured"
-                    ),
-                )
+                    detail=str(exc),
+                ) from exc
 
-            agent.provider = data.provider
+            agent.provider = selected_provider
+            agent.model = selected_model
 
         if data.name is not None:
             agent.name = data.name
@@ -260,9 +280,6 @@ def update_agent(
             agent.system_prompt = (
                 data.system_prompt
             )
-
-        if data.model is not None:
-            agent.model = data.model
 
         db.commit()
         db.refresh(agent)

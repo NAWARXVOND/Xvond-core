@@ -1,6 +1,6 @@
 
-from backend.app.core.ai.engine import (
-    ai_engine,
+from backend.app.core.ai.provider_policy import (
+    require_provider_model,
 )
 
 from backend.app.modules.ai_agent.factory_models import (
@@ -29,6 +29,7 @@ class AgentFactory:
 
     def validate_agent_identity(
         self,
+        db,
         name: str,
         system_prompt: str,
         provider: str,
@@ -61,14 +62,11 @@ class AgentFactory:
                 "AI model is required"
             )
 
-        if (
-            provider
-            not in ai_engine.list_providers()
-        ):
-            raise ValueError(
-                f"AI provider '{provider}' "
-                "is not configured"
-            )
+        require_provider_model(
+            db,
+            provider,
+            model,
+        )
 
     def create_custom_agent(
         self,
@@ -91,6 +89,7 @@ class AgentFactory:
         )
 
         self.validate_agent_identity(
+            db,
             name,
             system_prompt,
             provider,
@@ -174,6 +173,7 @@ class AgentFactory:
         )
 
         self.validate_agent_identity(
+            db,
             selected_name,
             selected_prompt,
             selected_provider,
