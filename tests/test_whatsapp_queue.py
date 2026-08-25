@@ -8,6 +8,7 @@ from backend.app.modules.channels.whatsapp_queue import (
 class FakeRedis:
     def __init__(self):
         self.data = {}
+        self.sorted = {}
 
     def lpush(self, key, value):
         self.data.setdefault(key, []).insert(0, value)
@@ -36,6 +37,26 @@ class FakeRedis:
 
     def rpoplpush(self, source, destination):
         return self.brpoplpush(source, destination)
+
+    def zadd(self, key, mapping):
+        self.sorted.setdefault(key, {}).update(mapping)
+
+    def zcard(self, key):
+        return len(self.sorted.setdefault(key, {}))
+
+    def eval(self, _script, _numkeys, retry_key, queue_key, now, limit):
+        due = [
+            (raw, score)
+            for raw, score
+            in self.sorted.setdefault(retry_key, {}).items()
+            if score <= float(now)
+        ]
+        due.sort(key=lambda item: item[1])
+        selected = due[:int(limit)]
+        for raw, _score in selected:
+            del self.sorted[retry_key][raw]
+            self.lpush(queue_key, raw)
+        return len(selected)
 
     def lrem(self, key, count, value):
         items = self.data.setdefault(key, [])
@@ -83,7 +104,10 @@ def test_failed_job_retries_then_moves_to_dead_letter():
     )
 
     assert status == "retry"
+    assert queue.client.zcard(queue.retry_key) == 1
+    assert queue.reserve(timeout=1) is None
 
+    assert queue.promote_due(now=10**12) == 1
     raw, job = queue.reserve(timeout=1)
     status = queue.retry_or_dead_letter(
         raw=raw,
@@ -129,6 +153,7 @@ def test_stats_report_queue_depths():
         "configured": True,
         "queued": 1,
         "processing": 0,
+        "retrying": 0,
         "dead": 1,
     }
 
@@ -176,3 +201,31 @@ def test_admin_retry_resets_attempts_and_requeues():
     assert queued["attempts"] == 0
     assert "last_error" not in queued
     assert queue.client.data[queue.dead_key] == []
+
+
+def test_retry_delay_increases_with_attempts():
+    queue = make_queue()
+    queue.enqueue(body="{}", signature="sha256=test")
+    raw, job = queue.reserve(timeout=1)
+
+    queue.retry_or_dead_letter(
+        raw=raw,
+        job=job,
+        error=RuntimeError("temporary"),
+    )
+    scheduled = next(iter(queue.client.sorted[queue.retry_key]))
+    first = json.loads(scheduled)
+    assert first["attempts"] == 1
+    assert first["retry_after_seconds"] == 5
+
+    queue.promote_due(now=10**12)
+    raw, job = queue.reserve(timeout=1)
+    queue.retry_or_dead_letter(
+        raw=raw,
+        job=job,
+        error=RuntimeError("temporary again"),
+    )
+    scheduled = next(iter(queue.client.sorted[queue.retry_key]))
+    second = json.loads(scheduled)
+    assert second["attempts"] == 2
+    assert second["retry_after_seconds"] == 30
