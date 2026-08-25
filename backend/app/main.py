@@ -35,6 +35,7 @@ from backend.app.api.admin_tools import router as admin_tools_router
 from backend.app.api.admin_automation import router as admin_automation_router
 from backend.app.api.admin_analytics_builder import router as admin_analytics_builder_router
 from backend.app.api.admin_service_billing import router as admin_service_billing_router
+from backend.app.api.admin_service_plan_management import router as admin_service_plan_management_router
 
 from backend.app.api.agent_factory import router as agent_factory_router
 from backend.app.api.ai_agents import router as ai_agents_router
@@ -215,6 +216,7 @@ app.include_router(admin_tools_router)
 app.include_router(admin_automation_router)
 app.include_router(admin_analytics_builder_router)
 app.include_router(admin_service_billing_router)
+app.include_router(admin_service_plan_management_router)
 
 
 # ============================================================
