@@ -13,7 +13,7 @@ from backend.app.core.database.connection import (
     SessionLocal,
 )
 from backend.app.core.security import (
-    decode_access_token,
+    decode_access_token_claims,
 )
 from backend.app.models.company import Company
 from backend.app.models.user import User
@@ -58,9 +58,10 @@ def get_current_user(
 
     try:
 
-        user_id = decode_access_token(
+        claims = decode_access_token_claims(
             credentials.credentials
         )
+        user_id = int(claims["sub"])
 
     except Exception:
 
@@ -81,6 +82,18 @@ def get_current_user(
         raise HTTPException(
             status_code=401,
             detail="User not found",
+        )
+
+    if not user.active:
+        raise HTTPException(
+            status_code=401,
+            detail="User account is inactive",
+        )
+
+    if int(claims.get("ver", -1)) != int(user.token_version):
+        raise HTTPException(
+            status_code=401,
+            detail="Session has been revoked",
         )
 
     if (
