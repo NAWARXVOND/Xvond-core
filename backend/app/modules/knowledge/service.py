@@ -1,517 +1,84 @@
-
 import re
 from dataclasses import dataclass
 
-from backend.app.modules.knowledge.models import (
-    AgentKnowledge,
-    KnowledgeChunk,
-    KnowledgeDocument,
-)
-
+from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeChunk, KnowledgeDocument
 
 @dataclass
 class KnowledgeMatch:
-    document_id: int
-    title: str
-    chunk_index: int
-    content: str
-    score: float
-
+    document_id:int; title:str; chunk_index:int; content:str; score:float
 
 class KnowledgeService:
-
-    DEFAULT_CHUNK_SIZE = 1400
-    DEFAULT_OVERLAP = 180
-    DEFAULT_MAX_CHUNKS = 6
-    DEFAULT_MAX_CONTEXT_CHARS = 7000
-
-    def normalize(
-        self,
-        text: str,
-    ) -> str:
-
-        text = (
-            text
-            .lower()
-            .replace("\r", " ")
-            .replace("\n", " ")
-        )
-
-        text = re.sub(
-            r"[^\w\u0600-\u06FF]+",
-            " ",
-            text,
-        )
-
-        return " ".join(
-            text.split()
-        )
-
-    def tokenize(
-        self,
-        text: str,
-    ) -> set[str]:
-
-        normalized = self.normalize(
-            text
-        )
-
-        return {
-            token
-            for token in normalized.split()
-            if len(token) >= 2
-        }
-
-    def split_content(
-        self,
-        content: str,
-        chunk_size: int | None = None,
-        overlap: int | None = None,
-    ) -> list[str]:
-
-        chunk_size = (
-            chunk_size
-            or self.DEFAULT_CHUNK_SIZE
-        )
-
-        overlap = (
-            overlap
-            if overlap is not None
-            else self.DEFAULT_OVERLAP
-        )
-
-        content = (
-            content
-            .strip()
-        )
-
-        if not content:
-            return []
-
-        if len(content) <= chunk_size:
-            return [content]
-
-        paragraphs = [
-            item.strip()
-            for item in re.split(
-                r"\n\s*\n",
-                content,
-            )
-            if item.strip()
-        ]
-
-        chunks = []
-        current = ""
-
-        for paragraph in paragraphs:
-
-            if (
-                current
-                and len(current)
-                + len(paragraph)
-                + 2
-                > chunk_size
-            ):
-                chunks.append(
-                    current.strip()
-                )
-
-                tail = (
-                    current[-overlap:]
-                    if overlap > 0
-                    else ""
-                )
-
-                current = (
-                    tail
-                    + "\n\n"
-                    + paragraph
-                ).strip()
-
-            else:
-                current = (
-                    current
-                    + "\n\n"
-                    + paragraph
-                ).strip()
-
-            while len(current) > chunk_size:
-
-                cut = current[:chunk_size]
-
-                boundary = max(
-                    cut.rfind(". "),
-                    cut.rfind("? "),
-                    cut.rfind("! "),
-                    cut.rfind("\n"),
-                )
-
-                if boundary < int(
-                    chunk_size * 0.55
-                ):
-                    boundary = chunk_size
-
-                piece = (
-                    current[:boundary]
-                    .strip()
-                )
-
-                if piece:
-                    chunks.append(piece)
-
-                start = max(
-                    0,
-                    boundary - overlap,
-                )
-
-                current = (
-                    current[start:]
-                    .strip()
-                )
-
-        if current:
-            chunks.append(
-                current.strip()
-            )
-
-        result = []
-        seen = set()
-
-        for chunk in chunks:
-
-            normalized = self.normalize(
-                chunk
-            )
-
-            if (
-                not normalized
-                or normalized in seen
-            ):
-                continue
-
-            seen.add(normalized)
-            result.append(chunk)
-
-        return result
-
-    def rebuild_document_index(
-        self,
-        db,
-        document: KnowledgeDocument,
-    ) -> int:
-
-        (
-            db.query(KnowledgeChunk)
-            .filter(
-                KnowledgeChunk.document_id
-                == document.id
-            )
-            .delete(
-                synchronize_session=False
-            )
-        )
-
-        chunks = self.split_content(
-            document.content or ""
-        )
-
-        for index, content in enumerate(
-            chunks
-        ):
-
-            db.add(
-                KnowledgeChunk(
-                    company_id=document.company_id,
-                    document_id=document.id,
-                    chunk_index=index,
-                    content=content,
-                    normalized_text=self.normalize(
-                        content
-                    ),
-                )
-            )
-
-        db.flush()
-
-        return len(chunks)
-
-    def backfill_company_index(
-        self,
-        db,
-        company_id: int,
-    ) -> int:
-
-        documents = (
-            db.query(KnowledgeDocument)
-            .filter(
-                KnowledgeDocument.company_id
-                == company_id
-            )
-            .all()
-        )
-
-        indexed = 0
-
-        for document in documents:
-
-            exists = (
-                db.query(KnowledgeChunk)
-                .filter(
-                    KnowledgeChunk.document_id
-                    == document.id
-                )
-                .first()
-            )
-
-            if exists is None:
-
-                self.rebuild_document_index(
-                    db,
-                    document,
-                )
-
-                indexed += 1
-
+    DEFAULT_CHUNK_SIZE=1400; DEFAULT_OVERLAP=180; DEFAULT_MAX_CHUNKS=6; DEFAULT_MAX_CONTEXT_CHARS=7000
+    ARABIC_EQUIVALENTS={
+        "اسعار":{"السعر","سعر","الاسعار","أسعار","الأسعار","بكم","تكلفة","تكلفه"},
+        "خدمات":{"خدمة","الخدمات","خدمات","بتعملو","تقدمون"},
+        "حجز":{"موعد","مواعيد","احجز","الحجز","حجز"},
+        "دوام":{"ساعات","الدوام","دوام","مفتوح","تفتحون","تسكرون"},
+        "موقع":{"العنوان","عنوان","وين","الموقع","موقع"},
+    }
+    def normalize(self,text):
+        text=(text or "").lower().replace("\r"," ").replace("\n"," ")
+        text=text.replace("أ","ا").replace("إ","ا").replace("آ","ا").replace("ة","ه").replace("ى","ي")
+        text=re.sub(r"[^\w\u0600-\u06FF]+"," ",text)
+        return " ".join(text.split())
+    def tokenize(self,text):
+        tokens={x for x in self.normalize(text).split() if len(x)>=2}; expanded=set(tokens)
+        for canonical,variants in self.ARABIC_EQUIVALENTS.items():
+            normalized_variants={self.normalize(x) for x in variants}|{self.normalize(canonical)}
+            if tokens & normalized_variants: expanded|=normalized_variants
+        return expanded
+    def split_content(self,content,chunk_size=None,overlap=None):
+        chunk_size=chunk_size or self.DEFAULT_CHUNK_SIZE; overlap=self.DEFAULT_OVERLAP if overlap is None else overlap; content=(content or "").strip()
+        if not content:return []
+        if len(content)<=chunk_size:return [content]
+        chunks=[]; start=0
+        while start<len(content):
+            end=min(len(content),start+chunk_size); piece=content[start:end].strip()
+            if piece:chunks.append(piece)
+            if end>=len(content):break
+            start=max(start+1,end-overlap)
+        return chunks
+    def rebuild_document_index(self,db,document):
+        db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id==document.id).delete(synchronize_session=False)
+        chunks=self.split_content(document.content or "")
+        for index,content in enumerate(chunks): db.add(KnowledgeChunk(company_id=document.company_id,document_id=document.id,chunk_index=index,content=content,normalized_text=self.normalize(content)))
+        db.flush(); return len(chunks)
+    def backfill_company_index(self,db,company_id):
+        docs=db.query(KnowledgeDocument).filter(KnowledgeDocument.company_id==company_id).all(); indexed=0
+        for doc in docs:
+            if db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id==doc.id).first() is None:self.rebuild_document_index(db,doc);indexed+=1
         return indexed
-
-    def search_agent_knowledge(
-        self,
-        db,
-        company_id: int,
-        agent_id: int,
-        query: str,
-        max_chunks: int | None = None,
-    ) -> list[KnowledgeMatch]:
-
-        max_chunks = (
-            max_chunks
-            or self.DEFAULT_MAX_CHUNKS
-        )
-
-        query_normalized = self.normalize(
-            query
-        )
-
-        query_tokens = self.tokenize(
-            query
-        )
-
-        if not query_tokens:
-            return []
-
-        rows = (
-            db.query(
-                KnowledgeChunk,
-                KnowledgeDocument,
-            )
-            .join(
-                KnowledgeDocument,
-                KnowledgeDocument.id
-                == KnowledgeChunk.document_id,
-            )
-            .join(
-                AgentKnowledge,
-                AgentKnowledge.document_id
-                == KnowledgeDocument.id,
-            )
-            .filter(
-                KnowledgeChunk.company_id
-                == company_id,
-                KnowledgeDocument.company_id
-                == company_id,
-                KnowledgeDocument.enabled.is_(True),
-                AgentKnowledge.agent_id
-                == agent_id,
-                AgentKnowledge.enabled.is_(True),
-            )
-            .all()
-        )
-
-        matches = []
-
-        for chunk, document in rows:
-
-            chunk_tokens = set(
-                chunk.normalized_text.split()
-            )
-
-            title_normalized = self.normalize(
-                document.title or ""
-            )
-
-            title_tokens = set(
-                title_normalized.split()
-            )
-
-            common_chunk = (
-                query_tokens
-                & chunk_tokens
-            )
-
-            common_title = (
-                query_tokens
-                & title_tokens
-            )
-
-            if (
-                not common_chunk
-                and not common_title
-            ):
-                continue
-
-            score = 0.0
-
-            score += (
-                len(common_chunk)
-                * 3.0
-            )
-
-            score += (
-                len(common_title)
-                * 5.0
-            )
-
-            if (
-                query_normalized
-                and query_normalized
-                in chunk.normalized_text
-            ):
-                score += 12.0
-
-            coverage = (
-                len(common_chunk)
-                / max(
-                    1,
-                    len(query_tokens),
-                )
-            )
-
-            score += (
-                coverage
-                * 6.0
-            )
-
-            # Minimum relevance gate:
-            # Do not inject weakly related knowledge into the agent context.
-            # A match needs either meaningful token coverage,
-            # multiple matching terms, a title match, or an exact phrase.
-            exact_phrase = bool(
-                query_normalized
-                and query_normalized
-                in chunk.normalized_text
-            )
-
-            meaningful_match = (
-                exact_phrase
-                or len(common_chunk) >= 2
-                or len(common_title) >= 1
-                or coverage >= 0.60
-            )
-
-            if not meaningful_match:
-                continue
-
-            matches.append(
-                KnowledgeMatch(
-                    document_id=document.id,
-                    title=document.title,
-                    chunk_index=chunk.chunk_index,
-                    content=chunk.content,
-                    score=score,
-                )
-            )
-
-        matches.sort(
-            key=lambda item: (
-                item.score,
-                -item.chunk_index,
-            ),
-            reverse=True,
-        )
-
-        selected = []
-        per_document = {}
-
-        for match in matches:
-
-            count = per_document.get(
-                match.document_id,
-                0,
-            )
-
-            # Avoid one huge document
-            # swallowing all retrieval slots.
-            if count >= 3:
-                continue
-
-            selected.append(match)
-
-            per_document[
-                match.document_id
-            ] = count + 1
-
-            if len(selected) >= max_chunks:
-                break
-
+    def search_agent_knowledge(self,db,company_id,agent_id,query,max_chunks=None):
+        max_chunks=max_chunks or self.DEFAULT_MAX_CHUNKS; qnorm=self.normalize(query); qtokens=self.tokenize(query)
+        if not qtokens:return []
+        rows=db.query(KnowledgeChunk,KnowledgeDocument).join(KnowledgeDocument,KnowledgeDocument.id==KnowledgeChunk.document_id).join(AgentKnowledge,AgentKnowledge.document_id==KnowledgeDocument.id).filter(KnowledgeChunk.company_id==company_id,KnowledgeDocument.company_id==company_id,KnowledgeDocument.enabled.is_(True),AgentKnowledge.agent_id==agent_id,AgentKnowledge.enabled.is_(True)).all()
+        matches=[]
+        for chunk,doc in rows:
+            ctokens=self.tokenize(chunk.normalized_text); ttokens=self.tokenize(doc.title or ""); common=qtokens&ctokens; title_common=qtokens&ttokens
+            # Business Information is intentionally broad structured knowledge. A business-fact question
+            # may use it even when colloquial Arabic wording does not literally occur in the stored text.
+            broad_business_doc=self.normalize(doc.title)==self.normalize("Business Information")
+            exact=bool(qnorm and qnorm in self.normalize(chunk.normalized_text))
+            if not common and not title_common and not broad_business_doc:continue
+            coverage=len(common)/max(1,len(qtokens)); score=len(common)*3+len(title_common)*5+coverage*6+(12 if exact else 0)+(1 if broad_business_doc else 0)
+            if exact or len(common)>=1 or len(title_common)>=1 or broad_business_doc: matches.append(KnowledgeMatch(doc.id,doc.title,chunk.chunk_index,chunk.content,score))
+        matches.sort(key=lambda x:(x.score,-x.chunk_index),reverse=True); selected=[]; per={}
+        for m in matches:
+            if per.get(m.document_id,0)>=3:continue
+            selected.append(m);per[m.document_id]=per.get(m.document_id,0)+1
+            if len(selected)>=max_chunks:break
         return selected
-
-    def get_agent_context(
-        self,
-        db,
-        company_id: int,
-        agent_id: int,
-        query: str,
-    ) -> str:
-
-        self.backfill_company_index(
-            db,
-            company_id,
-        )
-
-        matches = (
-            self.search_agent_knowledge(
-                db=db,
-                company_id=company_id,
-                agent_id=agent_id,
-                query=query,
-            )
-        )
-
-        if not matches:
-            return ""
-
-        parts = []
-        used_chars = 0
-
-        for match in matches:
-
-            block = (
-                f"[Knowledge: {match.title} "
-                f"| chunk {match.chunk_index + 1}]\n"
-                f"{match.content}"
-            )
-
-            if (
-                used_chars
-                + len(block)
-                > self.DEFAULT_MAX_CONTEXT_CHARS
-            ):
-                remaining = (
-                    self.DEFAULT_MAX_CONTEXT_CHARS
-                    - used_chars
-                )
-
-                if remaining > 250:
-                    parts.append(
-                        block[:remaining]
-                    )
-
+    def get_agent_context(self,db,company_id,agent_id,query):
+        self.backfill_company_index(db,company_id); matches=self.search_agent_knowledge(db,company_id,agent_id,query)
+        if not matches:return ""
+        parts=[];used=0
+        for m in matches:
+            block=f"[Knowledge: {m.title} | chunk {m.chunk_index+1}]\n{m.content}"
+            if used+len(block)>self.DEFAULT_MAX_CONTEXT_CHARS:
+                remain=self.DEFAULT_MAX_CONTEXT_CHARS-used
+                if remain>250:parts.append(block[:remain])
                 break
-
-            parts.append(block)
-            used_chars += len(block)
-
+            parts.append(block);used+=len(block)
         return "\n\n".join(parts)
 
-
-knowledge_service = KnowledgeService()
+knowledge_service=KnowledgeService()
