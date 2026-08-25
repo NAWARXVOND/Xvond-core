@@ -1,11 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 
+from backend.app.core.config.settings import settings
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.analytics.models import AnalyticsSource, AnalyticsDashboard
+from backend.app.modules.billing.service_limits import service_limits
 from backend.app.modules.integrations.models import CompanyIntegration
 
 router = APIRouter(prefix="/admin/analytics-builder", tags=["Xvond Admin - Analytics"])
@@ -73,6 +76,14 @@ def create_source(company_id: int, data: SourceCreate, current_admin: User = Dep
     db = SessionLocal()
     try:
         require_company(db, company_id)
+        if settings.is_production:
+            current = db.query(func.count(AnalyticsSource.id)).filter(
+                AnalyticsSource.company_id == company_id,
+                AnalyticsSource.enabled.is_(True),
+            ).scalar() or 0
+            service_limits.check_current(
+                db, company_id, "analytics", "data_sources", current
+            )
         source_type = data.source_type.strip().lower()
         if source_type not in ALLOWED_SOURCE_TYPES:
             raise HTTPException(status_code=400, detail="Unsupported analytics source type")
@@ -83,16 +94,17 @@ def create_source(company_id: int, data: SourceCreate, current_admin: User = Dep
             ).first()
             if integration is None:
                 raise HTTPException(status_code=400, detail="Integration does not belong to company")
+        name = data.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Source name is required")
         item = AnalyticsSource(
             company_id=company_id,
-            name=data.name.strip(),
+            name=name,
             source_type=source_type,
             integration_id=data.integration_id,
             config=data.config or {},
             enabled=True,
         )
-        if not item.name:
-            raise HTTPException(status_code=400, detail="Source name is required")
         db.add(item)
         db.commit()
         db.refresh(item)
@@ -106,6 +118,14 @@ def create_dashboard(company_id: int, data: DashboardCreate, current_admin: User
     db = SessionLocal()
     try:
         require_company(db, company_id)
+        if settings.is_production:
+            current = db.query(func.count(AnalyticsDashboard.id)).filter(
+                AnalyticsDashboard.company_id == company_id,
+                AnalyticsDashboard.enabled.is_(True),
+            ).scalar() or 0
+            service_limits.check_current(
+                db, company_id, "analytics", "dashboards", current
+            )
         name = data.name.strip()
         if not name:
             raise HTTPException(status_code=400, detail="Dashboard name is required")
