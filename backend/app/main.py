@@ -36,6 +36,7 @@ from backend.app.api.admin_automation import router as admin_automation_router
 from backend.app.api.admin_analytics_builder import router as admin_analytics_builder_router
 from backend.app.api.admin_service_billing import router as admin_service_billing_router
 from backend.app.api.admin_service_plan_management import router as admin_service_plan_management_router
+from backend.app.api.public_channels import router as public_channels_router
 
 from backend.app.api.agent_factory import router as agent_factory_router
 from backend.app.api.ai_agents import router as ai_agents_router
@@ -162,12 +163,22 @@ def request_client_ip(request: Request) -> str:
 async def protect_public_endpoints(request: Request, call_next):
     rule = _RATE_LIMITS.get((request.method.upper(), request.url.path))
 
-    if rule is None and (
-        request.method.upper() == "POST"
-        and request.url.path.startswith("/ai-agents/")
-        and request.url.path.endswith("/chat")
-    ):
-        rule = (60, 60)
+    if rule is None and request.method.upper() == "POST":
+        if (
+            request.url.path.startswith("/ai-agents/")
+            and request.url.path.endswith("/chat")
+        ):
+            rule = (60, 60)
+        elif (
+            request.url.path.startswith("/channels/website/")
+            and request.url.path.endswith("/chat")
+        ):
+            rule = (90, 60)
+        elif (
+            request.url.path.startswith("/channels/voice/")
+            and request.url.path.endswith("/turn")
+        ):
+            rule = (180, 60)
 
     if rule is not None:
         client_ip = request_client_ip(request)
@@ -225,6 +236,7 @@ app.include_router(admin_service_plan_management_router)
 
 app.include_router(agent_factory_router)
 app.include_router(ai_agents_router)
+app.include_router(public_channels_router)
 
 
 # ============================================================
