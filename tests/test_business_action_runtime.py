@@ -1,5 +1,6 @@
 from backend.app.api.admin_agent_actions import BUSINESS_MODULES, TEMPLATES
 from backend.app.modules.tools.action_request import _customer_confirmed, _field_specs, _missing
+from backend.app.modules.tools.executor import _operation_config_ready
 
 
 def test_arabic_and_english_customer_confirmation():
@@ -47,3 +48,13 @@ def test_catering_template_suggests_request_without_enabling_it():
     assert request["destination"]["type"] == "xvond_internal"
     required = {x["key"] for x in request["fields"] if x.get("required", True)}
     assert {"customer_name", "phone", "event_type", "event_date", "guest_count", "location", "request"} <= required
+
+
+def test_incomplete_operation_is_not_runtime_ready():
+    assert _operation_config_ready({"destination": {"type": "unconfigured"}, "availability": {"mode": "none"}}) is False
+    assert _operation_config_ready({"destination": {"type": "integration"}, "availability": {"mode": "none"}}) is False
+    assert _operation_config_ready({
+        "destination": {"type": "xvond_internal"},
+        "availability": {"mode": "xvond_schedule", "date_field": "date", "time_field": "time", "schedule": {"weekdays": [], "start": "", "end": ""}},
+    }) is False
+    assert _operation_config_ready({"destination": {"type": "xvond_internal"}, "availability": {"mode": "none"}}) is True
