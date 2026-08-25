@@ -1,4 +1,4 @@
-from backend.app.api.admin_agent_actions import TEMPLATES
+from backend.app.api.admin_agent_actions import BUSINESS_MODULES, TEMPLATES
 from backend.app.modules.tools.action_request import _customer_confirmed, _field_specs, _missing
 
 
@@ -23,24 +23,27 @@ def test_structured_fields_preserve_optional_rules():
     assert _missing(action, {"customer_name": "Nawar"}) == []
 
 
-def test_enabled_template_operations_have_real_destinations():
+def test_templates_are_suggestions_not_automatic_capabilities():
     for template in TEMPLATES:
         keys = set()
         for action in template["actions"]:
             assert action["key"] not in keys
             keys.add(action["key"])
-            if action.get("enabled", True):
-                assert (action.get("destination") or {}).get("type") in {
-                    "xvond_internal",
-                    "human_handoff",
-                    "integration",
-                }
+            assert action["enabled"] is False
+            assert action["module"] in BUSINESS_MODULES
+            assert (action.get("destination") or {}).get("type") in {
+                "xvond_internal",
+                "human_handoff",
+                "integration",
+                "unconfigured",
+            }
 
 
-def test_catering_template_is_real_internal_intake_by_default():
+def test_catering_template_suggests_request_without_enabling_it():
     template = next(x for x in TEMPLATES if x["id"] == "catering")
     request = next(x for x in template["actions"] if x["key"] == "catering_request")
-    assert request["enabled"] is True
+    assert request["enabled"] is False
+    assert request["module"] == "orders"
     assert request["destination"]["type"] == "xvond_internal"
     required = {x["key"] for x in request["fields"] if x.get("required", True)}
     assert {"customer_name", "phone", "event_type", "event_date", "guest_count", "location", "request"} <= required
