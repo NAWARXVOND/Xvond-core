@@ -13,6 +13,7 @@ from backend.app.api.users import router as users_router
 from backend.app.api.admin import router as admin_router
 from backend.app.api.admin_ai import router as admin_ai_router
 from backend.app.api.admin_ai_employee import router as admin_ai_employee_router
+from backend.app.api.admin_ai_employee_files import router as admin_ai_employee_files_router
 from backend.app.api.admin_audit import router as admin_audit_router
 from backend.app.api.admin_billing import router as admin_billing_router
 from backend.app.api.admin_business import router as admin_business_router
@@ -118,6 +119,7 @@ app.include_router(users_router)
 app.include_router(admin_router)
 app.include_router(admin_ai_router)
 app.include_router(admin_ai_employee_router)
+app.include_router(admin_ai_employee_files_router)
 app.include_router(admin_audit_router)
 app.include_router(admin_billing_router)
 app.include_router(admin_business_router)
