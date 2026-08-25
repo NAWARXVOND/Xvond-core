@@ -1,5 +1,7 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 from time import perf_counter
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
 
@@ -11,6 +13,7 @@ from backend.app.core.config.settings import settings
 from backend.app.core.module_access import company_module_enabled
 from backend.app.models.company import Company
 from backend.app.models.company_module import CompanyModule
+from backend.app.models.company_profile import CompanyProfile
 from backend.app.modules.ai_agent.models import (
     AIAgent,
     AIConversation,
@@ -45,7 +48,37 @@ Do not say a capability is unavailable merely because a fact is absent from know
 For actions, collect only the missing required details progressively. Do not interrogate the customer with a long form in one message unless all details are naturally needed at once.
 If a human transfer is required, state it naturally and use human_handoff when available; do not give a phone number as a substitute unless the business knowledge explicitly requires that contact method.
 Match the customer's language and normal conversational register unless the configured employee instructions say otherwise.
+Use BUSINESS CLOCK as the authoritative reference for current dates and times. Never invent a year for an incomplete customer date. For future-facing actions such as events, quotations, bookings or orders, do not silently resolve an incomplete date to a past date.
 """
+
+
+def _business_clock_context(
+    timezone_name: str | None,
+    now: datetime | None = None,
+) -> str:
+    zone_name = (timezone_name or "UTC").strip() or "UTC"
+    try:
+        zone = ZoneInfo(zone_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        zone_name = "UTC"
+        zone = timezone.utc
+
+    anchor = now or datetime.now(timezone.utc)
+    if anchor.tzinfo is None:
+        anchor = anchor.replace(tzinfo=timezone.utc)
+    current = anchor.astimezone(zone)
+
+    return (
+        "BUSINESS CLOCK (authoritative for date/time interpretation):\n"
+        f"Current business date: {current.date().isoformat()}\n"
+        f"Current business time: {current.isoformat(timespec='seconds')}\n"
+        f"Business timezone: {zone_name}\n"
+        "When a customer gives a month and day without a year, resolve it to the "
+        "next matching calendar date on or after the current business date unless "
+        "the conversation clearly specifies another year or a past date. Never "
+        "silently assign a past year to a future booking, event, quotation or "
+        "operational request."
+    )
 
 
 class AgentRuntime:
@@ -139,6 +172,14 @@ class AgentRuntime:
             f"{item.role}: {item.content}" for item in messages
         )[-12000:]
 
+    def build_business_clock(self, db, company_id: int) -> str:
+        profile = (
+            db.query(CompanyProfile)
+            .filter(CompanyProfile.company_id == company_id)
+            .first()
+        )
+        return _business_clock_context(profile.timezone if profile else None)
+
     def _record_failed_request(
         self,
         db,
@@ -227,6 +268,7 @@ class AgentRuntime:
             message,
         )
         history = self.build_history(db, conversation.id)
+        business_clock = self.build_business_clock(db, company_id)
 
         knowledge = ""
         if company_module_enabled(db, company_id, "knowledge"):
@@ -258,7 +300,7 @@ class AgentRuntime:
             for tool in available_tools
         ]
 
-        context_parts = [GROUNDING_POLICY]
+        context_parts = [GROUNDING_POLICY, business_clock]
         if knowledge:
             context_parts.append(
                 "COMPANY KNOWLEDGE (authoritative facts; use only when relevant "
