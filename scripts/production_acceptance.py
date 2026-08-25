@@ -6,7 +6,6 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
-from backend.app.core.agent_runtime import agent_runtime
 from backend.app.core.ai.engine import ai_engine
 from backend.app.core.ai.provider_policy import runtime_selections
 from backend.app.core.config.settings import settings
@@ -20,6 +19,8 @@ from backend.app.modules.providers.models import AIModelRecord, AIProviderRecord
 def check_release(company_id: int, agent_id: int | None = None, live_ai: bool = False) -> dict:
     checks = {}
     db = SessionLocal()
+    agent = None
+    route = []
     try:
         db.execute(text("SELECT 1"))
         checks["database"] = {"ok": True}
@@ -87,25 +88,36 @@ def check_release(company_id: int, agent_id: int | None = None, live_ai: bool = 
                         ],
                     }
                 except Exception as exc:
+                    route = []
                     checks["routing"] = {"ok": False, "error": str(exc)[:500]}
 
         if live_ai:
             if agent_id is None:
                 checks["live_ai"] = {"ok": False, "error": "--agent-id is required with --live-ai"}
+            elif agent is None:
+                checks["live_ai"] = {"ok": False, "error": "AI employee not found"}
+            elif not route:
+                checks["live_ai"] = {"ok": False, "error": "No eligible real AI route is available"}
             else:
                 try:
-                    result = agent_runtime.chat(
-                        db=db,
-                        company_id=company_id,
-                        agent_id=agent_id,
-                        message="Production acceptance check. Reply with exactly XVOND_OK.",
+                    selection = route[0]
+                    result = ai_engine.generate(
+                        provider_name=selection.provider,
+                        system_prompt=(
+                            "You are a production health-check endpoint. "
+                            "Reply with exactly XVOND_OK and nothing else."
+                        ),
+                        user_message="Return XVOND_OK.",
+                        model=selection.model,
+                        tools=None,
                     )
-                    response = result.get("response", {}).get("content", "").strip()
+                    response = (result.text or "").strip()
                     checks["live_ai"] = {
-                        "ok": "XVOND_OK" in response,
-                        "provider": result.get("provider"),
-                        "model": result.get("model"),
+                        "ok": response == "XVOND_OK",
+                        "provider": selection.provider,
+                        "model": selection.model,
                         "response": response[:200],
+                        "customer_runtime_used": False,
                     }
                 except Exception as exc:
                     db.rollback()
@@ -129,7 +141,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Xvond before activating a real customer.")
     parser.add_argument("--company-id", type=int, required=True)
     parser.add_argument("--agent-id", type=int)
-    parser.add_argument("--live-ai", action="store_true", help="Send one real billable AI request.")
+    parser.add_argument(
+        "--live-ai",
+        action="store_true",
+        help="Send one real billable provider health-check request without creating a customer conversation.",
+    )
     args = parser.parse_args()
     report = check_release(
         company_id=args.company_id,
