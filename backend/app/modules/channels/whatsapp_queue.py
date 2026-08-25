@@ -201,6 +201,7 @@ class WhatsAppJobQueue:
             job["attempts"] = 0
             job.pop("last_error", None)
             job.pop("last_failed_at", None)
+            job.pop("retry_after_seconds", None)
             self.client.lpush(
                 self.queue_key,
                 json.dumps(job),
