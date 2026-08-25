@@ -12,10 +12,6 @@
 <div id="app" class="app hidden"><aside class="sidebar"><div class="sidebar-brand"><div class="brand-x small">X</div><div><strong>Xvond</strong><small>Admin</small></div></div><nav><button class="nav-item active" onclick="showPage('dashboard', this)">Dashboard</button><button class="nav-item" onclick="showPage('companies', this)">Companies</button></nav><button class="logout-button" onclick="logout()">Logout</button></aside><main class="main"><header class="topbar"><div><h1 id="page-title">Dashboard</h1><p>Xvond AI Business Platform</p></div><div id="current-user" class="admin-user"></div></header><section id="page-dashboard" class="page"><div id="dashboard-cards" class="cards"></div></section><section id="page-companies" class="page hidden"><div class="section-header"><div><h2>Companies</h2><p>Manage Xvond customer companies</p></div><button onclick="openCreateCompany()">+ New Company</button></div><div class="panel"><table><thead><tr><th>ID</th><th>Company</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody id="companies-table"></tbody></table></div></section><section id="page-company-detail" class="page hidden"><button class="back-button" onclick="showPage('companies')">← Companies</button><div id="company-detail"></div></section></main></div>
 <div id="modal" class="modal hidden"><div class="modal-card"><div class="modal-header"><h2 id="modal-title">Form</h2><button class="close-button" onclick="closeModal()">×</button></div><div id="modal-body"></div></div></div>
 <script src="/static/admin/app.js"></script>
-<script src="/static/admin/services.js"></script>
-<script src="/static/admin/solutions.js"></script>
-<script src="/static/admin/operations.js"></script>
-<script src="/static/admin/business.js"></script>
 <script src="/static/admin/simple-company.js"></script>
 <script src="/static/admin/knowledge-manager.js"></script>
 <script src="/static/admin/employee-capabilities.js"></script>
@@ -24,7 +20,5 @@
 <script src="/static/admin/agent-actions.js"></script>
 <script src="/static/admin/human-chat.js"></script>
 <script src="/static/admin/company-control-center.js"></script>
-<script src="/static/admin/company-control-center-runtime.js"></script>
-<script src="/static/admin/employee-workspace.js"></script>
 </body>
 </html>
