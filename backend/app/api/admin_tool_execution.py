@@ -4,7 +4,6 @@ from pydantic import BaseModel, Field
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.user import User
-from backend.app.modules.tools.approval import tool_approval_service
 from backend.app.modules.tools.executor import tool_executor
 
 
@@ -19,10 +18,6 @@ class ToolExecuteInput(BaseModel):
     conversation_id: int | None = None
 
 
-class ApprovalDecisionInput(BaseModel):
-    approved: bool
-
-
 @router.post("/companies/{company_id}/agents/{agent_id}/tools/{tool_name}")
 def execute_agent_tool(
     company_id: int,
@@ -31,6 +26,12 @@ def execute_agent_tool(
     data: ToolExecuteInput,
     current_admin: User = Depends(require_xvond_admin),
 ):
+    """Internal Xvond-admin execution path for a configured agent tool.
+
+    The retired generic approval workflow is intentionally not exposed here.
+    Customer-facing business actions use the canonical ActionRequest flow and
+    its explicit confirmation/execution lifecycle instead.
+    """
     db = SessionLocal()
     try:
         result = tool_executor.execute(
@@ -52,37 +53,6 @@ def execute_agent_tool(
         return {
             "success": True,
             "data": result.get("data"),
-        }
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
-
-@router.post("/approvals/{approval_id}/decision")
-def decide_tool_approval(
-    approval_id: int,
-    data: ApprovalDecisionInput,
-    current_admin: User = Depends(require_xvond_admin),
-):
-    db = SessionLocal()
-    try:
-        item = tool_approval_service.decide(
-            db=db,
-            approval_id=approval_id,
-            approved=data.approved,
-            user_id=current_admin.id,
-        )
-        if item is None:
-            raise HTTPException(status_code=404, detail="Tool approval not found")
-        db.commit()
-        return {
-            "id": item.id,
-            "status": item.status,
-            "approved": data.approved,
         }
     except HTTPException:
         db.rollback()
