@@ -43,6 +43,12 @@ def login(
                 detail="Invalid email or password",
             )
 
+        if not user.active:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid email or password",
+            )
+
         if not verify_password(
             data.password,
             user.password_hash,
@@ -73,7 +79,8 @@ def login(
                 )
 
         token = create_access_token(
-            user.id
+            user.id,
+            user.token_version,
         )
 
         return {
@@ -417,6 +424,7 @@ def customer_reset_password(
                 data.new_password
             )
         )
+        user.token_version += 1
 
         reset.used_at = now
 
@@ -500,6 +508,7 @@ def customer_change_password(
                 data.new_password
             )
         )
+        user.token_version += 1
 
         db.commit()
 
@@ -508,5 +517,36 @@ def customer_change_password(
                 "password_changed",
         }
 
+    finally:
+        db.close()
+
+
+@router.post("/logout")
+def logout(
+    current_user: User = Depends(
+        get_current_user
+    ),
+):
+    db = SessionLocal()
+
+    try:
+        user = (
+            db.query(User)
+            .filter(User.id == current_user.id)
+            .first()
+        )
+
+        if user is None:
+            raise HTTPException(
+                status_code=401,
+                detail="User not found",
+            )
+
+        user.token_version += 1
+        db.commit()
+
+        return {
+            "status": "logged_out",
+        }
     finally:
         db.close()

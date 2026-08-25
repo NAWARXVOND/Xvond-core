@@ -34,6 +34,7 @@ def me(
         "email": current_user.email,
         "full_name": current_user.full_name,
         "role": current_user.role,
+        "active": current_user.active,
     }
 
 
@@ -131,8 +132,80 @@ def create_company_user(
             "email": user.email,
             "full_name": user.full_name,
             "role": user.role,
+            "active": user.active,
             "status": "created",
         }
 
+    finally:
+        db.close()
+
+
+class UserStatusUpdate(BaseModel):
+    active: bool
+
+
+@router.patch("/{user_id}/status")
+def update_company_user_status(
+    user_id: int,
+    data: UserStatusUpdate,
+    current_user: User = Depends(
+        require_customer_admin
+    ),
+):
+    if user_id == current_user.id:
+        raise HTTPException(
+            status_code=400,
+            detail="You cannot disable your own account",
+        )
+
+    db = SessionLocal()
+
+    try:
+        target = (
+            db.query(User)
+            .filter(
+                User.id == user_id,
+                User.company_id == current_user.company_id,
+            )
+            .first()
+        )
+
+        if target is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Company user not found",
+            )
+
+        if target.role == "owner":
+            raise HTTPException(
+                status_code=403,
+                detail="The company owner cannot be disabled",
+            )
+
+        if (
+            target.role == "admin"
+            and current_user.role != "owner"
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Only the owner can manage administrators",
+            )
+
+        target.active = data.active
+
+        if not data.active:
+            target.token_version += 1
+
+        db.commit()
+
+        return {
+            "id": target.id,
+            "active": target.active,
+            "status": (
+                "activated"
+                if target.active
+                else "deactivated"
+            ),
+        }
     finally:
         db.close()

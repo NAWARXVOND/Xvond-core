@@ -26,6 +26,7 @@ def verify_password(
 
 def create_access_token(
     user_id: int,
+    token_version: int = 0,
 ) -> str:
     expire = (
         datetime.now(timezone.utc)
@@ -44,6 +45,7 @@ def create_access_token(
         "iss": settings.JWT_ISSUER,
         "aud": settings.JWT_AUDIENCE,
         "jti": uuid4().hex,
+        "ver": int(token_version),
     }
 
     return jwt.encode(
@@ -53,9 +55,9 @@ def create_access_token(
     )
 
 
-def decode_access_token(
+def decode_access_token_claims(
     token: str,
-) -> int:
+) -> dict:
     payload = jwt.decode(
         token,
         settings.JWT_SECRET,
@@ -73,8 +75,16 @@ def decode_access_token(
                 "iss",
                 "aud",
                 "jti",
+                "ver",
             ]
         },
     )
 
+    return payload
+
+
+def decode_access_token(
+    token: str,
+) -> int:
+    payload = decode_access_token_claims(token)
     return int(payload["sub"])
