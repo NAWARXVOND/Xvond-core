@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from backend.app.core.ai.provider_policy import runtime_selections
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.core.config_secrets import configured_secret_fields, merge_config, public_config, reveal_config
@@ -47,13 +48,21 @@ def _ensure_channels_module(db, company_id: int):
     else: module.enabled=True
     return module
 
+def _has_real_runtime_provider(db, company_id:int, agent:AIAgent|None)->bool:
+    if agent is None:return False
+    try:
+        selections=runtime_selections(db,company_id,agent.provider,agent.model)
+    except Exception:
+        return False
+    return any(item.provider!="mock" for item in selections)
+
 def _activation_blockers(db, channel: AgentChannel) -> list[str]:
     blockers=[]
     company=db.query(Company).filter(Company.id==channel.company_id).first()
     agent=db.query(AIAgent).filter(AIAgent.id==channel.agent_id,AIAgent.company_id==channel.company_id).first()
     if company is None or not company.active: blockers.append("Company must be active")
     if agent is None or not agent.enabled: blockers.append("AI employee must be active")
-    elif agent.provider=="mock": blockers.append("A real AI provider is required")
+    elif not _has_real_runtime_provider(db,channel.company_id,agent): blockers.append("At least one real AI provider/model must be enabled and configured")
     if not _channel_configured(channel): blockers.append("WhatsApp credentials are incomplete")
     useful=(db.query(KnowledgeDocument).join(AgentKnowledge,AgentKnowledge.document_id==KnowledgeDocument.id).filter(KnowledgeDocument.company_id==channel.company_id,KnowledgeDocument.enabled.is_(True),AgentKnowledge.agent_id==channel.agent_id,AgentKnowledge.enabled.is_(True),KnowledgeDocument.source_type.notin_(["business_profile","website_reference"])).all())
     if not any(len((doc.content or "").strip())>=20 for doc in useful): blockers.append("Add real business knowledge before activating WhatsApp")
