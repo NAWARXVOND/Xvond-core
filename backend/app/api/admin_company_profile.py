@@ -113,12 +113,13 @@ def _business_knowledge_content(company: Company, row: CompanyProfile) -> str:
 
 
 def sync_company_business_knowledge(db, company: Company, row: CompanyProfile) -> KnowledgeDocument:
+    # Reuse the protected title already understood broadly by the knowledge engine.
     document = (
         db.query(KnowledgeDocument)
         .filter(
             KnowledgeDocument.company_id == company.id,
             KnowledgeDocument.source_type == "business_profile",
-            KnowledgeDocument.title == "Company Business Information",
+            KnowledgeDocument.title == "Business Information",
         )
         .first()
     )
@@ -126,7 +127,7 @@ def sync_company_business_knowledge(db, company: Company, row: CompanyProfile) -
     if document is None:
         document = KnowledgeDocument(
             company_id=company.id,
-            title="Company Business Information",
+            title="Business Information",
             source_type="business_profile",
             content=content,
             enabled=True,
@@ -210,7 +211,6 @@ def update_company_profile(
         row.business_rules = _clean_list(data.business_rules)
         db.flush()
 
-        # Company identity is authoritative. Existing employee profiles inherit it.
         profiles = db.query(AIAgentProfile).filter(AIAgentProfile.company_id == company_id).all()
         for profile in profiles:
             profile.business_name = company.name
