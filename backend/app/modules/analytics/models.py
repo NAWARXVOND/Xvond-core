@@ -32,3 +32,17 @@ class AnalyticsDashboard(Base):
     configuration: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AnalyticsRecord(Base):
+    __tablename__ = "analytics_records"
+    __table_args__ = (
+        Index("ix_analytics_records_company_source_created", "company_id", "source_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), nullable=False, index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("analytics_sources.id"), nullable=False, index=True)
+    data: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
