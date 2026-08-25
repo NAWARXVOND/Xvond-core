@@ -76,12 +76,7 @@ class AutomationRuntime:
         except Exception as exc:
             error_message = str(exc)[:2000]
             failed_output = {"state": state, "steps": step_results}
-
-            # Never commit partially executed internal workflow state. External
-            # side effects are restricted to terminal steps and carry an
-            # idempotency key, so a later DB rollback cannot trigger a blind replay.
             db.rollback()
-
             failed_run = AutomationRun(
                 company_id=company_id,
                 workflow_id=workflow.id,
@@ -158,9 +153,9 @@ class AutomationRuntime:
                 arguments=step.get("arguments") or {},
                 approval_granted=bool(step.get("approval_granted", False)),
             )
-            if not result.success:
-                raise ValueError(result.error or "Tool execution failed")
-            return {"tool_result": result.data}
+            if not result.get("success"):
+                raise ValueError(result.get("error") or "Tool execution failed")
+            return {"tool_result": result.get("data")}
 
         if step_type == "webhook":
             integration_id = step.get("integration_id")
