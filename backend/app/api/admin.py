@@ -10,11 +10,7 @@ from backend.app.models.company_module import CompanyModule
 from backend.app.models.user import User
 from backend.app.modules.billing.models import Plan, Subscription
 
-
-router = APIRouter(
-    prefix="/admin",
-    tags=["Xvond Admin"],
-)
+router = APIRouter(prefix="/admin", tags=["Xvond Admin"])
 
 
 class CompanyCreate(BaseModel):
@@ -24,171 +20,80 @@ class CompanyCreate(BaseModel):
     owner_password: str
 
 
+class CompanyStatusUpdate(BaseModel):
+    active: bool
+
+
 @router.post("/companies")
-def create_company(
-    data: CompanyCreate,
-    current_admin: User = Depends(require_xvond_admin),
-):
+def create_company(data: CompanyCreate, current_admin: User = Depends(require_xvond_admin)):
     name = data.name.strip()
-    owner_email = (
-        data.owner_email
-        .strip()
-        .lower()
-    )
-    owner_full_name = (
-        data.owner_full_name
-        .strip()
-    )
-
+    owner_email = data.owner_email.strip().lower()
+    owner_full_name = data.owner_full_name.strip()
     if not name:
-        raise HTTPException(
-            status_code=400,
-            detail="Company name is required",
-        )
-
+        raise HTTPException(status_code=400, detail="Company name is required")
     if not owner_email:
-        raise HTTPException(
-            status_code=400,
-            detail="Owner email is required",
-        )
-
+        raise HTTPException(status_code=400, detail="Owner email is required")
     if not owner_full_name:
-        raise HTTPException(
-            status_code=400,
-            detail="Owner full name is required",
-        )
-
+        raise HTTPException(status_code=400, detail="Owner full name is required")
     try:
-        validate_password(
-            data.owner_password
-        )
-
+        validate_password(data.owner_password)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=str(exc),
-        )
+        raise HTTPException(status_code=400, detail=str(exc))
 
     db = SessionLocal()
-
     try:
-        existing_user = (
-            db.query(User)
-            .filter(
-                User.email == owner_email
-            )
-            .first()
-        )
-
+        existing_user = db.query(User).filter(User.email == owner_email).first()
         if existing_user is not None:
-            raise HTTPException(
-                status_code=400,
-                detail="Owner email already exists",
-            )
-
-        company = Company(
-            name=name,
-            active=False,
-        )
-
+            raise HTTPException(status_code=400, detail="Owner email already exists")
+        company = Company(name=name, active=False)
         db.add(company)
         db.flush()
-
-        owner = User(
-            company_id=company.id,
-            email=owner_email,
-            full_name=owner_full_name,
-            password_hash=hash_password(
-                data.owner_password
-            ),
-            role="owner",
-        )
-
+        owner = User(company_id=company.id, email=owner_email, full_name=owner_full_name, password_hash=hash_password(data.owner_password), role="owner")
         db.add(owner)
-
-        ai_module = CompanyModule(
-            company_id=company.id,
-            module_name="ai_agent",
-            enabled=True,
-        )
-
-        db.add(ai_module)
-
-        onboarding_plan = (
-            db.query(Plan)
-            .filter(
-                Plan.name == "Onboarding",
-                Plan.enabled.is_(True),
-            )
-            .first()
-        )
-
+        db.add(CompanyModule(company_id=company.id, module_name="ai_agent", enabled=True))
+        onboarding_plan = db.query(Plan).filter(Plan.name == "Onboarding", Plan.enabled.is_(True)).first()
         if onboarding_plan is not None:
-            subscription = Subscription(
-                company_id=company.id,
-                plan_id=onboarding_plan.id,
-                status="active",
-            )
-
-            db.add(subscription)
-
+            db.add(Subscription(company_id=company.id, plan_id=onboarding_plan.id, status="active"))
         db.commit()
-
         db.refresh(company)
         db.refresh(owner)
-
-        return {
-            "company": {
-                "id": company.id,
-                "name": company.name,
-                "active": company.active,
-            },
-            "owner": {
-                "id": owner.id,
-                "company_id": owner.company_id,
-                "email": owner.email,
-                "full_name": owner.full_name,
-                "role": owner.role,
-            },
-            "status": "created",
-        }
-
+        return {"company": {"id": company.id, "name": company.name, "active": company.active}, "owner": {"id": owner.id, "company_id": owner.company_id, "email": owner.email, "full_name": owner.full_name, "role": owner.role}, "status": "created"}
     except HTTPException:
         db.rollback()
         raise
-
     except Exception:
         db.rollback()
         raise
+    finally:
+        db.close()
 
+
+@router.patch("/companies/{company_id}/status")
+def update_company_status(company_id: int, data: CompanyStatusUpdate, current_admin: User = Depends(require_xvond_admin)):
+    db = SessionLocal()
+    try:
+        company = db.query(Company).filter(Company.id == company_id).first()
+        if company is None:
+            raise HTTPException(status_code=404, detail="Company not found")
+        company.active = data.active
+        db.commit()
+        db.refresh(company)
+        return {"status": "updated", "company": {"id": company.id, "name": company.name, "active": company.active}}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
 
 @router.get("/companies")
-def list_companies(
-    current_admin: User = Depends(require_xvond_admin),
-):
+def list_companies(current_admin: User = Depends(require_xvond_admin)):
     db = SessionLocal()
-
     try:
-        companies = (
-            db.query(Company)
-            .order_by(Company.id.asc())
-            .all()
-        )
-
-        return {
-            "companies": [
-                {
-                    "id": company.id,
-                    "name": company.name,
-                    "active": company.active,
-                    "created_at": company.created_at,
-                }
-                for company in companies
-            ]
-        }
-
+        companies = db.query(Company).order_by(Company.id.asc()).all()
+        return {"companies": [{"id": company.id, "name": company.name, "active": company.active, "created_at": company.created_at} for company in companies]}
     finally:
         db.close()
