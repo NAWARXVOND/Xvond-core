@@ -9,11 +9,14 @@ from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.billing.cycle import _add_month
+from backend.app.modules.billing.models import Plan, Subscription
 from backend.app.modules.billing.service_limits import service_limits
 from backend.app.modules.billing.service_models import ServicePlan, ServiceSubscription
 from backend.app.modules.solutions.catalog import PACKAGE_TIERS, SERVICE_CATALOG
 
 router = APIRouter(prefix="/admin/service-billing", tags=["Xvond Admin - Service Billing"])
+
+RUNTIME_BRIDGE_PLAN = "Xvond Service Billing Runtime"
 
 
 class ServicePlanInput(BaseModel):
@@ -40,6 +43,43 @@ def plan_data(item):
         "limits": item.limits,
         "enabled": item.enabled,
     }
+
+
+def ensure_runtime_bridge(db, company_id: int):
+    """Keep legacy runtime guards compatible while service billing replaces them.
+
+    Runtime access still contains the original umbrella-subscription check. This
+    internal zero-price unlimited plan is never sold to customers; per-service
+    ServiceSubscription remains the real entitlement and limit source.
+    """
+    bridge_plan = db.query(Plan).filter(Plan.name == RUNTIME_BRIDGE_PLAN).first()
+    if bridge_plan is None:
+        bridge_plan = Plan(
+            name=RUNTIME_BRIDGE_PLAN,
+            price=Decimal("0"),
+            agent_limit=0,
+            token_limit=0,
+            channel_limit=0,
+            enabled=True,
+        )
+        db.add(bridge_plan)
+        db.flush()
+
+    legacy = db.query(Subscription).filter(
+        Subscription.company_id == company_id
+    ).first()
+    if legacy is None:
+        legacy = Subscription(
+            company_id=company_id,
+            plan_id=bridge_plan.id,
+            status="active",
+            started_at=datetime.utcnow(),
+        )
+        db.add(legacy)
+    elif legacy.status != "active":
+        legacy.status = "active"
+        legacy.started_at = datetime.utcnow()
+    return legacy
 
 
 @router.get("/plans")
@@ -106,6 +146,9 @@ def subscribe_service(
         ).first()
         if plan is None:
             raise HTTPException(status_code=404, detail="Service plan not found")
+
+        ensure_runtime_bridge(db, company_id)
+
         now = datetime.utcnow()
         item = db.query(ServiceSubscription).filter(
             ServiceSubscription.company_id == company_id,
