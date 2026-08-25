@@ -31,6 +31,27 @@ def _enabled_actions(config: dict | None) -> dict:
     }
 
 
+def _operation_config_ready(action: dict) -> bool:
+    destination = action.get("destination") or {}
+    destination_type = str(destination.get("type") or "unconfigured").strip()
+    if destination_type == "unconfigured":
+        return False
+    if destination_type == "integration" and not destination.get("integration_id"):
+        return False
+
+    availability = action.get("availability") or {}
+    mode = str(availability.get("mode") or "none").strip()
+    if mode == "xvond_schedule":
+        schedule = availability.get("schedule") or {}
+        if not availability.get("date_field") or not availability.get("time_field"):
+            return False
+        if not schedule.get("weekdays") or not schedule.get("start") or not schedule.get("end"):
+            return False
+    if mode == "integration" and destination_type != "integration":
+        return False
+    return True
+
+
 def _field_list(action: dict) -> list[str]:
     raw = action.get("fields") or action.get("required_fields") or []
     result = []
@@ -128,6 +149,16 @@ def _action_module_enabled(db, company_id: int, config: dict, action_type: str) 
     return row is not None
 
 
+def _action_runtime_ready(db, company_id: int, config: dict, action_type: str) -> bool:
+    action = ((config or {}).get("actions") or {}).get(action_type)
+    return bool(
+        isinstance(action, dict)
+        and action.get("enabled", True)
+        and _operation_config_ready(action)
+        and _action_module_enabled(db, company_id, config, action_type)
+    )
+
+
 class ToolExecutor:
     def __init__(self):
         register_builtin_tools()
@@ -146,16 +177,18 @@ class ToolExecutor:
             if assignment.tool_name == "action_request":
                 generic_config = reveal_config(assignment.config) or {}
                 break
+
         generic_actions = _enabled_actions(generic_config)
         if company_id is not None:
             generic_actions = {
                 key: action
                 for key, action in generic_actions.items()
-                if _action_module_enabled(db, company_id, generic_config, key)
+                if _action_runtime_ready(db, company_id, generic_config, key)
             }
             if generic_config.get("actions"):
                 generic_config = dict(generic_config)
                 generic_config["actions"] = generic_actions
+
         generic_active = bool(generic_actions)
         allows_handoff = any(
             str((action.get("destination") or {}).get("type") or "") == "human_handoff"
@@ -217,12 +250,12 @@ class ToolExecutor:
         actual_arguments = dict(arguments or {})
         if tool_name == "action_request":
             action_type = str(actual_arguments.get("action_type") or "").strip()
-            if not action_type or not _action_module_enabled(db, company_id, config, action_type):
+            if not action_type or not _action_runtime_ready(db, company_id, config, action_type):
                 return {
                     "success": False,
                     "tool": tool_name,
                     "data": None,
-                    "error": "This business capability is not enabled for the company",
+                    "error": "This business operation is not fully configured and active for the company",
                 }
 
         approval_required = tool_requires_approval(tool_name, config)
