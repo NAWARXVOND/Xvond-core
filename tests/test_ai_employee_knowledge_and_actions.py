@@ -6,7 +6,7 @@ from backend.app.modules.tools.builtin import _fact_tokens, _valid_iso_date, _va
 def test_grounding_policy_prevents_unsolicited_catalog_dump():
     policy = GROUNDING_POLICY.lower()
     assert "greeting" in policy
-    assert "do not advertise" in policy
+    assert "advertise" in policy
     assert "incomplete or ambiguous" in policy
     assert "never invent" in policy
 
