@@ -1,3 +1,13 @@
+let xvondAutomationDraftSteps = [];
+
+const XVOND_SERVICE_LABELS = {
+    ai_agents: "AI Agents",
+    automation: "Automation",
+    analytics: "Data & Analytics",
+    integrations: "Integrations",
+};
+
+
 function installCompanyWorkspace() {
     document.querySelectorAll('.sidebar .nav-item').forEach(button => {
         const action = button.getAttribute('onclick') || '';
@@ -8,21 +18,28 @@ function installCompanyWorkspace() {
 }
 
 
-function serviceCard(title, description, action, statusText = 'Configure') {
+function serviceCard(title, description, action) {
     return `
         <div class="agent-card" style="min-height:180px;display:flex;flex-direction:column;justify-content:space-between">
             <div>
                 <h3>${escapeAdmin(title)}</h3>
                 <p>${escapeAdmin(description)}</p>
             </div>
-            <button onclick="${action}">${escapeAdmin(statusText)}</button>
+            <button onclick="${action}">Open</button>
         </div>
     `;
 }
 
 
 async function openCompany(companyId) {
-    const data = await api(`/admin/company-view/${companyId}`);
+    const [data, billing] = await Promise.all([
+        api(`/admin/company-view/${companyId}`),
+        api(`/admin/service-billing/companies/${companyId}`).catch(() => ({services: []})),
+    ]);
+
+    const subscriptions = new Map(
+        (billing.services || []).map(item => [item.service_code, item])
+    );
 
     document.querySelectorAll('.page').forEach(item => item.classList.add('hidden'));
     document.getElementById('page-company-detail').classList.remove('hidden');
@@ -33,7 +50,7 @@ async function openCompany(companyId) {
         <div class="company-header">
             <div>
                 <h2>${escapeAdmin(data.company.name)}</h2>
-                <p>Build and operate this customer from one workspace.</p>
+                <p>Everything for this customer is managed here.</p>
             </div>
             <span class="status ${data.company.active ? 'status-active' : 'status-inactive'}">
                 ${data.company.active ? 'Active' : 'Inactive'}
@@ -50,38 +67,33 @@ async function openCompany(companyId) {
         <div class="panel detail-section">
             <div class="section-header">
                 <div>
-                    <h3>Customer Services</h3>
-                    <p>Only the four services Xvond configures from the platform.</p>
+                    <h3>Services</h3>
+                    <p>Choose the service you want to build or manage for this customer.</p>
                 </div>
+                <button class="table-button" onclick="openServiceSubscriptions(${companyId})">Plans & Limits</button>
             </div>
             <div class="agent-grid">
                 ${serviceCard(
-                    'AI Agents',
-                    'Customer service, sales, booking and order agents across WhatsApp, website and voice.',
+                    `AI Agents${servicePlanSuffix(subscriptions.get('ai_agents'))}`,
+                    'Customer service, sales, booking and order agents on WhatsApp, website and voice.',
                     `openAgentsWorkspace(${companyId})`
                 )}
                 ${serviceCard(
-                    'Automation',
-                    'Build repeatable workflows triggered manually, by event, schedule or webhook.',
+                    `Automation${servicePlanSuffix(subscriptions.get('automation'))}`,
+                    'Create business workflows from a trigger to actions without rebuilding the project.',
                     `openAutomationWorkspace(${companyId})`
                 )}
                 ${serviceCard(
-                    'Data & Analytics',
-                    'Connect business data sources and configure dashboards and AI analysis.',
+                    `Data & Analytics${servicePlanSuffix(subscriptions.get('analytics'))}`,
+                    'Connect business data sources, dashboards and AI analysis.',
                     `openAnalyticsWorkspace(${companyId})`
                 )}
                 ${serviceCard(
-                    'Integrations',
-                    'Connect POS, CRM, ERP, calendars, APIs and external business systems.',
+                    `Integrations${servicePlanSuffix(subscriptions.get('integrations'))}`,
+                    'Connect POS, CRM, ERP, calendars, APIs and other business systems.',
                     `openCompanyService('integrations-service', ${companyId})`
                 )}
             </div>
-        </div>
-
-        <div class="panel detail-section" style="margin-top:20px">
-            <h3>Subscription & Usage</h3>
-            <p>Monthly service plans, limits and usage are managed for this company.</p>
-            <button onclick="openCompanyOperation('billing-service', ${companyId})">Manage Subscription</button>
         </div>
 
         <div id="company-production-status" class="panel detail-section" style="margin-top:20px">
@@ -95,8 +107,87 @@ async function openCompany(companyId) {
 }
 
 
+function servicePlanSuffix(subscription) {
+    if (!subscription) return ' · No plan';
+    return ` · ${subscription.plan?.name || subscription.plan?.tier || 'Active'}`;
+}
+
+
 function showWorkspaceModal(title, body) {
     openModal(title, `<div id="workspace-modal-content">${body}</div>`);
+}
+
+
+async function openServiceSubscriptions(companyId) {
+    const [plansData, currentData] = await Promise.all([
+        api('/admin/service-billing/plans'),
+        api(`/admin/service-billing/companies/${companyId}`),
+    ]);
+
+    const plans = plansData.plans || [];
+    const current = new Map((currentData.services || []).map(x => [x.service_code, x]));
+
+    showWorkspaceModal('Plans & Monthly Limits', `
+        <p>Select one monthly plan for each service the customer buys.</p>
+        ${Object.entries(XVOND_SERVICE_LABELS).map(([serviceCode, label]) => {
+            const servicePlans = plans.filter(plan => plan.service_code === serviceCode && plan.enabled);
+            const subscription = current.get(serviceCode);
+            return `
+                <div class="agent-card" style="margin-bottom:12px">
+                    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+                        <div>
+                            <h3>${escapeAdmin(label)}</h3>
+                            <div class="meta">
+                                ${subscription
+                                    ? `Current: ${escapeAdmin(subscription.plan?.name || subscription.plan?.tier || '')} · ${escapeAdmin(subscription.status)}`
+                                    : 'Not subscribed'}
+                            </div>
+                            ${subscription ? renderUsageSummary(subscription.usage || {}) : ''}
+                        </div>
+                    </div>
+                    <div class="form-row" style="margin-top:12px">
+                        <select id="service-plan-${serviceCode}">
+                            <option value="">Select plan</option>
+                            ${servicePlans.map(plan => `
+                                <option value="${plan.id}" ${subscription?.plan?.id === plan.id ? 'selected' : ''}>
+                                    ${escapeAdmin(plan.name)} · ${escapeAdmin(plan.monthly_price)} ${escapeAdmin(plan.currency)} / month
+                                </option>
+                            `).join('')}
+                        </select>
+                        <button onclick="applyServicePlan(${companyId},'${serviceCode}')">Apply</button>
+                    </div>
+                    ${servicePlans.length ? '' : '<p class="meta">No package has been created for this service yet.</p>'}
+                </div>
+            `;
+        }).join('')}
+    `);
+}
+
+
+function renderUsageSummary(usage) {
+    const rows = Object.entries(usage || {});
+    if (!rows.length) return '';
+    return `<div class="meta" style="margin-top:8px">${rows.map(([metric, item]) =>
+        `${escapeAdmin(metric)}: ${escapeAdmin(item.used)} / ${escapeAdmin(item.limit)}`
+    ).join(' · ')}</div>`;
+}
+
+
+async function applyServicePlan(companyId, serviceCode) {
+    const planId = Number(document.getElementById(`service-plan-${serviceCode}`).value);
+    if (!planId) {
+        alert('Select a plan first.');
+        return;
+    }
+    try {
+        await api(`/admin/service-billing/companies/${companyId}/services/${serviceCode}`, {
+            method: 'PUT',
+            body: JSON.stringify({plan_id: planId}),
+        });
+        await openServiceSubscriptions(companyId);
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
 
@@ -105,7 +196,7 @@ async function openAgentsWorkspace(companyId) {
     const agents = data.agents || [];
     showWorkspaceModal('AI Agents', `
         <div class="section-header">
-            <div><h3>Agents</h3><p>Create the employee, then configure knowledge, tools and channels.</p></div>
+            <div><h3>Agents</h3><p>Create the employee, then give it knowledge, abilities and channels.</p></div>
             <button onclick="closeModal();openCreateAgent(${companyId})">+ New Agent</button>
         </div>
         ${agents.length ? agents.map(agent => `
@@ -113,9 +204,9 @@ async function openAgentsWorkspace(companyId) {
                 <strong>${escapeAdmin(agent.name)}</strong>
                 <div class="meta">${escapeAdmin(agent.provider)} / ${escapeAdmin(agent.model)}</div>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-                    <button class="table-button" onclick="closeModal();openEditAgent(${companyId},${agent.id})">Agent</button>
+                    <button class="table-button" onclick="closeModal();openEditAgent(${companyId},${agent.id})">Settings</button>
                     <button class="table-button" onclick="closeModal();openCompanyService('knowledge',${companyId})">Knowledge</button>
-                    <button class="table-button" onclick="closeModal();openCompanyService('tools-service',${companyId})">Tools</button>
+                    <button class="table-button" onclick="closeModal();openCompanyService('tools-service',${companyId})">Abilities</button>
                     <button class="table-button" onclick="closeModal();openCompanyService('channels-service',${companyId})">Channels</button>
                 </div>
             </div>
@@ -129,13 +220,13 @@ async function openAutomationWorkspace(companyId) {
     const workflows = data.workflows || [];
     showWorkspaceModal('Automation', `
         <div class="section-header">
-            <div><h3>Workflows</h3><p>Trigger → Steps → Actions.</p></div>
+            <div><h3>Workflows</h3><p>Each workflow is Trigger → Steps → Result.</p></div>
             <button onclick="openNewAutomation(${companyId})">+ New Workflow</button>
         </div>
         ${workflows.length ? workflows.map(item => `
             <div class="agent-card" style="margin-bottom:10px">
                 <strong>${escapeAdmin(item.name)}</strong>
-                <div class="meta">Trigger: ${escapeAdmin(item.trigger_type)} · Steps: ${(item.steps || []).length} · ${item.enabled ? 'Enabled' : 'Disabled'}</div>
+                <div class="meta">${escapeAdmin(item.trigger_type)} · ${(item.steps || []).length} steps · ${item.enabled ? 'Enabled' : 'Disabled'}</div>
             </div>
         `).join('') : '<p>No automations configured.</p>'}
     `);
@@ -143,36 +234,96 @@ async function openAutomationWorkspace(companyId) {
 
 
 function openNewAutomation(companyId) {
+    xvondAutomationDraftSteps = [];
     showWorkspaceModal('New Automation', `
-        <div class="form-group"><label>Name</label><input id="automation-name"></div>
-        <div class="form-group"><label>Trigger</label>
+        <div class="form-group"><label>Workflow name</label><input id="automation-name" placeholder="Process supplier invoice"></div>
+        <div class="form-group"><label>Starts when</label>
             <select id="automation-trigger">
-                <option value="manual">Manual</option>
-                <option value="webhook">Webhook</option>
-                <option value="schedule">Schedule</option>
-                <option value="event">Business Event</option>
+                <option value="manual">Run manually</option>
+                <option value="webhook">Webhook received</option>
+                <option value="schedule">On a schedule</option>
+                <option value="event">Business event happens</option>
             </select>
         </div>
-        <div class="form-group"><label>Steps JSON</label><textarea id="automation-steps" rows="10">[]</textarea></div>
+        <div class="panel" style="margin:15px 0">
+            <h3>Steps</h3>
+            <div id="automation-step-list"><p>No steps yet.</p></div>
+            <div class="form-row" style="margin-top:12px">
+                <select id="automation-step-type">
+                    <option value="ai">AI task</option>
+                    <option value="integration">Use integration</option>
+                    <option value="tool">Business action</option>
+                    <option value="condition">Condition</option>
+                    <option value="webhook">Send webhook</option>
+                    <option value="transform">Transform data</option>
+                </select>
+                <input id="automation-step-label" placeholder="What should this step do?">
+                <button type="button" onclick="addAutomationDraftStep()">Add step</button>
+            </div>
+        </div>
         <button class="modal-submit" onclick="saveAutomation(${companyId})">Create Workflow</button>
     `);
 }
 
 
+function addAutomationDraftStep() {
+    const type = document.getElementById('automation-step-type').value;
+    const label = document.getElementById('automation-step-label').value.trim();
+    if (!label) {
+        alert('Describe the step first.');
+        return;
+    }
+    xvondAutomationDraftSteps.push({type, label});
+    document.getElementById('automation-step-label').value = '';
+    renderAutomationDraftSteps();
+}
+
+
+function renderAutomationDraftSteps() {
+    const target = document.getElementById('automation-step-list');
+    if (!target) return;
+    target.innerHTML = xvondAutomationDraftSteps.length
+        ? xvondAutomationDraftSteps.map((step, index) => `
+            <div class="agent-card" style="margin:8px 0;padding:10px">
+                <strong>${index + 1}. ${escapeAdmin(step.label)}</strong>
+                <span class="meta">${escapeAdmin(step.type)}</span>
+                <button class="table-button" style="float:right" onclick="removeAutomationDraftStep(${index})">Remove</button>
+            </div>
+        `).join('')
+        : '<p>No steps yet.</p>';
+}
+
+
+function removeAutomationDraftStep(index) {
+    xvondAutomationDraftSteps.splice(index, 1);
+    renderAutomationDraftSteps();
+}
+
+
 async function saveAutomation(companyId) {
+    const name = document.getElementById('automation-name').value.trim();
+    if (!name) {
+        alert('Workflow name is required.');
+        return;
+    }
+    if (!xvondAutomationDraftSteps.length) {
+        alert('Add at least one step.');
+        return;
+    }
     try {
-        const steps = JSON.parse(document.getElementById('automation-steps').value || '[]');
         await api(`/admin/automation/companies/${companyId}`, {
             method: 'POST',
             body: JSON.stringify({
-                name: document.getElementById('automation-name').value,
+                name,
                 trigger_type: document.getElementById('automation-trigger').value,
                 trigger_config: {},
-                steps,
+                steps: xvondAutomationDraftSteps,
             }),
         });
         await openAutomationWorkspace(companyId);
-    } catch (error) { alert(error.message); }
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
 
@@ -180,15 +331,18 @@ async function openAnalyticsWorkspace(companyId) {
     const data = await api(`/admin/analytics-builder/companies/${companyId}`);
     showWorkspaceModal('Data & Analytics', `
         <div class="section-header">
-            <div><h3>Data Sources</h3><p>Sources connected to this customer's analytics workspace.</p></div>
+            <div><h3>Data Sources</h3><p>Connect the data this customer wants Xvond to analyze.</p></div>
             <button onclick="openNewAnalyticsSource(${companyId})">+ Data Source</button>
         </div>
         ${(data.sources || []).length ? data.sources.map(item => `
             <div class="agent-card" style="margin-bottom:10px"><strong>${escapeAdmin(item.name)}</strong><div class="meta">${escapeAdmin(item.source_type)}</div></div>
         `).join('') : '<p>No data sources.</p>'}
-        <div class="section-header" style="margin-top:20px"><div><h3>Dashboards</h3></div><button onclick="openNewAnalyticsDashboard(${companyId})">+ Dashboard</button></div>
+        <div class="section-header" style="margin-top:20px">
+            <div><h3>Dashboards</h3><p>Choose which business metrics should be visible.</p></div>
+            <button onclick="openNewAnalyticsDashboard(${companyId})">+ Dashboard</button>
+        </div>
         ${(data.dashboards || []).length ? data.dashboards.map(item => `
-            <div class="agent-card" style="margin-bottom:10px"><strong>${escapeAdmin(item.name)}</strong><div class="meta">Metrics: ${(item.metrics || []).length}</div></div>
+            <div class="agent-card" style="margin-bottom:10px"><strong>${escapeAdmin(item.name)}</strong><div class="meta">${(item.metrics || []).map(m => escapeAdmin(m.name || m)).join(' · ')}</div></div>
         `).join('') : '<p>No dashboards.</p>'}
     `);
 }
@@ -196,8 +350,16 @@ async function openAnalyticsWorkspace(companyId) {
 
 function openNewAnalyticsSource(companyId) {
     showWorkspaceModal('New Data Source', `
-        <div class="form-group"><label>Name</label><input id="analytics-source-name"></div>
-        <div class="form-group"><label>Type</label><select id="analytics-source-type"><option value="integration">Integration</option><option value="database">Database</option><option value="csv">CSV</option><option value="api">API</option><option value="manual">Manual</option></select></div>
+        <div class="form-group"><label>Name</label><input id="analytics-source-name" placeholder="Sales data"></div>
+        <div class="form-group"><label>Source type</label>
+            <select id="analytics-source-type">
+                <option value="integration">Connected system</option>
+                <option value="database">Database</option>
+                <option value="csv">CSV file</option>
+                <option value="api">API</option>
+                <option value="manual">Manual data</option>
+            </select>
+        </div>
         <button class="modal-submit" onclick="saveAnalyticsSource(${companyId})">Add Source</button>
     `);
 }
@@ -214,22 +376,29 @@ async function saveAnalyticsSource(companyId) {
             }),
         });
         await openAnalyticsWorkspace(companyId);
-    } catch (error) { alert(error.message); }
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
 
 function openNewAnalyticsDashboard(companyId) {
     showWorkspaceModal('New Dashboard', `
-        <div class="form-group"><label>Name</label><input id="analytics-dashboard-name"></div>
-        <div class="form-group"><label>Metrics JSON</label><textarea id="analytics-dashboard-metrics" rows="8">[]</textarea></div>
+        <div class="form-group"><label>Dashboard name</label><input id="analytics-dashboard-name" placeholder="Management overview"></div>
+        <div class="form-group"><label>Metrics</label><input id="analytics-dashboard-metrics" placeholder="Sales, Orders, Conversion rate"></div>
+        <p class="meta">Separate metric names with commas.</p>
         <button class="modal-submit" onclick="saveAnalyticsDashboard(${companyId})">Create Dashboard</button>
     `);
 }
 
 
 async function saveAnalyticsDashboard(companyId) {
+    const metrics = document.getElementById('analytics-dashboard-metrics').value
+        .split(',')
+        .map(value => value.trim())
+        .filter(Boolean)
+        .map(name => ({name}));
     try {
-        const metrics = JSON.parse(document.getElementById('analytics-dashboard-metrics').value || '[]');
         await api(`/admin/analytics-builder/companies/${companyId}/dashboards`, {
             method: 'POST',
             body: JSON.stringify({
@@ -239,7 +408,9 @@ async function saveAnalyticsDashboard(companyId) {
             }),
         });
         await openAnalyticsWorkspace(companyId);
-    } catch (error) { alert(error.message); }
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
 
