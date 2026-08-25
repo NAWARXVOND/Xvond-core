@@ -6,9 +6,11 @@ from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.tools.models import AgentToolAssignment
+from backend.app.modules.tools.business_models import ActionRequest
 
 router = APIRouter(prefix="/admin/agent-actions", tags=["Xvond Admin - Agent Actions"])
 VALID_MODES = {"disabled", "xvond_internal", "human_handoff"}
+VALID_REQUEST_STATUSES = {"pending_human", "in_progress", "completed", "cancelled"}
 
 class ActionSettings(BaseModel):
     booking_mode: str = "disabled"
@@ -17,6 +19,9 @@ class ActionSettings(BaseModel):
     order_fields: list[str] = Field(default_factory=list)
     lead_enabled: bool = True
     lead_fields: list[str] = Field(default_factory=lambda:["name","phone"])
+
+class RequestStatusUpdate(BaseModel):
+    status: str
 
 
 def _assignment(db, agent_id, name):
@@ -68,4 +73,25 @@ def update_actions(agent_id:int,data:ActionSettings,current_admin:User=Depends(r
         db.commit();return {"status":"updated"}
     except HTTPException:db.rollback();raise
     except Exception:db.rollback();raise
+    finally:db.close()
+
+@router.get("/companies/{company_id}/requests")
+def list_requests(company_id:int,agent_id:int|None=None,current_admin:User=Depends(require_xvond_admin)):
+    db=SessionLocal()
+    try:
+        q=db.query(ActionRequest).filter(ActionRequest.company_id==company_id)
+        if agent_id is not None:q=q.filter(ActionRequest.agent_id==agent_id)
+        items=q.order_by(ActionRequest.id.desc()).limit(500).all()
+        return {"requests":[{"id":x.id,"agent_id":x.agent_id,"conversation_id":x.conversation_id,"action_type":x.action_type,"details":x.details,"summary":x.summary,"status":x.status,"created_at":x.created_at} for x in items]}
+    finally:db.close()
+
+@router.patch("/requests/{request_id}")
+def update_request_status(request_id:int,data:RequestStatusUpdate,current_admin:User=Depends(require_xvond_admin)):
+    if data.status not in VALID_REQUEST_STATUSES:raise HTTPException(400,"Invalid request status")
+    db=SessionLocal()
+    try:
+        item=db.query(ActionRequest).filter(ActionRequest.id==request_id).first()
+        if not item:raise HTTPException(404,"Action request not found")
+        item.status=data.status;db.commit();return {"status":"updated"}
+    except HTTPException:db.rollback();raise
     finally:db.close()
