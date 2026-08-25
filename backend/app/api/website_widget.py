@@ -44,6 +44,25 @@ def _embed(channel_id: int) -> str:
     return f'<script src="{src}" async></script>'
 
 
+def _useful_business_knowledge(document: KnowledgeDocument) -> bool:
+    content = (document.content or "").strip()
+    if len(content) < 20:
+        return False
+    if document.source_type != "business_profile":
+        return True
+    # A company profile becomes sufficient only when it contains substantive
+    # operating facts, not merely a company name/type placeholder.
+    markers = (
+        "Description:",
+        "Working Hours:",
+        "Locations / Branches:",
+        "Services:",
+        "Policies:",
+        "Business Rules:",
+    )
+    return len(content) >= 80 and any(marker in content for marker in markers)
+
+
 def _ready(db, channel: AgentChannel) -> list[str]:
     blockers = []
     agent = db.query(AIAgent).filter(
@@ -73,7 +92,7 @@ def _ready(db, channel: AgentChannel) -> list[str]:
         )
         .all()
     )
-    if not any(len((doc.content or "").strip()) >= 20 and doc.source_type != "business_profile" for doc in docs):
+    if not any(_useful_business_knowledge(doc) for doc in docs):
         blockers.append("Add real business knowledge before activating Website Chat")
     return blockers
 
@@ -124,7 +143,6 @@ def configure(agent_id: int, data: WebsiteSetup, current_admin: User = Depends(r
         if channel:
             old = reveal_config(channel.config) or {}
             config["widget_key"] = old.get("widget_key") or secrets.token_urlsafe(32)
-            # Preserve shared employee_setup if this channel already contains it.
             if isinstance(old.get("employee_setup"), dict):
                 config["employee_setup"] = old["employee_setup"]
             channel.config = merge_config(channel.config, config)
