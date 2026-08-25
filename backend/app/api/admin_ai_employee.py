@@ -12,7 +12,7 @@ from backend.app.modules.integrations.models import CompanyIntegration
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeChunk, KnowledgeDocument
 from backend.app.modules.knowledge.service import KnowledgeService
 from backend.app.modules.providers.models import AIModelRecord, AIProviderRecord, CompanyAIProfile
-from backend.app.modules.tools.models import AgentToolAssignment, ToolApprovalRequest
+from backend.app.modules.tools.models import AgentToolAssignment
 router=APIRouter(prefix="/admin/ai-employees",tags=["Xvond Admin - AI Employees"]);knowledge_service=KnowledgeService()
 class AIEmployeeCreate(BaseModel):
  channel:str="whatsapp";name:str|None=None;business_name:str|None=None;business_type:str|None=None;business_description:str|None=None;working_hours:str|None=None;reply_language:str="auto";business_information:str|None=None;website:str|None=None;booking_system:str|None=None;order_system:str|None=None;other_system:str|None=None;monthly_usage_limit:int|None=Field(default=None,ge=1);instructions:str|None=None;whatsapp:dict=Field(default_factory=dict)
@@ -23,14 +23,31 @@ def _ensure_module(db,c,n):
  if r is None:r=CompanyModule(company_id=c,module_name=n,enabled=True);db.add(r)
  else:r.enabled=True
  return r
+def _assign_tool(db,agent_id,name,enabled=True,config=None):
+ r=db.query(AgentToolAssignment).filter(AgentToolAssignment.agent_id==agent_id,AgentToolAssignment.tool_name==name).first()
+ if r:r.enabled=enabled;r.config=config or {}
+ else:db.add(AgentToolAssignment(agent_id=agent_id,tool_name=name,enabled=enabled,config=config or {}))
+def _sync_capabilities(db,agent_id,data):
+ # Handoff is always available. Booking/order exist only when that capability is configured.
+ _assign_tool(db,agent_id,"human_handoff",True,{"approval_required":False})
+ _assign_tool(db,agent_id,"lead",True,{"approval_required":False})
+ _assign_tool(db,agent_id,"booking",bool(_clean(data.booking_system)),{"approval_required":False})
+ _assign_tool(db,agent_id,"order",bool(_clean(data.order_system)),{"approval_required":False})
 def _select_model(db,c):
  p=db.query(CompanyAIProfile).filter(CompanyAIProfile.company_id==c).first()
  if p and p.default_provider and p.default_model:return p.default_provider,p.default_model
  row=db.query(AIModelRecord,AIProviderRecord).join(AIProviderRecord,AIProviderRecord.name==AIModelRecord.provider_name).filter(AIModelRecord.enabled.is_(True),AIProviderRecord.enabled.is_(True)).order_by(AIProviderRecord.priority.asc(),AIModelRecord.id.asc()).first()
  if not row:raise HTTPException(400,"No enabled AI provider/model is configured")
  m,p=row;return p.name,m.model_name
-def _employee_prompt(company_name,d):return f"""You are the full-service WhatsApp AI employee for {d.business_name or company_name}. Handle questions, sales, bookings, orders and follow-ups.
-COMPANY KNOWLEDGE and connected tool results are the only source of truth for company facts. Never invent or estimate prices, services, products, availability, stock, branches, policies, offers, delivery terms, hours, booking details or order status. Preserve stored facts exactly. If a fact is absent, say you do not have it. Do not tell the customer to call a phone number for human handoff. Human takeover is controlled by the conversation system; when human mode is active, AI must not reply.
+def _employee_prompt(company_name,d):
+ booking="ENABLED" if _clean(d.booking_system) else "DISABLED"
+ orders="ENABLED" if _clean(d.order_system) else "DISABLED"
+ return f"""You are the full-service WhatsApp AI employee for {d.business_name or company_name}. Handle questions, sales and follow-ups.
+COMPANY KNOWLEDGE and connected tool results are the only source of truth for company facts. Never invent or estimate prices, services, products, availability, stock, branches, policies, offers, delivery terms, hours, booking details or order status. Preserve stored facts exactly. If a fact is absent, say you do not have it.
+BOOKING CAPABILITY: {booking}. ORDER CAPABILITY: {orders}.
+If booking is ENABLED, collect required booking details and use the booking tool; never say booked unless it succeeds. If booking is DISABLED and a customer asks to make/change/cancel a booking, tell them you will transfer them to a human employee and immediately call human_handoff. Do not pretend to book.
+If orders are ENABLED, collect required order details and use the order tool; never say an order was placed unless it succeeds. If orders are DISABLED and a customer asks to place/change/cancel an order, tell them you will transfer them to a human employee and immediately call human_handoff. Do not pretend to place an order.
+Do not give a phone number as the handoff mechanism. Human takeover is handled inside the conversation system.
 Reply language policy: {d.reply_language}. Working hours: {d.working_hours or 'not specified'}. Use real connected tools for actions and never claim an action succeeded unless its tool returned success. Additional instructions: {d.instructions or 'None.'}""".strip()
 def _doc(db,a,title):return db.query(KnowledgeDocument).join(AgentKnowledge,AgentKnowledge.document_id==KnowledgeDocument.id).filter(AgentKnowledge.agent_id==a,KnowledgeDocument.title==title).first()
 def _add_doc(db,c,a,title,stype,content):
@@ -59,7 +76,7 @@ def create_ai_employee(company_id:int,data:AIEmployeeCreate,current_admin:User=D
   if not company:raise HTTPException(404,"Company not found")
   if db.query(AgentChannel).filter(AgentChannel.company_id==company_id,AgentChannel.channel_type=="whatsapp").first():raise HTTPException(409,"This company already has a WhatsApp AI employee")
   for n in ("ai_agent","knowledge","tools"):_ensure_module(db,company_id,n)
-  provider,model=_select_model(db,company_id);a=AIAgent(company_id=company_id,name=_clean(data.name) or "WhatsApp AI Employee",description="Full-service WhatsApp AI employee",system_prompt=_employee_prompt(company.name,data),provider=provider,model=model,enabled=True);db.add(a);db.flush();_add_doc(db,company_id,a.id,"Business Profile","business_profile",_profile(company,data))
+  provider,model=_select_model(db,company_id);a=AIAgent(company_id=company_id,name=_clean(data.name) or "WhatsApp AI Employee",description="Full-service WhatsApp AI employee",system_prompt=_employee_prompt(company.name,data),provider=provider,model=model,enabled=True);db.add(a);db.flush();_sync_capabilities(db,a.id,data);_add_doc(db,company_id,a.id,"Business Profile","business_profile",_profile(company,data))
   if _clean(data.business_information):_add_doc(db,company_id,a.id,"Business Information","text",data.business_information.strip())
   if _clean(data.website):_add_doc(db,company_id,a.id,"Business Website","website_reference",f"Official website: {data.website.strip()}")
   for t,n,v in (("booking","Booking System",_clean(data.booking_system)),("orders","Orders / Store System",_clean(data.order_system)),("custom","Other Connected System",_clean(data.other_system))):
@@ -86,7 +103,7 @@ def update_settings(company_id:int,agent_id:int,data:AIEmployeeUpdate,current_ad
  try:
   company=db.query(Company).filter(Company.id==company_id).first();a=db.query(AIAgent).filter(AIAgent.id==agent_id,AIAgent.company_id==company_id).first();ch=db.query(AgentChannel).filter(AgentChannel.agent_id==agent_id,AgentChannel.company_id==company_id).first()
   if not company or not a or not ch:raise HTTPException(404,"AI employee not found")
-  a.name=_clean(data.name) or a.name;a.system_prompt=_employee_prompt(company.name,data);_upsert_doc(db,company_id,agent_id,"Business Profile","business_profile",_profile(company,data));_upsert_doc(db,company_id,agent_id,"Business Information","text",_clean(data.business_information));_upsert_doc(db,company_id,agent_id,"Business Website","website_reference",f"Official website: {data.website.strip()}" if _clean(data.website) else None)
+  a.name=_clean(data.name) or a.name;a.system_prompt=_employee_prompt(company.name,data);_sync_capabilities(db,agent_id,data);_upsert_doc(db,company_id,agent_id,"Business Profile","business_profile",_profile(company,data));_upsert_doc(db,company_id,agent_id,"Business Information","text",_clean(data.business_information));_upsert_doc(db,company_id,agent_id,"Business Website","website_reference",f"Official website: {data.website.strip()}" if _clean(data.website) else None)
   for t,n,v in (("booking","Booking System",_clean(data.booking_system)),("orders","Orders / Store System",_clean(data.order_system)),("custom","Other Connected System",_clean(data.other_system))):_sync_int(db,company_id,t,n,v)
   cfg=dict(ch.config or {});cfg["employee_setup"]=_setup(company,data);ch.config=cfg;db.commit();return {"status":"updated"}
  except HTTPException:db.rollback();raise
