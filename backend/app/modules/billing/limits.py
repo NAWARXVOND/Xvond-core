@@ -1,210 +1,116 @@
-
 from fastapi import HTTPException
 from sqlalchemy import func
 
-from backend.app.modules.ai_agent.models import (
-    AIAgent,
-    AIUsage,
-)
-
-from backend.app.modules.billing.models import (
-    Plan,
-    Subscription,
-)
-from backend.app.modules.billing.cycle import (
-    current_billing_cycle,
-)
-
-from backend.app.modules.channels.models import (
-    AgentChannel,
-)
+from backend.app.core.config.settings import settings
+from backend.app.modules.ai_agent.models import AIAgent, AIUsage
+from backend.app.modules.billing.models import Plan, Subscription
+from backend.app.modules.billing.cycle import current_billing_cycle
+from backend.app.modules.billing.service_limits import service_limits
+from backend.app.modules.channels.models import AgentChannel
 
 
 class LimitsService:
-
-    def get_company_subscription(
-        self,
-        db,
-        company_id: int,
-    ) -> Subscription | None:
-
+    def get_company_subscription(self, db, company_id: int) -> Subscription | None:
         return (
             db.query(Subscription)
             .filter(
-                Subscription.company_id
-                == company_id,
-                Subscription.status
-                == "active",
+                Subscription.company_id == company_id,
+                Subscription.status == "active",
             )
             .first()
         )
 
-    def get_company_plan(
-        self,
-        db,
-        company_id: int,
-    ) -> Plan | None:
-
-        subscription = (
-            self.get_company_subscription(
-                db,
-                company_id,
-            )
-        )
-
+    def get_company_plan(self, db, company_id: int) -> Plan | None:
+        subscription = self.get_company_subscription(db, company_id)
         if subscription is None:
             return None
-
         return (
             db.query(Plan)
             .filter(
-                Plan.id
-                == subscription.plan_id,
+                Plan.id == subscription.plan_id,
                 Plan.enabled.is_(True),
             )
             .first()
         )
 
-    def check_agent_limit(
-        self,
-        db,
-        company_id: int,
-    ):
-
-        plan = self.get_company_plan(
-            db,
-            company_id,
-        )
-
-        # Development / setup companies
-        # can still exist before subscription.
+    def check_agent_limit(self, db, company_id: int):
+        plan = self.get_company_plan(db, company_id)
         if plan is None:
             return
 
         current = (
-            db.query(
-                func.count(AIAgent.id)
-            )
+            db.query(func.count(AIAgent.id))
             .filter(
-                AIAgent.company_id
-                == company_id,
+                AIAgent.company_id == company_id,
                 AIAgent.enabled.is_(True),
             )
             .scalar()
         )
 
-        if (
-            plan.agent_limit > 0
-            and current
-            >= plan.agent_limit
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail="Agent limit reached",
-            )
+        if plan.agent_limit > 0 and current >= plan.agent_limit:
+            raise HTTPException(status_code=403, detail="Agent limit reached")
 
-    def check_channel_limit(
-        self,
-        db,
-        company_id: int,
-    ):
-
-        plan = self.get_company_plan(
-            db,
-            company_id,
-        )
-
+    def check_channel_limit(self, db, company_id: int):
+        plan = self.get_company_plan(db, company_id)
         if plan is None:
             return
 
         current = (
-            db.query(
-                func.count(
-                    AgentChannel.id
-                )
-            )
+            db.query(func.count(AgentChannel.id))
             .filter(
-                AgentChannel.company_id
-                == company_id,
-                AgentChannel.enabled
-                .is_(True),
+                AgentChannel.company_id == company_id,
+                AgentChannel.enabled.is_(True),
             )
             .scalar()
         )
 
-        if (
-            plan.channel_limit > 0
-            and current
-            >= plan.channel_limit
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail="Channel limit reached",
-            )
+        if plan.channel_limit > 0 and current >= plan.channel_limit:
+            raise HTTPException(status_code=403, detail="Channel limit reached")
 
-    def check_token_limit(
-        self,
-        db,
-        company_id: int,
-    ):
-
-        subscription = (
-            self.get_company_subscription(
+    def check_token_limit(self, db, company_id: int):
+        # The new company platform bills AI Agents as an independent
+        # monthly service. Record one request in the same transaction;
+        # failed provider calls roll this event back with the chat.
+        if settings.is_production:
+            service_limits.record(
                 db,
                 company_id,
+                "ai_agents",
+                "requests",
+                quantity=1,
             )
-        )
 
+        # Preserve the original global subscription token guard while
+        # customers are migrated to per-service plans.
+        subscription = self.get_company_subscription(db, company_id)
         if subscription is None:
             return
 
         plan = (
             db.query(Plan)
             .filter(
-                Plan.id
-                == subscription.plan_id,
+                Plan.id == subscription.plan_id,
                 Plan.enabled.is_(True),
             )
             .first()
         )
-
-        if plan is None:
+        if plan is None or plan.token_limit <= 0:
             return
 
-        if plan.token_limit <= 0:
-            return
-
-        cycle_start, _ = (
-            current_billing_cycle(
-                subscription.started_at
-            )
-        )
-
+        cycle_start, _ = current_billing_cycle(subscription.started_at)
         used = (
             db.query(
-                func.coalesce(
-                    func.sum(
-                        AIUsage.total_tokens
-                    ),
-                    0,
-                )
+                func.coalesce(func.sum(AIUsage.total_tokens), 0)
             )
             .filter(
-                AIUsage.company_id
-                == company_id,
-                AIUsage.created_at
-                >= cycle_start,
+                AIUsage.company_id == company_id,
+                AIUsage.created_at >= cycle_start,
             )
             .scalar()
         )
 
         if used >= plan.token_limit:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "AI token limit reached"
-                ),
-            )
+            raise HTTPException(status_code=403, detail="AI token limit reached")
 
 
 limits_service = LimitsService()
