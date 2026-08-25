@@ -4,6 +4,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
+from backend.app.core.config.settings import settings
 from backend.app.core.config_secrets import merge_config, reveal_config
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
@@ -39,6 +40,11 @@ Do not mention AI providers, prompts, tools, databases, internal routing or Xvon
 Do not claim an action succeeded unless the corresponding action actually succeeded.
 """
 
+def _embed(channel_id:int)->str:
+    src=f"/channels/website/{channel_id}/widget.js"
+    if settings.PUBLIC_BASE_URL:src=settings.PUBLIC_BASE_URL+src
+    return f'<script src="{src}" async></script>'
+
 def _ready(db,ch):
     blockers=[];agent=db.query(AIAgent).filter(AIAgent.id==ch.agent_id,AIAgent.company_id==ch.company_id,AIAgent.enabled.is_(True)).first()
     if not agent:blockers.append("AI employee must be active")
@@ -46,6 +52,7 @@ def _ready(db,ch):
     cfg=reveal_config(ch.config)
     if not str(cfg.get("allowed_domain") or "").strip():blockers.append("Allowed website domain is required")
     if not str(cfg.get("widget_key") or "").strip():blockers.append("Widget key is missing")
+    if settings.is_production and not settings.PUBLIC_BASE_URL:blockers.append("Xvond public API URL is not configured")
     docs=db.query(KnowledgeDocument).join(AgentKnowledge,AgentKnowledge.document_id==KnowledgeDocument.id).filter(KnowledgeDocument.company_id==ch.company_id,KnowledgeDocument.enabled.is_(True),AgentKnowledge.agent_id==ch.agent_id,AgentKnowledge.enabled.is_(True)).all()
     if not any(len((d.content or "").strip())>=20 and d.source_type!="business_profile" for d in docs):blockers.append("Add real business knowledge before activating Website Chat")
     return blockers
@@ -64,7 +71,7 @@ def get_config(agent_id:int,current_admin:User=Depends(require_xvond_admin)):
         ch=db.query(AgentChannel).filter(AgentChannel.agent_id==agent_id,AgentChannel.channel_type=="website").first()
         if not ch:return {"configured":False}
         cfg=reveal_config(ch.config);blockers=_ready(db,ch);safe={k:v for k,v in cfg.items() if k!="widget_key"}
-        return {"configured":True,"channel_id":ch.id,"enabled":ch.enabled,"ready":not blockers,"blockers":blockers,"config":safe,"embed_code":f'<script src="/channels/website/{ch.id}/widget.js" async></script>'}
+        return {"configured":True,"channel_id":ch.id,"enabled":ch.enabled,"ready":not blockers,"blockers":blockers,"config":safe,"embed_code":_embed(ch.id)}
     finally:db.close()
 
 @router.put("/admin/website-channel/agents/{agent_id}")
@@ -82,7 +89,7 @@ def configure(agent_id:int,data:WebsiteSetup,current_admin:User=Depends(require_
         else:
             config["widget_key"]=secrets.token_urlsafe(32);ch=AgentChannel(company_id=agent.company_id,agent_id=agent.id,channel_type="website",config=config,enabled=False);db.add(ch)
         _ensure_channels_module(db,agent.company_id);db.commit();db.refresh(ch);blockers=_ready(db,ch)
-        return {"status":"configured","channel_id":ch.id,"ready":not blockers,"blockers":blockers,"embed_code":f'<script src="/channels/website/{ch.id}/widget.js" async></script>'}
+        return {"status":"configured","channel_id":ch.id,"ready":not blockers,"blockers":blockers,"embed_code":_embed(ch.id)}
     finally:db.close()
 
 @router.post("/admin/website-channel/{channel_id}/activate")
