@@ -14,8 +14,24 @@ function employeeForm(d={},edit=false){
   <div class="form-group"><label>Website</label><input id="simple-website" value="${f(d.website)}"></div>
   <div class="form-group"><label>Booking</label><select id="simple-booking-system">${capabilityModeOptions(d.booking_system||"")}</select><small>Xvond Internal creates real booking records and checks availability. If disabled, booking requests are transferred to a human.</small></div>
   <div class="form-group"><label>Orders</label><select id="simple-order-system">${capabilityModeOptions(d.order_system||"")}</select><small>Xvond Internal creates real order records. Requested items must exist in Knowledge.</small></div>
-  <div class="form-group"><label>Other Connected System</label><input id="simple-other-system" value="${f(d.other_system)}"></div>
-  <div class="form-group"><label>Monthly Usage Limit</label><input id="simple-monthly-limit" type="number" min="1" value="${f(d.monthly_usage_limit)}"></div>
   <div class="form-group"><label>Special Instructions</label><textarea id="simple-employee-instructions">${f(d.instructions)}</textarea></div>
   <button class="modal-submit" onclick="${edit?`saveAIEmployeeSettings(${d.agent_id})`:`createSimpleAIEmployee()`}">${edit?"Save Changes":"Create WhatsApp AI"}</button>`
+}
+
+function collectEmployee(){
+  const value=id=>document.getElementById(id).value.trim();
+  return {
+    channel:"whatsapp",
+    name:value("simple-employee-name"),
+    business_name:value("simple-business-name"),
+    business_type:value("simple-business-type"),
+    business_description:value("simple-business-description")||null,
+    working_hours:value("simple-working-hours")||null,
+    reply_language:document.getElementById("simple-language").value,
+    business_information:value("simple-business-info")||null,
+    website:value("simple-website")||null,
+    booking_system:value("simple-booking-system")||null,
+    order_system:value("simple-order-system")||null,
+    instructions:value("simple-employee-instructions")||null
+  }
 }
