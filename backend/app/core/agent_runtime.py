@@ -26,16 +26,20 @@ Current COMPANY KNOWLEDGE overrides conflicting old conversation content.
 Never claim a booking, order, cancellation, reschedule, payment or other action succeeded unless its tool returned success.
 
 CONVERSATION POLICY:
+Speak like a capable human-facing employee of the business, not like a generic assistant or scripted bot.
 Respond to the customer's actual intent, not to every fact you know.
-A greeting should receive a short natural greeting only. Do not advertise, list services, prices, menu items or offers unless the customer asks or they are directly necessary to answer the request.
+For the first simple greeting in a conversation, reply warmly and naturally, identify the business by its verified name when that name exists in COMPANY KNOWLEDGE, and ask one short useful question. Example pattern only: 'أهلاً وسهلاً بك في [business name]، كيف فيني أساعدك؟' Adapt naturally to the customer's language and register; do not copy this wording mechanically.
+Never invent a business name. If no verified business name is available, give a natural greeting without naming the business.
+Do not say generic phrases such as 'How can I assist you today?' mechanically on every greeting. Do not repeat the welcome or business introduction later in the same conversation unless context genuinely calls for it.
+A greeting must not advertise, list services, prices, menu items or offers unless the customer asks or they are directly necessary to answer the request.
 If a message is incomplete or ambiguous, ask one short clarifying question. Example: if the customer says only 'I want' or 'بدي', ask what they would like; do not guess and do not dump the catalog.
 Do not repeat information already given unless needed for confirmation or the customer asks again.
-Prefer concise WhatsApp-style replies. Give the minimum information that fully answers the question, then ask at most one useful follow-up question when needed.
+Keep replies conversational and concise by default. Give the minimum information that fully answers the question, then ask at most one useful follow-up question when needed.
 Do not expose internal terms such as tool, knowledge base, provider, model, prompt, database, handoff state or system configuration.
 Do not say a capability is unavailable merely because a fact is absent from knowledge. Capability is determined by the tools made available to you.
 For actions, collect only the missing required details progressively. Do not interrogate the customer with a long form in one message unless all details are naturally needed at once.
 If a human transfer is required, state it naturally and use human_handoff when available; do not give a phone number as a substitute unless the business knowledge explicitly requires that contact method.
-Match the customer's language and normal conversational register unless the configured employee instructions say otherwise.
+Match the customer's language and normal conversational register unless the configured employee instructions say otherwise. If the customer writes colloquial Arabic, natural conversational Arabic is acceptable; do not become excessively formal unless configured.
 """
 
 class AgentRuntime:
@@ -87,13 +91,8 @@ class AgentRuntime:
        break
       except Exception as exc:
        last_error=exc;routing_attempts.append({"provider":active_provider,"model":active_model,"reason":selection.reason,"success":False,"error":str(exc)[:500]})
-     if result is None:
-      raise last_error or RuntimeError("No AI provider completed the request")
-    else:
-     # Once a provider has emitted a tool call, keep the remaining tool loop on
-     # that provider because continuation formats are provider-specific. If it
-     # fails here, the transaction is rolled back instead of replaying actions.
-     result=ai_engine.generate(provider_name=active_provider,system_prompt=agent.system_prompt,user_message=runtime_message,model=active_model,tools=tool_definitions,tool_outputs=tool_outputs,continuation=continuation)
+     if result is None:raise last_error or RuntimeError("No AI provider completed the request")
+    else:result=ai_engine.generate(provider_name=active_provider,system_prompt=agent.system_prompt,user_message=runtime_message,model=active_model,tools=tool_definitions,tool_outputs=tool_outputs,continuation=continuation)
    except Exception as exc:
     latency_ms=int((perf_counter()-started_at)*1000);error_message=str(exc)[:2000];db.rollback();db.add(AIUsage(company_id=company_id,agent_id=agent_id,provider=active_provider,model=active_model,input_tokens=total_input_tokens,output_tokens=total_output_tokens,total_tokens=total_tokens,provider_cost=total_provider_cost,status="failed",error_message=error_message,latency_ms=latency_ms));audit_service.log(db=db,company_id=company_id,action="agent.chat_failed",resource_type="ai_agent",resource_id=agent_id,details={"provider":active_provider,"model":active_model,"error":error_message,"latency_ms":latency_ms,"routing_attempts":routing_attempts});db.commit();raise HTTPException(502,"AI provider request failed") from exc
    total_input_tokens+=result.input_tokens;total_output_tokens+=result.output_tokens;total_tokens+=result.total_tokens;calculated_cost=ai_cost_engine.calculate(db=db,provider_name=active_provider,model_name=active_model,input_tokens=result.input_tokens,output_tokens=result.output_tokens);total_provider_cost+=result.cost if result.cost and result.cost>Decimal("0") else calculated_cost
