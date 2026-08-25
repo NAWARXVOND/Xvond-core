@@ -19,8 +19,6 @@ from backend.app.api.admin_ai_employee_files import router as admin_ai_employee_
 from backend.app.api.admin_ai_employee_knowledge import router as admin_ai_employee_knowledge_router
 from backend.app.api.admin_agent_actions import router as admin_agent_actions_router
 from backend.app.api.admin_audit import router as admin_audit_router
-from backend.app.api.admin_billing import router as admin_billing_router
-from backend.app.api.admin_business import router as admin_business_router
 from backend.app.api.admin_channels import router as admin_channels_router
 from backend.app.api.admin_company_profile import router as admin_company_profile_router
 from backend.app.api.admin_company_users import router as admin_company_users_router
@@ -42,11 +40,8 @@ from backend.app.api.admin_service_billing import router as admin_service_billin
 from backend.app.api.admin_service_plan_management import router as admin_service_plan_management_router
 from backend.app.api.public_channels import router as public_channels_router
 from backend.app.api.website_widget import router as website_widget_router
-from backend.app.api.agent_factory import router as agent_factory_router
 from backend.app.api.ai_agents import router as ai_agents_router
 from backend.app.api.company_modules import router as company_modules_router
-from backend.app.api.customer_agents import router as customer_agents_router
-from backend.app.api.customer_business import router as customer_business_router
 from backend.app.api.customer_action_requests import router as customer_action_requests_router
 from backend.app.api.customer_portal import router as customer_portal_router
 from backend.app.api.modules import router as modules_router
@@ -96,6 +91,18 @@ app.add_middleware(
 )
 
 
+def request_client_ip(request: Request) -> str:
+    if settings.TRUST_PROXY_HEADERS:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        proxy_ip = (
+            forwarded.split(",", 1)[0].strip()
+            or request.headers.get("cf-connecting-ip", "").strip()
+        )
+        if proxy_ip:
+            return proxy_ip
+    return request.client.host if request.client else "unknown"
+
+
 @app.middleware("http")
 async def request_observability(request: Request, call_next):
     request_id = safe_request_id(request.headers.get("x-request-id"))
@@ -139,33 +146,15 @@ _RATE_LIMITS = {
 }
 
 
-def request_client_ip(request: Request) -> str:
-    if settings.TRUST_PROXY_HEADERS:
-        forwarded = request.headers.get("x-forwarded-for", "")
-        proxy_ip = (
-            forwarded.split(",", 1)[0].strip()
-            or request.headers.get("cf-connecting-ip", "").strip()
-        )
-        if proxy_ip:
-            return proxy_ip
-    return request.client.host if request.client else "unknown"
-
-
 @app.middleware("http")
 async def protect_public_endpoints(request: Request, call_next):
     rule = _RATE_LIMITS.get((request.method.upper(), request.url.path))
     if rule is None and request.method.upper() == "POST":
-        if request.url.path.startswith("/ai-agents/") and request.url.path.endswith(
-            "/chat"
-        ):
+        if request.url.path.startswith("/ai-agents/") and request.url.path.endswith("/chat"):
             rule = (60, 60)
-        elif request.url.path.startswith(
-            "/channels/website/"
-        ) and request.url.path.endswith("/chat"):
+        elif request.url.path.startswith("/channels/website/") and request.url.path.endswith("/chat"):
             rule = (90, 60)
-        elif request.url.path.startswith(
-            "/channels/voice/"
-        ) and request.url.path.endswith("/turn"):
+        elif request.url.path.startswith("/channels/voice/") and request.url.path.endswith("/turn"):
             rule = (180, 60)
     if rule is not None:
         client_ip = request_client_ip(request)
@@ -191,8 +180,6 @@ for r in [
     admin_ai_employee_knowledge_router,
     admin_agent_actions_router,
     admin_audit_router,
-    admin_billing_router,
-    admin_business_router,
     admin_channels_router,
     admin_company_profile_router,
     admin_company_users_router,
@@ -212,14 +199,11 @@ for r in [
     admin_analytics_builder_router,
     admin_service_billing_router,
     admin_service_plan_management_router,
-    agent_factory_router,
     ai_agents_router,
     public_channels_router,
     website_widget_router,
     modules_router,
     company_modules_router,
-    customer_agents_router,
-    customer_business_router,
     customer_action_requests_router,
     customer_portal_router,
     usage_router,
