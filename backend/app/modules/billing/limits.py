@@ -1,43 +1,20 @@
-from fastapi import HTTPException
 from sqlalchemy import func
 
 from backend.app.core.config.settings import settings
-from backend.app.modules.ai_agent.models import AIAgent, AIUsage
-from backend.app.modules.billing.models import Plan, Subscription
-from backend.app.modules.billing.cycle import current_billing_cycle
+from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.billing.service_limits import service_limits
 from backend.app.modules.channels.models import AgentChannel
 
 
 class LimitsService:
-    def get_company_subscription(self, db, company_id: int) -> Subscription | None:
-        return (
-            db.query(Subscription)
-            .filter(
-                Subscription.company_id == company_id,
-                Subscription.status == "active",
-            )
-            .first()
-        )
+    """Compatibility facade backed only by per-service billing.
 
-    def get_company_plan(self, db, company_id: int) -> Plan | None:
-        subscription = self.get_company_subscription(db, company_id)
-        if subscription is None:
-            return None
-        return (
-            db.query(Plan)
-            .filter(
-                Plan.id == subscription.plan_id,
-                Plan.enabled.is_(True),
-            )
-            .first()
-        )
+    Legacy umbrella Plan/Subscription rows are no longer runtime authority.
+    """
 
     def check_agent_limit(self, db, company_id: int):
-        plan = self.get_company_plan(db, company_id)
-        if plan is None:
+        if not settings.is_production:
             return
-
         current = (
             db.query(func.count(AIAgent.id))
             .filter(
@@ -45,16 +22,20 @@ class LimitsService:
                 AIAgent.enabled.is_(True),
             )
             .scalar()
+            or 0
+        )
+        service_limits.check_current(
+            db,
+            company_id,
+            "ai_agents",
+            "agents",
+            current,
+            quantity=1,
         )
 
-        if plan.agent_limit > 0 and current >= plan.agent_limit:
-            raise HTTPException(status_code=403, detail="Agent limit reached")
-
     def check_channel_limit(self, db, company_id: int):
-        plan = self.get_company_plan(db, company_id)
-        if plan is None:
+        if not settings.is_production:
             return
-
         current = (
             db.query(func.count(AgentChannel.id))
             .filter(
@@ -62,55 +43,27 @@ class LimitsService:
                 AgentChannel.enabled.is_(True),
             )
             .scalar()
+            or 0
         )
-
-        if plan.channel_limit > 0 and current >= plan.channel_limit:
-            raise HTTPException(status_code=403, detail="Channel limit reached")
+        service_limits.check_current(
+            db,
+            company_id,
+            "ai_agents",
+            "channels",
+            current,
+            quantity=1,
+        )
 
     def check_token_limit(self, db, company_id: int):
-        # The new company platform bills AI Agents as an independent
-        # monthly service. Record one request in the same transaction;
-        # failed provider calls roll this event back with the chat.
-        if settings.is_production:
-            service_limits.record(
-                db,
-                company_id,
-                "ai_agents",
-                "requests",
-                quantity=1,
-            )
-
-        # Preserve the original global subscription token guard while
-        # customers are migrated to per-service plans.
-        subscription = self.get_company_subscription(db, company_id)
-        if subscription is None:
+        if not settings.is_production:
             return
-
-        plan = (
-            db.query(Plan)
-            .filter(
-                Plan.id == subscription.plan_id,
-                Plan.enabled.is_(True),
-            )
-            .first()
+        service_limits.record(
+            db,
+            company_id,
+            "ai_agents",
+            "requests",
+            quantity=1,
         )
-        if plan is None or plan.token_limit <= 0:
-            return
-
-        cycle_start, _ = current_billing_cycle(subscription.started_at)
-        used = (
-            db.query(
-                func.coalesce(func.sum(AIUsage.total_tokens), 0)
-            )
-            .filter(
-                AIUsage.company_id == company_id,
-                AIUsage.created_at >= cycle_start,
-            )
-            .scalar()
-        )
-
-        if used >= plan.token_limit:
-            raise HTTPException(status_code=403, detail="AI token limit reached")
 
 
 limits_service = LimitsService()
