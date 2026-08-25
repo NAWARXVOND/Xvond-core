@@ -1,8 +1,12 @@
+from urllib.parse import urlparse
+
+from bs4 import BeautifulSoup
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
+from backend.app.core.http_security import safe_http_request
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeChunk, KnowledgeDocument
@@ -11,29 +15,26 @@ from backend.app.modules.knowledge.service import knowledge_service
 router = APIRouter(prefix="/admin/ai-employees", tags=["Xvond Admin - AI Employee Knowledge"])
 
 ALLOWED_TYPES = {
-    "general",
-    "services_prices",
-    "menu",
-    "products",
-    "faq",
-    "policies",
-    "branches",
-    "hours",
-    "delivery_payment",
-    "booking_rules",
-    "order_rules",
-    "custom",
+    "general", "services_prices", "menu", "products", "faq", "policies",
+    "branches", "hours", "delivery_payment", "booking_rules", "order_rules", "custom",
 }
-
 PROTECTED_TITLES = {"Business Profile", "Business Information", "Business Website"}
+
 
 class KnowledgeCreate(BaseModel):
     title: str = Field(min_length=2, max_length=250)
     category: str = "custom"
     content: str = Field(min_length=2, max_length=200000)
 
+
 class KnowledgeUpdate(KnowledgeCreate):
     enabled: bool = True
+
+
+class WebsiteKnowledgeCreate(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
+    title: str | None = Field(default=None, max_length=250)
+
 
 def _agent(db, company_id: int, agent_id: int):
     agent = db.query(AIAgent).filter(AIAgent.id == agent_id, AIAgent.company_id == company_id).first()
@@ -41,26 +42,62 @@ def _agent(db, company_id: int, agent_id: int):
         raise HTTPException(404, "AI employee not found")
     return agent
 
+
 def _category(value: str) -> str:
     value = (value or "custom").strip().lower()
     if value not in ALLOWED_TYPES:
         raise HTTPException(400, "Unsupported knowledge category")
     return value
 
+
 def _owned_document(db, company_id: int, agent_id: int, document_id: int):
     row = (
         db.query(KnowledgeDocument)
         .join(AgentKnowledge, AgentKnowledge.document_id == KnowledgeDocument.id)
-        .filter(
-            KnowledgeDocument.id == document_id,
-            KnowledgeDocument.company_id == company_id,
-            AgentKnowledge.agent_id == agent_id,
-        )
+        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.company_id == company_id, AgentKnowledge.agent_id == agent_id)
         .first()
     )
     if row is None:
         raise HTTPException(404, "Knowledge item not found")
     return row
+
+
+def _duplicate_title(db, company_id: int, agent_id: int, title: str):
+    return (
+        db.query(KnowledgeDocument)
+        .join(AgentKnowledge, AgentKnowledge.document_id == KnowledgeDocument.id)
+        .filter(KnowledgeDocument.company_id == company_id, AgentKnowledge.agent_id == agent_id, KnowledgeDocument.title == title)
+        .first()
+    )
+
+
+def _create_document(db, company_id: int, agent_id: int, title: str, source_type: str, content: str):
+    if _duplicate_title(db, company_id, agent_id, title):
+        raise HTTPException(409, "A knowledge item with this title already exists")
+    doc = KnowledgeDocument(company_id=company_id, title=title, source_type=source_type, content=content, enabled=True)
+    db.add(doc)
+    db.flush()
+    chunks = knowledge_service.rebuild_document_index(db, doc)
+    db.add(AgentKnowledge(agent_id=agent_id, document_id=doc.id, enabled=True))
+    return doc, chunks
+
+
+def _html_to_business_text(html: str) -> str:
+    soup = BeautifulSoup(html or "", "html.parser")
+    for tag in soup(["script", "style", "noscript", "svg", "template"]):
+        tag.decompose()
+    lines = []
+    seen = set()
+    for line in soup.get_text("\n").splitlines():
+        value = " ".join(line.split()).strip()
+        if len(value) < 2 or value in seen:
+            continue
+        seen.add(value)
+        lines.append(value)
+        if sum(len(x) + 1 for x in lines) >= 180000:
+            break
+    return "\n".join(lines).strip()
+
 
 @router.get("/companies/{company_id}/{agent_id}/knowledge")
 def list_employee_knowledge(company_id: int, agent_id: int, current_admin: User = Depends(require_xvond_admin)):
@@ -74,23 +111,19 @@ def list_employee_knowledge(company_id: int, agent_id: int, current_admin: User 
             .order_by(KnowledgeDocument.id.asc())
             .all()
         )
-        return {
-            "items": [
-                {
-                    "id": doc.id,
-                    "title": doc.title,
-                    "category": doc.source_type,
-                    "enabled": bool(doc.enabled and link.enabled),
-                    "characters": len(doc.content or ""),
-                    "protected": doc.title in PROTECTED_TITLES,
-                    "created_at": doc.created_at,
-                    "preview": (doc.content or "")[:280],
-                }
-                for doc, link in rows
-            ]
-        }
+        return {"items": [{
+            "id": doc.id,
+            "title": doc.title,
+            "category": doc.source_type,
+            "enabled": bool(doc.enabled and link.enabled),
+            "characters": len(doc.content or ""),
+            "protected": doc.title in PROTECTED_TITLES,
+            "created_at": doc.created_at,
+            "preview": (doc.content or "")[:280],
+        } for doc, link in rows]}
     finally:
         db.close()
+
 
 @router.get("/companies/{company_id}/{agent_id}/knowledge/{document_id}")
 def get_employee_knowledge(company_id: int, agent_id: int, document_id: int, current_admin: User = Depends(require_xvond_admin)):
@@ -102,32 +135,58 @@ def get_employee_knowledge(company_id: int, agent_id: int, document_id: int, cur
     finally:
         db.close()
 
+
 @router.post("/companies/{company_id}/{agent_id}/knowledge")
 def create_employee_knowledge(company_id: int, agent_id: int, payload: KnowledgeCreate, current_admin: User = Depends(require_xvond_admin)):
     db = SessionLocal()
     try:
         _agent(db, company_id, agent_id)
-        title = payload.title.strip()
-        category = _category(payload.category)
-        content = payload.content.strip()
-        existing = (
-            db.query(KnowledgeDocument)
-            .join(AgentKnowledge, AgentKnowledge.document_id == KnowledgeDocument.id)
-            .filter(KnowledgeDocument.company_id == company_id, AgentKnowledge.agent_id == agent_id, KnowledgeDocument.title == title)
-            .first()
-        )
-        if existing:
-            raise HTTPException(409, "A knowledge item with this title already exists")
-        doc = KnowledgeDocument(company_id=company_id, title=title, source_type=category, content=content, enabled=True)
-        db.add(doc); db.flush(); knowledge_service.rebuild_document_index(db, doc)
-        db.add(AgentKnowledge(agent_id=agent_id, document_id=doc.id, enabled=True)); db.commit(); db.refresh(doc)
-        return {"status": "created", "id": doc.id}
+        doc, chunks = _create_document(db, company_id, agent_id, payload.title.strip(), _category(payload.category), payload.content.strip())
+        db.commit(); db.refresh(doc)
+        return {"status": "created", "id": doc.id, "chunks": chunks}
     except HTTPException:
         db.rollback(); raise
     except Exception:
         db.rollback(); raise
     finally:
         db.close()
+
+
+@router.post("/companies/{company_id}/{agent_id}/knowledge/url")
+def ingest_website_knowledge(company_id: int, agent_id: int, payload: WebsiteKnowledgeCreate, current_admin: User = Depends(require_xvond_admin)):
+    db = SessionLocal()
+    try:
+        _agent(db, company_id, agent_id)
+        try:
+            result = safe_http_request(
+                url=payload.url.strip(),
+                method="GET",
+                headers={"User-Agent": "XvondKnowledgeBot/1.0", "Accept": "text/html,application/xhtml+xml"},
+                timeout=20,
+                max_response_bytes=1_500_000,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        status = int(result["status_code"])
+        if 300 <= status < 400:
+            raise HTTPException(400, "Website redirects are not followed for security. Add the final destination URL instead")
+        if not 200 <= status < 300:
+            raise HTTPException(400, f"Website returned HTTP {status}")
+        content = _html_to_business_text(result.get("response") or "")
+        if len(content) < 40:
+            raise HTTPException(422, "No useful readable business text was found on this page")
+        host = urlparse(payload.url).hostname or "website"
+        title = (payload.title or f"Website: {host}").strip()
+        doc, chunks = _create_document(db, company_id, agent_id, title, "website", f"Source URL: {payload.url.strip()}\n\n{content}")
+        db.commit(); db.refresh(doc)
+        return {"status": "ingested", "id": doc.id, "title": doc.title, "characters": len(content), "chunks": chunks, "truncated": bool(result.get("truncated"))}
+    except HTTPException:
+        db.rollback(); raise
+    except Exception:
+        db.rollback(); raise
+    finally:
+        db.close()
+
 
 @router.put("/companies/{company_id}/{agent_id}/knowledge/{document_id}")
 def update_employee_knowledge(company_id: int, agent_id: int, document_id: int, payload: KnowledgeUpdate, current_admin: User = Depends(require_xvond_admin)):
@@ -137,26 +196,42 @@ def update_employee_knowledge(company_id: int, agent_id: int, document_id: int, 
         doc = _owned_document(db, company_id, agent_id, document_id)
         if doc.title in PROTECTED_TITLES:
             raise HTTPException(409, "Edit protected business setup fields from AI Employee settings")
-        doc.title = payload.title.strip(); doc.source_type = _category(payload.category); doc.content = payload.content.strip(); doc.enabled = payload.enabled
+        if doc.source_type in {"pdf", "website"}:
+            raise HTTPException(409, "Imported sources are read-only. Replace the source if its content changed")
+        duplicate = _duplicate_title(db, company_id, agent_id, payload.title.strip())
+        if duplicate and duplicate.id != document_id:
+            raise HTTPException(409, "A knowledge item with this title already exists")
+        doc.title = payload.title.strip()
+        doc.source_type = _category(payload.category)
+        doc.content = payload.content.strip()
+        doc.enabled = payload.enabled
         link = db.query(AgentKnowledge).filter(AgentKnowledge.agent_id == agent_id, AgentKnowledge.document_id == document_id).first()
-        if link: link.enabled = payload.enabled
-        knowledge_service.rebuild_document_index(db, doc); db.commit(); return {"status": "updated"}
+        if link:
+            link.enabled = payload.enabled
+        knowledge_service.rebuild_document_index(db, doc)
+        db.commit()
+        return {"status": "updated"}
     except HTTPException:
         db.rollback(); raise
     except Exception:
         db.rollback(); raise
     finally:
         db.close()
+
 
 @router.patch("/companies/{company_id}/{agent_id}/knowledge/{document_id}/toggle")
 def toggle_employee_knowledge(company_id: int, agent_id: int, document_id: int, current_admin: User = Depends(require_xvond_admin)):
     db = SessionLocal()
     try:
-        _agent(db, company_id, agent_id); doc = _owned_document(db, company_id, agent_id, document_id)
+        _agent(db, company_id, agent_id)
+        doc = _owned_document(db, company_id, agent_id, document_id)
         link = db.query(AgentKnowledge).filter(AgentKnowledge.agent_id == agent_id, AgentKnowledge.document_id == document_id).first()
-        new_value = not bool(doc.enabled and link and link.enabled); doc.enabled = new_value
-        if link: link.enabled = new_value
-        db.commit(); return {"status": "updated", "enabled": new_value}
+        new_value = not bool(doc.enabled and link and link.enabled)
+        doc.enabled = new_value
+        if link:
+            link.enabled = new_value
+        db.commit()
+        return {"status": "updated", "enabled": new_value}
     except HTTPException:
         db.rollback(); raise
     except Exception:
@@ -164,11 +239,13 @@ def toggle_employee_knowledge(company_id: int, agent_id: int, document_id: int, 
     finally:
         db.close()
 
+
 @router.delete("/companies/{company_id}/{agent_id}/knowledge/{document_id}")
 def delete_employee_knowledge(company_id: int, agent_id: int, document_id: int, current_admin: User = Depends(require_xvond_admin)):
     db = SessionLocal()
     try:
-        _agent(db, company_id, agent_id); doc = _owned_document(db, company_id, agent_id, document_id)
+        _agent(db, company_id, agent_id)
+        doc = _owned_document(db, company_id, agent_id, document_id)
         if doc.title in PROTECTED_TITLES:
             raise HTTPException(409, "Protected business setup knowledge cannot be deleted here")
         db.query(AgentKnowledge).filter(AgentKnowledge.agent_id == agent_id, AgentKnowledge.document_id == document_id).delete(synchronize_session=False)
@@ -176,7 +253,8 @@ def delete_employee_knowledge(company_id: int, agent_id: int, document_id: int, 
         if remaining is None:
             db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == document_id).delete(synchronize_session=False)
             db.delete(doc)
-        db.commit(); return {"status": "deleted"}
+        db.commit()
+        return {"status": "deleted"}
     except HTTPException:
         db.rollback(); raise
     except Exception:
