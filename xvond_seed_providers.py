@@ -1,46 +1,104 @@
+from decimal import Decimal
 
 from backend.app.core.database.connection import SessionLocal
-from backend.app.modules.providers.models import AIProviderRecord
+from backend.app.modules.providers.models import (
+    AIModelRecord,
+    AIProviderRecord,
+)
+
 
 PROVIDERS = [
     ("groq", "Groq", 5),
     ("openai", "OpenAI", 10),
-    ("groq", "Groq", 15),
     ("anthropic", "Anthropic", 20),
     ("google", "Google Gemini", 30),
     ("xai", "xAI", 40),
     ("mock", "Mock Development", 999),
 ]
 
-db = SessionLocal()
+MODELS = [
+    (
+        "groq",
+        "openai/gpt-oss-20b",
+        "GPT OSS 20B",
+        Decimal("0.075"),
+        Decimal("0.30"),
+    ),
+    (
+        "groq",
+        "openai/gpt-oss-120b",
+        "GPT OSS 120B",
+        Decimal("0.15"),
+        Decimal("0.60"),
+    ),
+]
 
-try:
-    for name, display_name, priority in PROVIDERS:
 
-        item = (
-            db.query(AIProviderRecord)
-            .filter(
-                AIProviderRecord.name == name
+def seed_provider_catalog() -> tuple[int, int]:
+    db = SessionLocal()
+    providers_seeded = 0
+    models_seeded = 0
+
+    try:
+        for name, display_name, priority in PROVIDERS:
+            item = (
+                db.query(AIProviderRecord)
+                .filter(AIProviderRecord.name == name)
+                .first()
             )
-            .first()
-        )
 
-        if item is None:
-            item = AIProviderRecord(
-                name=name,
-                display_name=display_name,
-                priority=priority,
-                enabled=True,
-            )
-            db.add(item)
+            if item is None:
+                item = AIProviderRecord(name=name)
+                db.add(item)
+                providers_seeded += 1
 
-        else:
             item.display_name = display_name
             item.priority = priority
+            item.enabled = True
 
-    db.commit()
+        db.flush()
 
-    print("XVOND PROVIDER CATALOG SEEDED")
+        for (
+            provider_name,
+            model_name,
+            display_name,
+            input_price,
+            output_price,
+        ) in MODELS:
+            item = (
+                db.query(AIModelRecord)
+                .filter(
+                    AIModelRecord.provider_name == provider_name,
+                    AIModelRecord.model_name == model_name,
+                )
+                .first()
+            )
 
-finally:
-    db.close()
+            if item is None:
+                item = AIModelRecord(
+                    provider_name=provider_name,
+                    model_name=model_name,
+                )
+                db.add(item)
+                models_seeded += 1
+
+            item.display_name = display_name
+            item.input_price_per_million = input_price
+            item.output_price_per_million = output_price
+            item.enabled = True
+
+        db.commit()
+        return providers_seeded, models_seeded
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    provider_count, model_count = seed_provider_catalog()
+    print(
+        "XVOND PROVIDER CATALOG SEEDED "
+        f"(providers={provider_count}, models={model_count})"
+    )
