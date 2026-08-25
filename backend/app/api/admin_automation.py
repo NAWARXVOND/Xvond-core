@@ -8,6 +8,7 @@ from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.automation.models import AutomationWorkflow, AutomationRun
+from backend.app.modules.automation.runtime import automation_runtime
 from backend.app.modules.billing.service_limits import service_limits
 
 router = APIRouter(prefix="/admin/automation", tags=["Xvond Admin - Automation"])
@@ -29,6 +30,10 @@ class WorkflowUpdate(BaseModel):
     trigger_config: dict | None = None
     steps: list[dict] | None = None
     enabled: bool | None = None
+
+
+class WorkflowRunInput(BaseModel):
+    input_data: dict = Field(default_factory=dict)
 
 
 def require_company(db, company_id: int):
@@ -131,6 +136,39 @@ def update_workflow(workflow_id: int, data: WorkflowUpdate, current_admin: User 
         db.commit()
         db.refresh(item)
         return serialize(item)
+    finally:
+        db.close()
+
+
+@router.post("/{workflow_id}/run")
+def run_workflow(workflow_id: int, data: WorkflowRunInput, current_admin: User = Depends(require_xvond_admin)):
+    db = SessionLocal()
+    try:
+        workflow = db.query(AutomationWorkflow).filter(
+            AutomationWorkflow.id == workflow_id
+        ).first()
+        if workflow is None:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        if settings.is_production:
+            service_limits.entitlement(db, workflow.company_id, "automation")
+        try:
+            run = automation_runtime.execute(
+                db=db,
+                company_id=workflow.company_id,
+                workflow=workflow,
+                input_data=data.input_data,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "id": run.id,
+            "workflow_id": run.workflow_id,
+            "status": run.status,
+            "output_data": run.output_data,
+            "error_message": run.error_message,
+            "created_at": run.created_at,
+            "finished_at": run.finished_at,
+        }
     finally:
         db.close()
 
