@@ -472,20 +472,18 @@ class AgentRuntime:
             status="success",
             latency_ms=int((perf_counter() - started_at) * 1000),
         )
-        db.add(usage)
-
         if settings.is_production and total_tokens > 0:
-            service_limits.record(
+            # AIUsage is the canonical token ledger. Check the new usage before
+            # adding the current AIUsage row so this request is counted exactly once.
+            service_limits.check(
                 db,
                 company_id,
                 "ai_agents",
                 "tokens",
                 quantity=total_tokens,
-                metadata={
-                    "agent_id": agent.id,
-                    "conversation_id": conversation.id,
-                },
             )
+
+        db.add(usage)
 
         audit_service.log(
             db=db,
