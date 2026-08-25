@@ -181,3 +181,11 @@ async function createSolution() {
         alert(error.message);
     }
 }
+
+(function loadCompanyWorkspaceScript() {
+    if (document.querySelector('script[data-xvond-company-workspace]')) return;
+    const script = document.createElement('script');
+    script.src = '/static/admin/company_workspace.js';
+    script.dataset.xvondCompanyWorkspace = '1';
+    document.body.appendChild(script);
+})();
