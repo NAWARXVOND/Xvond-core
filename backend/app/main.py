@@ -23,6 +23,7 @@ from backend.app.api.admin_billing import router as admin_billing_router
 from backend.app.api.admin_business import router as admin_business_router
 from backend.app.api.admin_channels import router as admin_channels_router
 from backend.app.api.admin_company_profile import router as admin_company_profile_router
+from backend.app.api.admin_company_users import router as admin_company_users_router
 from backend.app.api.admin_company_view import router as admin_company_view_router
 from backend.app.api.admin_dashboard import router as admin_dashboard_router
 from backend.app.api.admin_handoff import router as admin_handoff_router
@@ -172,6 +173,7 @@ for r in [
     admin_business_router,
     admin_channels_router,
     admin_company_profile_router,
+    admin_company_users_router,
     admin_company_view_router,
     admin_dashboard_router,
     admin_handoff_router,
