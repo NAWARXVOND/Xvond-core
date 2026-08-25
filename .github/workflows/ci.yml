@@ -2,7 +2,7 @@ name: Xvond Core CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, company-platform-v2]
   pull_request:
 
 jobs:
