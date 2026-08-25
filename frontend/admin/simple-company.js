@@ -17,9 +17,19 @@ async function openSimpleCompany(companyId) {
     document.getElementById("page-company-detail").classList.remove("hidden");
     document.getElementById("page-title").textContent = data.company.name;
     document.getElementById("company-detail").innerHTML = `
-        <div class="company-header"><div><h2>${simpleEscape(data.company.name)}</h2><p>Services provided by Xvond</p></div><span class="status ${data.company.active ? "status-active" : "status-inactive"}">${data.company.active ? "Active" : "Inactive"}</span></div>
+        <div class="company-header">
+            <div><h2>${simpleEscape(data.company.name)}</h2><p>Services provided by Xvond</p></div>
+            <div class="agent-actions"><span class="status ${data.company.active ? "status-active" : "status-inactive"}">${data.company.active ? "Active" : "Inactive"}</span><button class="table-button" onclick="setSimpleCompanyStatus(${companyId}, ${!data.company.active})">${data.company.active ? "Deactivate" : "Activate"}</button></div>
+        </div>
         <div class="panel detail-section"><div class="section-header"><div><h3>AI Employees</h3><p>Add and manage the AI employees provided to this customer.</p></div><button onclick="openAddAIEmployee(${companyId})">+ Add AI Employee</button></div>
         <div class="agent-grid">${whatsappEmployees.length ? whatsappEmployees.map(({agent, channel}) => `<div class="agent-card"><h3>WhatsApp AI</h3><div class="meta">${simpleEscape(agent.name)}</div><div class="meta">${channel.configured ? "WhatsApp connected" : "WhatsApp connection required"}</div><div class="meta">Questions · Sales · Bookings · Orders · Human handoff</div><div class="agent-actions"><button class="table-button" onclick="openWhatsAppSetup(${agent.id}, ${channel.id})">${channel.configured ? "WhatsApp Settings" : "Connect WhatsApp"}</button><button class="table-button" onclick="openAgentTestChat(${companyId}, ${agent.id})">Test</button></div></div>`).join("") : `<p>No AI employee has been added to this company yet.</p>`}</div></div>`;
+}
+
+async function setSimpleCompanyStatus(companyId, active) {
+    try {
+        await api(`/admin/companies/${companyId}/status`, {method:"PATCH", body:JSON.stringify({active})});
+        await openSimpleCompany(companyId);
+    } catch (error) { alert(error.message); }
 }
 
 function openAddAIEmployee(companyId) {
@@ -40,44 +50,17 @@ function openAddAIEmployee(companyId) {
         <div class="form-group"><label>Other Connected System (optional)</label><input id="simple-other-system" placeholder="CRM, ERP or another system"></div>
         <div class="form-group"><label>Monthly Usage Limit</label><input id="simple-monthly-limit" type="number" min="1" placeholder="Example: 5000"></div>
         <div class="form-group"><label>Special Instructions (optional)</label><textarea id="simple-employee-instructions" placeholder="Only customer-specific rules or instructions."></textarea></div>
-        <p class="meta">WhatsApp AI is full-service by default: questions, sales, bookings, orders and human handoff.</p>
-        <button class="modal-submit" onclick="createSimpleAIEmployee()">Create WhatsApp AI</button>`);
+        <p class="meta">WhatsApp AI is full-service by default: questions, sales, bookings, orders and human handoff.</p><button class="modal-submit" onclick="createSimpleAIEmployee()">Create WhatsApp AI</button>`);
 }
 
 async function createSimpleAIEmployee() {
     try {
         const value = id => document.getElementById(id).value.trim();
-        const businessName = value("simple-business-name");
-        const businessType = value("simple-business-type");
-        const description = value("simple-business-description");
-        const businessInfo = value("simple-business-info");
-        const website = value("simple-website");
-        if (!businessName) throw new Error("Business name is required");
-        if (!businessType) throw new Error("Business type is required");
-        if (!description && !businessInfo && !website) throw new Error("Add business information, a description, or a website");
+        const businessName = value("simple-business-name"); const businessType = value("simple-business-type"); const description = value("simple-business-description"); const businessInfo = value("simple-business-info"); const website = value("simple-website");
+        if (!businessName) throw new Error("Business name is required"); if (!businessType) throw new Error("Business type is required"); if (!description && !businessInfo && !website) throw new Error("Add business information, a description, or a website");
         const rawLimit = value("simple-monthly-limit");
-        await api(`/admin/ai-employees/companies/${simpleCompanyId}`, {
-            method: "POST",
-            body: JSON.stringify({
-                channel: "whatsapp",
-                name: value("simple-employee-name") || "WhatsApp AI Employee",
-                business_name: businessName,
-                business_type: businessType,
-                business_description: description || null,
-                working_hours: value("simple-working-hours") || null,
-                reply_language: document.getElementById("simple-language").value,
-                business_information: businessInfo || null,
-                website: website || null,
-                human_handoff: value("simple-handoff") || null,
-                booking_system: value("simple-booking-system") || null,
-                order_system: value("simple-order-system") || null,
-                other_system: value("simple-other-system") || null,
-                monthly_usage_limit: rawLimit ? Number(rawLimit) : null,
-                instructions: value("simple-employee-instructions") || null
-            })
-        });
-        closeModal();
-        await openSimpleCompany(simpleCompanyId);
+        await api(`/admin/ai-employees/companies/${simpleCompanyId}`, {method:"POST", body:JSON.stringify({channel:"whatsapp",name:value("simple-employee-name")||"WhatsApp AI Employee",business_name:businessName,business_type:businessType,business_description:description||null,working_hours:value("simple-working-hours")||null,reply_language:document.getElementById("simple-language").value,business_information:businessInfo||null,website:website||null,human_handoff:value("simple-handoff")||null,booking_system:value("simple-booking-system")||null,order_system:value("simple-order-system")||null,other_system:value("simple-other-system")||null,monthly_usage_limit:rawLimit?Number(rawLimit):null,instructions:value("simple-employee-instructions")||null})});
+        closeModal(); await openSimpleCompany(simpleCompanyId);
     } catch (error) { alert(error.message); }
 }
 
@@ -86,10 +69,7 @@ function openWhatsAppSetup(agentId, channelId) {
 }
 
 async function saveSimpleWhatsApp(channelId) {
-    try {
-        await api(`/admin/channels/${channelId}/whatsapp-config`, {method:"PUT", body:JSON.stringify({phone_number_id:document.getElementById("simple-wa-phone-id").value,access_token:document.getElementById("simple-wa-access-token").value,verify_token:document.getElementById("simple-wa-verify-token").value,app_secret:document.getElementById("simple-wa-app-secret").value,graph_api_version:document.getElementById("simple-wa-version").value})});
-        closeModal(); await openSimpleCompany(simpleCompanyId);
-    } catch (error) { alert(error.message); }
+    try { await api(`/admin/channels/${channelId}/whatsapp-config`, {method:"PUT", body:JSON.stringify({phone_number_id:document.getElementById("simple-wa-phone-id").value,access_token:document.getElementById("simple-wa-access-token").value,verify_token:document.getElementById("simple-wa-verify-token").value,app_secret:document.getElementById("simple-wa-app-secret").value,graph_api_version:document.getElementById("simple-wa-version").value})}); closeModal(); await openSimpleCompany(simpleCompanyId); } catch (error) { alert(error.message); }
 }
 
 const originalOpenCompany = window.openCompany;
