@@ -182,10 +182,17 @@ async function createSolution() {
     }
 }
 
-(function loadCompanyWorkspaceScript() {
+(function loadCompanyWorkspaceScripts() {
     if (document.querySelector('script[data-xvond-company-workspace]')) return;
-    const script = document.createElement('script');
-    script.src = '/static/admin/company_workspace.js';
-    script.dataset.xvondCompanyWorkspace = '1';
-    document.body.appendChild(script);
+
+    const workspace = document.createElement('script');
+    workspace.src = '/static/admin/company_workspace.js';
+    workspace.dataset.xvondCompanyWorkspace = '1';
+    workspace.onload = () => {
+        const automation = document.createElement('script');
+        automation.src = '/static/admin/company_workspace_automation.js';
+        automation.dataset.xvondCompanyWorkspaceAutomation = '1';
+        document.body.appendChild(automation);
+    };
+    document.body.appendChild(workspace);
 })();
