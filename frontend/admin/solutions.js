@@ -4,7 +4,9 @@ let solutionCompanies = [];
 async function showSolutionsPage(button = null) {
     document.querySelectorAll(".page").forEach(item => item.classList.add("hidden"));
     document.querySelectorAll(".nav-item").forEach(item => item.classList.remove("active"));
-    document.getElementById("page-solutions").classList.remove("hidden");
+    const page = document.getElementById("page-solutions");
+    if (!page) return;
+    page.classList.remove("hidden");
     if (button) button.classList.add("active");
     document.getElementById("page-title").textContent = "Company Solutions";
 
@@ -15,26 +17,30 @@ async function showSolutionsPage(button = null) {
     solutionCompanies = companiesData.companies || [];
     solutionsCatalog = catalog;
 
-    document.getElementById("solutions-company").innerHTML =
-        solutionCompanies.map(item =>
-            `<option value="${item.id}">${escapeAdmin(item.name)}</option>`
-        ).join("");
+    const companySelect = document.getElementById("solutions-company");
+    const catalogGrid = document.getElementById("service-catalog-grid");
+    if (!companySelect || !catalogGrid) return;
 
-    document.getElementById("service-catalog-grid").innerHTML =
-        catalog.services.map(item => `
-            <div class="agent">
-                <h3>${escapeAdmin(item.name)}</h3>
-                <p>${escapeAdmin(item.description)}</p>
-                <span class="status status-active">${escapeAdmin(item.delivery_mode)}</span>
-            </div>
-        `).join("");
+    companySelect.innerHTML = solutionCompanies.map(item =>
+        `<option value="${item.id}">${escapeAdmin(item.name)}</option>`
+    ).join("");
+
+    catalogGrid.innerHTML = catalog.services.map(item => `
+        <div class="agent">
+            <h3>${escapeAdmin(item.name)}</h3>
+            <p>${escapeAdmin(item.description)}</p>
+            <span class="status status-active">${escapeAdmin(item.delivery_mode)}</span>
+        </div>
+    `).join("");
 
     await loadCompanySolutions();
 }
 
 async function loadCompanySolutions() {
-    const companyId = document.getElementById("solutions-company").value;
+    const companySelect = document.getElementById("solutions-company");
     const target = document.getElementById("company-solutions-list");
+    if (!companySelect || !target) return;
+    const companyId = companySelect.value;
     if (!companyId) {
         target.innerHTML = "<p>Create a company first.</p>";
         return;
@@ -77,47 +83,17 @@ function openCreateSolution() {
     `).join("");
 
     openModal("Create Company Solution", `
-        <div class="form-group">
-            <label>Company</label>
-            <select id="solution-company-id">${companyOptions}</select>
-        </div>
-        <div class="form-group">
-            <label>Service</label>
-            <select id="solution-service-code" onchange="toggleAIEmployeeFields()">${serviceOptions}</select>
-        </div>
-        <div class="form-group">
-            <label>Solution / Employee Name</label>
-            <input id="solution-name" placeholder="Customer Service AI Employee">
-        </div>
-        <div class="form-group">
-            <label>Package</label>
-            <select id="solution-package">${packageOptions}</select>
-        </div>
-        <div class="form-group">
-            <label>Description</label>
-            <textarea id="solution-description"></textarea>
-        </div>
+        <div class="form-group"><label>Company</label><select id="solution-company-id">${companyOptions}</select></div>
+        <div class="form-group"><label>Service</label><select id="solution-service-code" onchange="toggleAIEmployeeFields()">${serviceOptions}</select></div>
+        <div class="form-group"><label>Solution / Employee Name</label><input id="solution-name" placeholder="Customer Service AI Employee"></div>
+        <div class="form-group"><label>Package</label><select id="solution-package">${packageOptions}</select></div>
+        <div class="form-group"><label>Description</label><textarea id="solution-description"></textarea></div>
         <div id="ai-employee-fields" class="hidden">
-            <div class="form-group">
-                <label>Capabilities</label>
-                <div style="display:grid;gap:8px">${capabilities}</div>
-            </div>
-            <div class="form-group">
-                <label>Channels</label>
-                <div style="display:grid;gap:8px">${channels}</div>
-            </div>
-            <div class="form-group">
-                <label>AI Provider</label>
-                <input id="solution-provider" value="groq">
-            </div>
-            <div class="form-group">
-                <label>Model</label>
-                <input id="solution-model" value="openai/gpt-oss-20b">
-            </div>
-            <div class="form-group">
-                <label>System Prompt (optional)</label>
-                <textarea id="solution-prompt" placeholder="Xvond will apply a safe business default when empty."></textarea>
-            </div>
+            <div class="form-group"><label>Capabilities</label><div style="display:grid;gap:8px">${capabilities}</div></div>
+            <div class="form-group"><label>Channels</label><div style="display:grid;gap:8px">${channels}</div></div>
+            <div class="form-group"><label>AI Provider</label><input id="solution-provider" value="groq"></div>
+            <div class="form-group"><label>Model</label><input id="solution-model" value="openai/gpt-oss-20b"></div>
+            <div class="form-group"><label>System Prompt (optional)</label><textarea id="solution-prompt"></textarea></div>
         </div>
         <button class="modal-submit" onclick="createSolution()">Create & Provision</button>
     `);
@@ -126,14 +102,11 @@ function openCreateSolution() {
 
 function toggleAIEmployeeFields() {
     const value = document.getElementById("solution-service-code")?.value;
-    document.getElementById("ai-employee-fields")?.classList.toggle(
-        "hidden", value !== "ai_agents"
-    );
+    document.getElementById("ai-employee-fields")?.classList.toggle("hidden", value !== "ai_agents");
 }
 
 function checkedValues(name) {
-    return [...document.querySelectorAll(`input[name="${name}"]:checked`)]
-        .map(item => item.value);
+    return [...document.querySelectorAll(`input[name="${name}"]:checked`)].map(item => item.value);
 }
 
 async function createSolution() {
@@ -143,7 +116,6 @@ async function createSolution() {
         const name = document.getElementById("solution-name").value.trim();
         const packageTier = document.getElementById("solution-package").value;
         const description = document.getElementById("solution-description").value.trim();
-
         if (!name) throw new Error("Solution name is required");
 
         if (serviceCode === "ai_agents") {
@@ -175,30 +147,13 @@ async function createSolution() {
         }
 
         closeModal();
-        document.getElementById("solutions-company").value = companyId;
+        const companySelect = document.getElementById("solutions-company");
+        if (companySelect) companySelect.value = companyId;
         await loadCompanySolutions();
     } catch (error) {
         alert(error.message);
     }
 }
 
-(function loadCompanyWorkspaceScripts() {
-    if (document.querySelector('script[data-xvond-company-workspace]')) return;
-
-    const workspace = document.createElement('script');
-    workspace.src = '/static/admin/company_workspace.js';
-    workspace.dataset.xvondCompanyWorkspace = '1';
-    workspace.onload = () => {
-        const automation = document.createElement('script');
-        automation.src = '/static/admin/company_workspace_automation.js';
-        automation.dataset.xvondCompanyWorkspaceAutomation = '1';
-        automation.onload = () => {
-            const plans = document.createElement('script');
-            plans.src = '/static/admin/company_workspace_plans.js';
-            plans.dataset.xvondCompanyWorkspacePlans = '1';
-            document.body.appendChild(plans);
-        };
-        document.body.appendChild(automation);
-    };
-    document.body.appendChild(workspace);
-})();
+// Legacy company_workspace.js is intentionally not loaded here.
+// The simplified company UI is loaded explicitly by index.html via simple-company.js.
