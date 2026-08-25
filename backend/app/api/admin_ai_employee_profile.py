@@ -8,6 +8,7 @@ from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
+from backend.app.modules.ai_agent.profile_models import AIAgentProfile
 from backend.app.modules.channels.models import AgentChannel
 
 router = APIRouter(prefix="/admin/ai-employee-profile", tags=["Xvond Admin - AI Employee Profile"])
@@ -71,12 +72,42 @@ def _profile_payload(company: Company, data: EmployeeProfileUpdate) -> dict:
     }
 
 
+def _upsert_profile(db, company: Company, agent: AIAgent, data: EmployeeProfileUpdate) -> AIAgentProfile:
+    values = _profile_payload(company, data)
+    row = db.query(AIAgentProfile).filter(AIAgentProfile.agent_id == agent.id).first()
+    if row is None:
+        row = AIAgentProfile(company_id=company.id, agent_id=agent.id, **values)
+        db.add(row)
+    else:
+        row.company_id = company.id
+        for key, value in values.items():
+            setattr(row, key, value)
+    return row
+
+
+def _backfill_profile(db, company: Company, agent: AIAgent, channels) -> AIAgentProfile:
+    row = db.query(AIAgentProfile).filter(AIAgentProfile.agent_id == agent.id).first()
+    if row is not None:
+        return row
+    setup = _setup_from_channels(channels)
+    row = AIAgentProfile(
+        company_id=company.id,
+        agent_id=agent.id,
+        business_name=setup.get("business_name") or company.name,
+        business_type=_clean(setup.get("business_type")),
+        reply_language=setup.get("reply_language") or "auto",
+        conversation_style=setup.get("conversation_style") or "professional_friendly",
+        greeting=_clean(setup.get("greeting")),
+        instructions=_clean(setup.get("instructions")),
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
 @router.post("/companies/{company_id}")
 def create_profile_employee(company_id: int, data: EmployeeProfileUpdate, current_admin: User = Depends(require_xvond_admin)):
-    """Create the channel-independent AI employee core.
-
-    Website, WhatsApp and future channels are attached separately after this step.
-    """
+    """Create the channel-independent AI employee core."""
     db = SessionLocal()
     try:
         company = db.query(Company).filter(Company.id == company_id).first()
@@ -95,6 +126,8 @@ def create_profile_employee(company_id: int, data: EmployeeProfileUpdate, curren
             enabled=True,
         )
         db.add(agent)
+        db.flush()
+        _upsert_profile(db, company, agent, data)
         db.commit()
         db.refresh(agent)
         return {"status": "created", "agent_id": agent.id, "profile": _profile_payload(company, data)}
@@ -117,16 +150,17 @@ def get_profile(company_id: int, agent_id: int, current_admin: User = Depends(re
         if not company or not agent:
             raise HTTPException(404, "AI employee not found")
         channels = db.query(AgentChannel).filter(AgentChannel.company_id == company_id, AgentChannel.agent_id == agent_id).order_by(AgentChannel.id.asc()).all()
-        setup = _setup_from_channels(channels)
+        profile = _backfill_profile(db, company, agent, channels)
+        db.commit()
         return {
             "agent_id": agent.id,
             "name": agent.name,
-            "business_name": setup.get("business_name") or company.name,
-            "business_type": setup.get("business_type") or "",
-            "reply_language": setup.get("reply_language") or "auto",
-            "conversation_style": setup.get("conversation_style") or "professional_friendly",
-            "greeting": setup.get("greeting") or "",
-            "instructions": setup.get("instructions") or "",
+            "business_name": profile.business_name,
+            "business_type": profile.business_type or "",
+            "reply_language": profile.reply_language or "auto",
+            "conversation_style": profile.conversation_style or "professional_friendly",
+            "greeting": profile.greeting or "",
+            "instructions": profile.instructions or "",
         }
     finally:
         db.close()
@@ -142,7 +176,15 @@ def update_profile(company_id: int, agent_id: int, data: EmployeeProfileUpdate, 
             raise HTTPException(404, "AI employee not found")
         agent.name = _clean(data.name) or agent.name
         agent.system_prompt = _profile_prompt(company.name, data)
-        setup = _profile_payload(company, data)
+        profile = _upsert_profile(db, company, agent, data)
+        setup = {
+            "business_name": profile.business_name,
+            "business_type": profile.business_type,
+            "reply_language": profile.reply_language,
+            "conversation_style": profile.conversation_style,
+            "greeting": profile.greeting,
+            "instructions": profile.instructions,
+        }
         channels = db.query(AgentChannel).filter(AgentChannel.company_id == company_id, AgentChannel.agent_id == agent_id).all()
         for channel in channels:
             channel.config = merge_config(channel.config, {"employee_setup": setup})
