@@ -3,6 +3,8 @@ import urllib.request
 from backend.app.core.http_security import safe_http_request,validate_public_http_url
 from backend.app.modules.tools.base import AgentTool,ToolResult
 from backend.app.modules.tools.business_models import Lead,Booking,Order,HumanHandoff
+from backend.app.modules.channels.whatsapp_models import WhatsAppSession
+from backend.app.modules.channels.handoff import activate_human_handoff
 class LeadTool(AgentTool):
  name="lead";description="Capture and save a customer lead.";input_schema={"type":"object","properties":{"name":{"type":"string"},"phone":{"type":"string"},"email":{"type":"string"},"interest":{"type":"string"},"notes":{"type":"string"}},"additionalProperties":False}
  def execute(self,arguments,context):
@@ -39,9 +41,14 @@ class OrderTool(AgentTool):
   if not items:return ToolResult(success=False,error="Order requires items")
   order=Order(company_id=context["company_id"],agent_id=context["agent_id"],customer_name=arguments.get("customer_name"),phone=arguments.get("phone"),items=items,delivery_address=arguments.get("delivery_address"),notes=arguments.get("notes"));db.add(order);db.flush();return ToolResult(success=True,data={"action":"order_created","order_id":order.id,"status":order.status})
 class HumanHandoffTool(AgentTool):
- name="human_handoff";description="Escalate a conversation to a human employee.";input_schema={"type":"object","properties":{"reason":{"type":"string"},"priority":{"type":"string","enum":["low","normal","high","urgent"]},"department":{"type":"string"}},"additionalProperties":False}
+ name="human_handoff";description="Escalate a conversation to a human employee and pause AI replies for that WhatsApp conversation.";input_schema={"type":"object","properties":{"reason":{"type":"string"},"priority":{"type":"string","enum":["low","normal","high","urgent"]},"department":{"type":"string"}},"additionalProperties":False}
  def execute(self,arguments,context):
-  db=context["db"];handoff=HumanHandoff(company_id=context["company_id"],agent_id=context["agent_id"],conversation_id=context.get("conversation_id"),reason=arguments.get("reason"),priority=arguments.get("priority","normal"),department=arguments.get("department",context.get("config",{}).get("department","customer_service")));db.add(handoff);db.flush();return ToolResult(success=True,data={"action":"human_handoff_created","handoff_id":handoff.id,"status":handoff.status})
+  db=context["db"];conversation_id=context.get("conversation_id");reason=arguments.get("reason") or "ai_handoff";handoff=HumanHandoff(company_id=context["company_id"],agent_id=context["agent_id"],conversation_id=conversation_id,reason=reason,priority=arguments.get("priority","normal"),department=arguments.get("department",context.get("config",{}).get("department","customer_service")));db.add(handoff);db.flush()
+  session=None
+  if conversation_id is not None:
+   session=db.query(WhatsAppSession).filter(WhatsAppSession.company_id==context["company_id"],WhatsAppSession.agent_id==context["agent_id"],WhatsAppSession.conversation_id==conversation_id).first()
+   if session is not None:activate_human_handoff(session,reason=reason)
+  return ToolResult(success=True,data={"action":"human_handoff_created","handoff_id":handoff.id,"status":handoff.status,"ai_paused":session is not None})
 class WebhookTool(AgentTool):
  name="webhook";description="Send data to an external webhook.";input_schema={"type":"object","properties":{"payload":{"type":"object"}},"additionalProperties":True}
  def execute(self,arguments,context):
