@@ -37,7 +37,10 @@ class WebsiteKnowledgeCreate(BaseModel):
 
 
 def _agent(db, company_id: int, agent_id: int):
-    agent = db.query(AIAgent).filter(AIAgent.id == agent_id, AIAgent.company_id == company_id).first()
+    agent = db.query(AIAgent).filter(
+        AIAgent.id == agent_id,
+        AIAgent.company_id == company_id,
+    ).first()
     if agent is None:
         raise HTTPException(404, "AI employee not found")
     return agent
@@ -50,11 +53,20 @@ def _category(value: str) -> str:
     return value
 
 
+def _protected_title(title: str) -> bool:
+    value = " ".join(str(title or "").strip().split()).casefold()
+    return any(value == item.casefold() for item in PROTECTED_TITLES)
+
+
 def _owned_document(db, company_id: int, agent_id: int, document_id: int):
     row = (
         db.query(KnowledgeDocument)
         .join(AgentKnowledge, AgentKnowledge.document_id == KnowledgeDocument.id)
-        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.company_id == company_id, AgentKnowledge.agent_id == agent_id)
+        .filter(
+            KnowledgeDocument.id == document_id,
+            KnowledgeDocument.company_id == company_id,
+            AgentKnowledge.agent_id == agent_id,
+        )
         .first()
     )
     if row is None:
@@ -66,15 +78,31 @@ def _duplicate_title(db, company_id: int, agent_id: int, title: str):
     return (
         db.query(KnowledgeDocument)
         .join(AgentKnowledge, AgentKnowledge.document_id == KnowledgeDocument.id)
-        .filter(KnowledgeDocument.company_id == company_id, AgentKnowledge.agent_id == agent_id, KnowledgeDocument.title == title)
+        .filter(
+            KnowledgeDocument.company_id == company_id,
+            AgentKnowledge.agent_id == agent_id,
+            KnowledgeDocument.title == title,
+        )
         .first()
     )
 
 
 def _create_document(db, company_id: int, agent_id: int, title: str, source_type: str, content: str):
+    title = title.strip()
+    if _protected_title(title):
+        raise HTTPException(
+            409,
+            "This title is reserved for company-managed business knowledge",
+        )
     if _duplicate_title(db, company_id, agent_id, title):
         raise HTTPException(409, "A knowledge item with this title already exists")
-    doc = KnowledgeDocument(company_id=company_id, title=title, source_type=source_type, content=content, enabled=True)
+    doc = KnowledgeDocument(
+        company_id=company_id,
+        title=title,
+        source_type=source_type,
+        content=content,
+        enabled=True,
+    )
     db.add(doc)
     db.flush()
     chunks = knowledge_service.rebuild_document_index(db, doc)
@@ -88,13 +116,15 @@ def _html_to_business_text(html: str) -> str:
         tag.decompose()
     lines = []
     seen = set()
+    length = 0
     for line in soup.get_text("\n").splitlines():
         value = " ".join(line.split()).strip()
         if len(value) < 2 or value in seen:
             continue
         seen.add(value)
         lines.append(value)
-        if sum(len(x) + 1 for x in lines) >= 180000:
+        length += len(value) + 1
+        if length >= 180000:
             break
     return "\n".join(lines).strip()
 
@@ -107,7 +137,10 @@ def list_employee_knowledge(company_id: int, agent_id: int, current_admin: User 
         rows = (
             db.query(KnowledgeDocument, AgentKnowledge)
             .join(AgentKnowledge, AgentKnowledge.document_id == KnowledgeDocument.id)
-            .filter(KnowledgeDocument.company_id == company_id, AgentKnowledge.agent_id == agent_id)
+            .filter(
+                KnowledgeDocument.company_id == company_id,
+                AgentKnowledge.agent_id == agent_id,
+            )
             .order_by(KnowledgeDocument.id.asc())
             .all()
         )
@@ -117,7 +150,7 @@ def list_employee_knowledge(company_id: int, agent_id: int, current_admin: User 
             "category": doc.source_type,
             "enabled": bool(doc.enabled and link.enabled),
             "characters": len(doc.content or ""),
-            "protected": doc.title in PROTECTED_TITLES,
+            "protected": _protected_title(doc.title),
             "created_at": doc.created_at,
             "preview": (doc.content or "")[:280],
         } for doc, link in rows]}
@@ -131,7 +164,14 @@ def get_employee_knowledge(company_id: int, agent_id: int, document_id: int, cur
     try:
         _agent(db, company_id, agent_id)
         doc = _owned_document(db, company_id, agent_id, document_id)
-        return {"id": doc.id, "title": doc.title, "category": doc.source_type, "content": doc.content, "enabled": doc.enabled, "protected": doc.title in PROTECTED_TITLES}
+        return {
+            "id": doc.id,
+            "title": doc.title,
+            "category": doc.source_type,
+            "content": doc.content,
+            "enabled": doc.enabled,
+            "protected": _protected_title(doc.title),
+        }
     finally:
         db.close()
 
@@ -141,13 +181,23 @@ def create_employee_knowledge(company_id: int, agent_id: int, payload: Knowledge
     db = SessionLocal()
     try:
         _agent(db, company_id, agent_id)
-        doc, chunks = _create_document(db, company_id, agent_id, payload.title.strip(), _category(payload.category), payload.content.strip())
-        db.commit(); db.refresh(doc)
+        doc, chunks = _create_document(
+            db,
+            company_id,
+            agent_id,
+            payload.title,
+            _category(payload.category),
+            payload.content.strip(),
+        )
+        db.commit()
+        db.refresh(doc)
         return {"status": "created", "id": doc.id, "chunks": chunks}
     except HTTPException:
-        db.rollback(); raise
+        db.rollback()
+        raise
     except Exception:
-        db.rollback(); raise
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -161,7 +211,10 @@ def ingest_website_knowledge(company_id: int, agent_id: int, payload: WebsiteKno
             result = safe_http_request(
                 url=payload.url.strip(),
                 method="GET",
-                headers={"User-Agent": "XvondKnowledgeBot/1.0", "Accept": "text/html,application/xhtml+xml"},
+                headers={
+                    "User-Agent": "XvondKnowledgeBot/1.0",
+                    "Accept": "text/html,application/xhtml+xml",
+                },
                 timeout=20,
                 max_response_bytes=1_500_000,
             )
@@ -169,7 +222,10 @@ def ingest_website_knowledge(company_id: int, agent_id: int, payload: WebsiteKno
             raise HTTPException(400, str(exc)) from exc
         status = int(result["status_code"])
         if 300 <= status < 400:
-            raise HTTPException(400, "Website redirects are not followed for security. Add the final destination URL instead")
+            raise HTTPException(
+                400,
+                "Website redirects are not followed for security. Add the final destination URL instead",
+            )
         if not 200 <= status < 300:
             raise HTTPException(400, f"Website returned HTTP {status}")
         content = _html_to_business_text(result.get("response") or "")
@@ -177,13 +233,30 @@ def ingest_website_knowledge(company_id: int, agent_id: int, payload: WebsiteKno
             raise HTTPException(422, "No useful readable business text was found on this page")
         host = urlparse(payload.url).hostname or "website"
         title = (payload.title or f"Website: {host}").strip()
-        doc, chunks = _create_document(db, company_id, agent_id, title, "website", f"Source URL: {payload.url.strip()}\n\n{content}")
-        db.commit(); db.refresh(doc)
-        return {"status": "ingested", "id": doc.id, "title": doc.title, "characters": len(content), "chunks": chunks, "truncated": bool(result.get("truncated"))}
+        doc, chunks = _create_document(
+            db,
+            company_id,
+            agent_id,
+            title,
+            "website",
+            f"Source URL: {payload.url.strip()}\n\n{content}",
+        )
+        db.commit()
+        db.refresh(doc)
+        return {
+            "status": "ingested",
+            "id": doc.id,
+            "title": doc.title,
+            "characters": len(content),
+            "chunks": chunks,
+            "truncated": bool(result.get("truncated")),
+        }
     except HTTPException:
-        db.rollback(); raise
+        db.rollback()
+        raise
     except Exception:
-        db.rollback(); raise
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -194,27 +267,35 @@ def update_employee_knowledge(company_id: int, agent_id: int, document_id: int, 
     try:
         _agent(db, company_id, agent_id)
         doc = _owned_document(db, company_id, agent_id, document_id)
-        if doc.title in PROTECTED_TITLES:
-            raise HTTPException(409, "Edit protected business setup fields from AI Employee settings")
+        if _protected_title(doc.title):
+            raise HTTPException(409, "Edit protected business setup fields from Company")
         if doc.source_type in {"pdf", "website"}:
             raise HTTPException(409, "Imported sources are read-only. Replace the source if its content changed")
-        duplicate = _duplicate_title(db, company_id, agent_id, payload.title.strip())
+        new_title = payload.title.strip()
+        if _protected_title(new_title):
+            raise HTTPException(409, "This title is reserved for company-managed business knowledge")
+        duplicate = _duplicate_title(db, company_id, agent_id, new_title)
         if duplicate and duplicate.id != document_id:
             raise HTTPException(409, "A knowledge item with this title already exists")
-        doc.title = payload.title.strip()
+        doc.title = new_title
         doc.source_type = _category(payload.category)
         doc.content = payload.content.strip()
         doc.enabled = payload.enabled
-        link = db.query(AgentKnowledge).filter(AgentKnowledge.agent_id == agent_id, AgentKnowledge.document_id == document_id).first()
+        link = db.query(AgentKnowledge).filter(
+            AgentKnowledge.agent_id == agent_id,
+            AgentKnowledge.document_id == document_id,
+        ).first()
         if link:
             link.enabled = payload.enabled
         knowledge_service.rebuild_document_index(db, doc)
         db.commit()
         return {"status": "updated"}
     except HTTPException:
-        db.rollback(); raise
+        db.rollback()
+        raise
     except Exception:
-        db.rollback(); raise
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -225,7 +306,12 @@ def toggle_employee_knowledge(company_id: int, agent_id: int, document_id: int, 
     try:
         _agent(db, company_id, agent_id)
         doc = _owned_document(db, company_id, agent_id, document_id)
-        link = db.query(AgentKnowledge).filter(AgentKnowledge.agent_id == agent_id, AgentKnowledge.document_id == document_id).first()
+        if _protected_title(doc.title):
+            raise HTTPException(409, "Company-managed Business Information must remain enabled")
+        link = db.query(AgentKnowledge).filter(
+            AgentKnowledge.agent_id == agent_id,
+            AgentKnowledge.document_id == document_id,
+        ).first()
         new_value = not bool(doc.enabled and link and link.enabled)
         doc.enabled = new_value
         if link:
@@ -233,9 +319,11 @@ def toggle_employee_knowledge(company_id: int, agent_id: int, document_id: int, 
         db.commit()
         return {"status": "updated", "enabled": new_value}
     except HTTPException:
-        db.rollback(); raise
+        db.rollback()
+        raise
     except Exception:
-        db.rollback(); raise
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -246,18 +334,27 @@ def delete_employee_knowledge(company_id: int, agent_id: int, document_id: int, 
     try:
         _agent(db, company_id, agent_id)
         doc = _owned_document(db, company_id, agent_id, document_id)
-        if doc.title in PROTECTED_TITLES:
+        if _protected_title(doc.title):
             raise HTTPException(409, "Protected business setup knowledge cannot be deleted here")
-        db.query(AgentKnowledge).filter(AgentKnowledge.agent_id == agent_id, AgentKnowledge.document_id == document_id).delete(synchronize_session=False)
-        remaining = db.query(AgentKnowledge).filter(AgentKnowledge.document_id == document_id).first()
+        db.query(AgentKnowledge).filter(
+            AgentKnowledge.agent_id == agent_id,
+            AgentKnowledge.document_id == document_id,
+        ).delete(synchronize_session=False)
+        remaining = db.query(AgentKnowledge).filter(
+            AgentKnowledge.document_id == document_id
+        ).first()
         if remaining is None:
-            db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == document_id).delete(synchronize_session=False)
+            db.query(KnowledgeChunk).filter(
+                KnowledgeChunk.document_id == document_id
+            ).delete(synchronize_session=False)
             db.delete(doc)
         db.commit()
         return {"status": "deleted"}
     except HTTPException:
-        db.rollback(); raise
+        db.rollback()
+        raise
     except Exception:
-        db.rollback(); raise
+        db.rollback()
+        raise
     finally:
         db.close()
