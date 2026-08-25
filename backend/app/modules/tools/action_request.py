@@ -1,56 +1,450 @@
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+
+from sqlalchemy import text
+
+from backend.app.core.config_secrets import reveal_config
+from backend.app.core.http_security import safe_http_request, validate_public_http_url
+from backend.app.modules.ai_agent.models import AIMessage
+from backend.app.modules.channels.handoff import activate_human_handoff
+from backend.app.modules.channels.whatsapp_models import WhatsAppSession
+from backend.app.modules.integrations.models import CompanyIntegration
 from backend.app.modules.tools.base import AgentTool, ToolResult
 from backend.app.modules.tools.business_models import ActionRequest, HumanHandoff
-from backend.app.modules.channels.whatsapp_models import WhatsAppSession
-from backend.app.modules.channels.handoff import activate_human_handoff
+
+
+ACTIVE_SLOT_STATUSES = {"new", "confirmed", "processing", "in_progress"}
+CONFIRM_WORDS = {
+    "yes", "y", "confirm", "confirmed", "ok", "okay", "sure",
+    "نعم", "اي", "إي", "ايوه", "أيوه", "تمام", "موافق", "اكد", "أكد", "تأكيد", "ثبت", "اوكي", "أوكي",
+}
+NEGATIVE_PREFIXES = ("لا", "no", "not", "don't", "dont", "مو", "مش")
+
+
+def _field_specs(action: dict) -> list[dict]:
+    raw = action.get("fields")
+    if not raw:
+        raw = action.get("required_fields") or []
+    result = []
+    for item in raw:
+        if isinstance(item, str):
+            key = item.strip()
+            if key:
+                result.append({"key": key, "label": key.replace("_", " "), "required": True, "type": "text"})
+            continue
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or item.get("name") or "").strip()
+        if not key:
+            continue
+        result.append({
+            "key": key,
+            "label": str(item.get("label") or key.replace("_", " ")).strip(),
+            "required": bool(item.get("required", True)),
+            "type": str(item.get("type") or "text").strip(),
+            "role": str(item.get("role") or "").strip(),
+        })
+    return result[:50]
+
+
+def _missing(action: dict, details: dict) -> list[str]:
+    return [
+        field["key"]
+        for field in _field_specs(action)
+        if field.get("required") and not str(details.get(field["key"]) or "").strip()
+    ]
+
+
+def _summary(action: dict, details: dict, provided: str | None) -> str:
+    if str(provided or "").strip():
+        return str(provided).strip()[:2000]
+    labels = {field["key"]: field["label"] for field in _field_specs(action)}
+    parts = []
+    for key, value in details.items():
+        if key.startswith("_") or value in (None, "", [], {}):
+            continue
+        parts.append(f"{labels.get(key, key.replace('_', ' '))}: {value}")
+    return " | ".join(parts)[:2000] or str(action.get("label") or action.get("name") or "Customer request")
+
+
+def _action(config: dict, action_type: str) -> dict | None:
+    actions = config.get("actions") or {}
+    if not isinstance(actions, dict):
+        return None
+    value = actions.get(action_type)
+    if not isinstance(value, dict) or not value.get("enabled", True):
+        return None
+    return value
+
+
+def _latest_user_message(db, conversation_id: int | None) -> str:
+    if conversation_id is None:
+        return ""
+    row = (
+        db.query(AIMessage)
+        .filter(AIMessage.conversation_id == conversation_id, AIMessage.role == "user")
+        .order_by(AIMessage.id.desc())
+        .first()
+    )
+    return (row.content or "").strip() if row else ""
+
+
+def _customer_confirmed(message: str) -> bool:
+    value = " ".join(str(message or "").strip().lower().replace("؟", "").replace("!", "").replace(".", "").split())
+    if not value:
+        return False
+    if value.startswith(NEGATIVE_PREFIXES):
+        return False
+    if value in {x.lower() for x in CONFIRM_WORDS}:
+        return True
+    return any(token in value.split() for token in {x.lower() for x in CONFIRM_WORDS}) and len(value.split()) <= 8
+
+
+def _schedule_fields(action: dict) -> tuple[str, str, str | None]:
+    availability = action.get("availability") or {}
+    date_field = str(availability.get("date_field") or "").strip()
+    time_field = str(availability.get("time_field") or "").strip()
+    resource_field = str(availability.get("resource_field") or "").strip() or None
+    if not date_field or not time_field:
+        for field in _field_specs(action):
+            role = field.get("role")
+            if not date_field and role == "date":
+                date_field = field["key"]
+            if not time_field and role == "time":
+                time_field = field["key"]
+    return date_field or "date", time_field or "time", resource_field
+
+
+def _parse_hhmm(value: str) -> datetime:
+    return datetime.strptime(value, "%H:%M")
+
+
+def _internal_slots(db, context: dict, action_type: str, action: dict, details: dict) -> ToolResult:
+    availability = action.get("availability") or {}
+    schedule = availability.get("schedule") or {}
+    date_field, time_field, resource_field = _schedule_fields(action)
+    raw_date = str(details.get(date_field) or "").strip()
+    if not raw_date:
+        return ToolResult(success=False, error=f"{date_field} is required to check availability")
+    try:
+        day = date.fromisoformat(raw_date)
+    except ValueError:
+        return ToolResult(success=False, error=f"{date_field} must use YYYY-MM-DD")
+
+    weekdays = schedule.get("weekdays")
+    start = str(schedule.get("start") or "").strip()
+    end = str(schedule.get("end") or "").strip()
+    if not isinstance(weekdays, list) or not weekdays or not start or not end:
+        return ToolResult(success=False, error="Internal availability schedule is not configured")
+    if day.weekday() not in {int(x) for x in weekdays}:
+        return ToolResult(success=True, data={"available": False, "date": raw_date, "available_slots": []})
+    try:
+        start_dt = _parse_hhmm(start)
+        end_dt = _parse_hhmm(end)
+        slot_minutes = max(5, min(int(schedule.get("slot_minutes") or 30), 720))
+        capacity = max(1, min(int(schedule.get("capacity") or 1), 100))
+    except Exception:
+        return ToolResult(success=False, error="Internal availability schedule is invalid")
+    if end_dt <= start_dt:
+        return ToolResult(success=False, error="Availability end time must be after start time")
+
+    rows = (
+        db.query(ActionRequest)
+        .filter(
+            ActionRequest.company_id == context["company_id"],
+            ActionRequest.agent_id == context["agent_id"],
+            ActionRequest.action_type == action_type,
+            ActionRequest.status.in_(ACTIVE_SLOT_STATUSES),
+        )
+        .order_by(ActionRequest.id.desc())
+        .limit(3000)
+        .all()
+    )
+    occupied: dict[str, int] = {}
+    requested_resource = str(details.get(resource_field) or "").strip() if resource_field else ""
+    for row in rows:
+        row_details = row.details or {}
+        if str(row_details.get(date_field) or "").strip() != raw_date:
+            continue
+        if resource_field and requested_resource and str(row_details.get(resource_field) or "").strip() != requested_resource:
+            continue
+        row_time = str(row_details.get(time_field) or "").strip()
+        if row_time:
+            occupied[row_time] = occupied.get(row_time, 0) + 1
+
+    slots = []
+    cursor = start_dt
+    while cursor + timedelta(minutes=slot_minutes) <= end_dt:
+        value = cursor.strftime("%H:%M")
+        if occupied.get(value, 0) < capacity:
+            slots.append(value)
+        cursor += timedelta(minutes=slot_minutes)
+
+    requested_time = str(details.get(time_field) or "").strip()
+    if requested_time:
+        return ToolResult(
+            success=True,
+            data={
+                "available": requested_time in slots,
+                "date": raw_date,
+                "time": requested_time,
+                "available_slots": slots[:40],
+            },
+        )
+    return ToolResult(success=True, data={"available": bool(slots), "date": raw_date, "available_slots": slots[:40]})
+
+
+def _integration_call(db, context: dict, action_type: str, action: dict, payload: dict, operation: str) -> ToolResult:
+    destination = action.get("destination") or {}
+    integration_id = destination.get("integration_id")
+    if not integration_id:
+        return ToolResult(success=False, error="No integration is selected for this action")
+    integration = (
+        db.query(CompanyIntegration)
+        .filter(
+            CompanyIntegration.id == int(integration_id),
+            CompanyIntegration.company_id == context["company_id"],
+            CompanyIntegration.enabled.is_(True),
+        )
+        .first()
+    )
+    if integration is None:
+        return ToolResult(success=False, error="Configured integration is unavailable")
+    config = reveal_config(integration.config) or {}
+    operations = destination.get("operations") or {}
+    op_config = operations.get(operation) if isinstance(operations, dict) else None
+    if not isinstance(op_config, dict):
+        op_config = destination
+    method = str(op_config.get("method") or "POST").upper()
+    headers = {"Content-Type": "application/json", **(op_config.get("headers") or {})}
+    integration_type = integration.integration_type
+
+    if integration_type == "webhook":
+        url = str(config.get("url") or "").strip()
+        secret = config.get("secret")
+        if secret:
+            headers.setdefault("X-Xvond-Webhook-Secret", str(secret))
+    elif integration_type in {"custom_api", "pos", "crm", "erp"}:
+        base_url = str(config.get("base_url") or "").strip().rstrip("/")
+        endpoint = str(op_config.get("endpoint") or "").strip()
+        if not base_url or not endpoint:
+            return ToolResult(success=False, error="This integration action needs a configured API endpoint")
+        if endpoint.lower().startswith(("http://", "https://")) or endpoint.startswith("//"):
+            return ToolResult(success=False, error="Integration endpoint must be a relative path")
+        url = base_url + "/" + endpoint.lstrip("/")
+        api_key = config.get("api_key")
+        if api_key:
+            headers.setdefault("Authorization", f"Bearer {api_key}")
+    else:
+        return ToolResult(success=False, error=f"Integration type '{integration_type}' does not yet have a real execution adapter")
+
+    try:
+        validate_public_http_url(url)
+        result = safe_http_request(url=url, method=method, headers=headers, json_data=payload, timeout=float(op_config.get("timeout") or 15))
+    except Exception as exc:
+        return ToolResult(success=False, error=str(exc))
+    status = int(result.get("status_code") or 0)
+    return ToolResult(success=200 <= status < 300, data={"integration_id": integration.id, "integration": integration.name, "http": result}, error=None if 200 <= status < 300 else f"Integration returned HTTP {status}")
+
+
+def _handoff(db, context: dict, request: ActionRequest, action: dict, priority: str) -> dict:
+    reason = f"{request.action_type} request #{request.id}: {request.summary or ''}".strip()
+    handoff = HumanHandoff(
+        company_id=context["company_id"],
+        agent_id=context["agent_id"],
+        conversation_id=context.get("conversation_id"),
+        reason=reason,
+        priority=priority,
+        department=str((action.get("destination") or {}).get("department") or "customer_service"),
+    )
+    db.add(handoff)
+    db.flush()
+    session = None
+    if context.get("conversation_id") is not None:
+        session = (
+            db.query(WhatsAppSession)
+            .filter(
+                WhatsAppSession.company_id == context["company_id"],
+                WhatsAppSession.agent_id == context["agent_id"],
+                WhatsAppSession.conversation_id == context["conversation_id"],
+            )
+            .first()
+        )
+        if session is not None:
+            activate_human_handoff(session, reason=reason)
+    return {"handoff_id": handoff.id, "ai_paused": session is not None}
 
 
 class ActionRequestTool(AgentTool):
     name = "action_request"
-    description = "Submit a fully collected customer request for human handling. Use only after all configured required details are collected and the customer has confirmed the request."
+    description = "Run configured real business actions for this employee. Actions may save inside Xvond, check internal availability, hand off to a human, or execute a configured external integration."
     input_schema = {
         "type": "object",
         "properties": {
-            "action_type": {"type": "string", "description": "Configured request type such as booking, order, quote or lead"},
-            "details": {"type": "object", "description": "Collected customer details keyed by configured field names", "additionalProperties": True},
-            "summary": {"type": "string", "description": "Short human-readable summary of the request"},
+            "operation": {"type": "string", "enum": ["check_availability", "prepare", "execute", "cancel", "status"]},
+            "action_type": {"type": "string"},
+            "details": {"type": "object", "additionalProperties": True},
+            "summary": {"type": "string"},
+            "request_id": {"type": "integer"},
             "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
         },
-        "required": ["action_type", "details", "summary"],
+        "required": ["operation", "action_type"],
         "additionalProperties": False,
     }
 
     def execute(self, arguments, context):
+        db = context["db"]
         config = context.get("config", {}) or {}
+        operation = str(arguments.get("operation") or "").strip()
         action_type = str(arguments.get("action_type") or "").strip()
-        actions = config.get("actions") or {}
-        action_config = actions.get(action_type) if isinstance(actions, dict) else None
-        if not isinstance(action_config, dict) or not action_config.get("enabled", True):
-            return ToolResult(success=False, error="Action request type is not configured for this employee")
+        action = _action(config, action_type)
+        if action is None:
+            return ToolResult(success=False, error="This business action is not configured or enabled")
         details = arguments.get("details") or {}
         if not isinstance(details, dict):
-            return ToolResult(success=False, error="Action request details must be structured")
-        required_fields = [str(x).strip() for x in (action_config.get("required_fields") or []) if str(x).strip()]
-        missing = [field for field in required_fields if not str(details.get(field) or "").strip()]
-        if missing:
-            return ToolResult(success=False, error="Missing required customer details: " + ", ".join(missing))
-        summary = str(arguments.get("summary") or "").strip()
-        if not summary:
-            return ToolResult(success=False, error="Request summary is required")
+            return ToolResult(success=False, error="Action details must be structured")
+        destination = action.get("destination") or {}
+        destination_type = str(destination.get("type") or "unconfigured").strip()
+        availability = action.get("availability") or {}
+        availability_mode = str(availability.get("mode") or "none").strip()
+
+        if operation == "check_availability":
+            if availability_mode == "xvond_schedule":
+                return _internal_slots(db, context, action_type, action, details)
+            if availability_mode == "integration":
+                payload = {"operation": "check_availability", "action_type": action_type, "details": details}
+                return _integration_call(db, context, action_type, action, payload, "availability")
+            return ToolResult(success=False, error="This action has no availability source configured")
+
+        if operation == "prepare":
+            missing = _missing(action, details)
+            if missing:
+                return ToolResult(success=False, error="Missing required customer details: " + ", ".join(missing), data={"missing_fields": missing})
+            if destination_type == "unconfigured":
+                return ToolResult(success=False, error="This action has no real destination configured")
+            if availability_mode == "xvond_schedule":
+                availability_result = _internal_slots(db, context, action_type, action, details)
+                if not availability_result.success:
+                    return availability_result
+                if not (availability_result.data or {}).get("available") or str(details.get(_schedule_fields(action)[1]) or "").strip() not in (availability_result.data or {}).get("available_slots", []):
+                    return ToolResult(success=False, error="Requested time is not available", data=availability_result.data)
+            summary = _summary(action, details, arguments.get("summary"))
+            existing = None
+            if context.get("conversation_id") is not None:
+                existing = (
+                    db.query(ActionRequest)
+                    .filter(
+                        ActionRequest.company_id == context["company_id"],
+                        ActionRequest.agent_id == context["agent_id"],
+                        ActionRequest.conversation_id == context["conversation_id"],
+                        ActionRequest.action_type == action_type,
+                        ActionRequest.status == "awaiting_confirmation",
+                    )
+                    .order_by(ActionRequest.id.desc())
+                    .first()
+                )
+            if existing:
+                request = existing
+                request.details = dict(details)
+                request.summary = summary
+            else:
+                request = ActionRequest(
+                    company_id=context["company_id"],
+                    agent_id=context["agent_id"],
+                    conversation_id=context.get("conversation_id"),
+                    action_type=action_type,
+                    details=dict(details),
+                    summary=summary,
+                    status="awaiting_confirmation",
+                )
+                db.add(request)
+                db.flush()
+            if not bool(action.get("confirmation_required", True)):
+                return self._execute_request(request, action, arguments, context)
+            return ToolResult(success=True, data={"action": "prepared", "request_id": request.id, "status": request.status, "summary": request.summary, "details": request.details, "confirmation_required": True})
+
+        request_id = arguments.get("request_id")
+        if not request_id:
+            return ToolResult(success=False, error="request_id is required for this operation")
+        request = (
+            db.query(ActionRequest)
+            .filter(
+                ActionRequest.id == int(request_id),
+                ActionRequest.company_id == context["company_id"],
+                ActionRequest.agent_id == context["agent_id"],
+                ActionRequest.action_type == action_type,
+            )
+            .first()
+        )
+        if request is None:
+            return ToolResult(success=False, error="Business request not found")
+
+        if operation == "status":
+            return ToolResult(success=True, data={"request_id": request.id, "status": request.status, "summary": request.summary, "details": request.details})
+        if operation == "cancel":
+            if request.status == "cancelled":
+                return ToolResult(success=True, data={"request_id": request.id, "status": "cancelled", "already_cancelled": True})
+            if destination_type == "integration" and request.status not in {"awaiting_confirmation", "new"}:
+                cancel_cfg = ((destination.get("operations") or {}).get("cancel") or {}) if isinstance(destination.get("operations"), dict) else {}
+                if not cancel_cfg:
+                    return ToolResult(success=False, error="This external action has no cancellation operation configured")
+                result = _integration_call(db, context, action_type, action, {"operation": "cancel", "request_id": request.id, "details": request.details}, "cancel")
+                if not result.success:
+                    return result
+            request.status = "cancelled"
+            return ToolResult(success=True, data={"request_id": request.id, "status": request.status})
+        if operation == "execute":
+            return self._execute_request(request, action, arguments, context)
+        return ToolResult(success=False, error="Unsupported action operation")
+
+    def _execute_request(self, request: ActionRequest, action: dict, arguments: dict, context: dict) -> ToolResult:
         db = context["db"]
-        conversation_id = context.get("conversation_id")
-        request = ActionRequest(company_id=context["company_id"], agent_id=context["agent_id"], conversation_id=conversation_id, action_type=action_type, details=details, summary=summary, status="pending_human")
-        db.add(request)
-        db.flush()
-        reason = f"{action_type} request #{request.id}: {summary}"
-        handoff = HumanHandoff(company_id=context["company_id"], agent_id=context["agent_id"], conversation_id=conversation_id, reason=reason, priority=arguments.get("priority", "normal"), department=str(action_config.get("department") or "customer_service"))
-        db.add(handoff)
-        db.flush()
-        session = None
-        if conversation_id is not None:
-            session = db.query(WhatsAppSession).filter(WhatsAppSession.company_id == context["company_id"], WhatsAppSession.agent_id == context["agent_id"], WhatsAppSession.conversation_id == conversation_id).first()
-            if session is not None:
-                activate_human_handoff(session, reason=reason)
-        return ToolResult(success=True, data={"action":"action_request_created","request_id":request.id,"handoff_id":handoff.id,"status":request.status,"ai_paused":session is not None})
+        if request.status not in {"awaiting_confirmation", "new"}:
+            return ToolResult(success=False, error=f"Request cannot be executed from status {request.status}")
+        if bool(action.get("confirmation_required", True)):
+            latest = _latest_user_message(db, context.get("conversation_id"))
+            if not _customer_confirmed(latest):
+                return ToolResult(success=False, error="Customer confirmation is required before execution")
+
+        availability = action.get("availability") or {}
+        if str(availability.get("mode") or "none") == "xvond_schedule":
+            date_field, time_field, resource_field = _schedule_fields(action)
+            lock_key = f"{context['company_id']}:{context['agent_id']}:{request.action_type}:{request.details.get(date_field)}:{request.details.get(time_field)}:{request.details.get(resource_field) if resource_field else ''}"
+            if getattr(getattr(db, "bind", None), "dialect", None) is not None and db.bind.dialect.name == "postgresql":
+                db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"), {"lock_key": lock_key})
+            availability_result = _internal_slots(db, context, request.action_type, action, request.details or {})
+            if not availability_result.success:
+                return availability_result
+            if not (availability_result.data or {}).get("available"):
+                return ToolResult(success=False, error="Requested time is no longer available", data=availability_result.data)
+            requested_time = str((request.details or {}).get(time_field) or "").strip()
+            if requested_time not in (availability_result.data or {}).get("available_slots", []):
+                return ToolResult(success=False, error="Requested time is no longer available", data=availability_result.data)
+
+        destination = action.get("destination") or {}
+        destination_type = str(destination.get("type") or "unconfigured")
+        if destination_type == "xvond_internal":
+            request.status = "confirmed" if str(availability.get("mode") or "none") != "none" else "new"
+            meta = dict(request.details or {})
+            meta["_xvond_destination"] = {"type": "xvond_internal"}
+            request.details = meta
+            return ToolResult(success=True, data={"action": "executed", "request_id": request.id, "status": request.status, "summary": request.summary})
+        if destination_type == "human_handoff":
+            request.status = "pending_human"
+            handoff_data = _handoff(db, context, request, action, str(arguments.get("priority") or "normal"))
+            return ToolResult(success=True, data={"action": "handed_off", "request_id": request.id, "status": request.status, **handoff_data})
+        if destination_type == "integration":
+            payload = {"operation": "execute", "request_id": request.id, "action_type": request.action_type, "details": request.details, "summary": request.summary}
+            result = _integration_call(db, context, request.action_type, action, payload, "execute")
+            if not result.success:
+                return result
+            request.status = "confirmed"
+            meta = dict(request.details or {})
+            meta["_xvond_destination"] = {"type": "integration", "integration_id": (action.get("destination") or {}).get("integration_id")}
+            request.details = meta
+            return ToolResult(success=True, data={"action": "executed", "request_id": request.id, "status": request.status, "integration_result": result.data})
+        return ToolResult(success=False, error="This action has no real destination configured")
 
 
 action_request_tool = ActionRequestTool()
