@@ -97,3 +97,11 @@ def test_production_acceptance_is_not_vendor_specific():
     acceptance = source("scripts/production_acceptance.py")
     assert 'checks["ai_providers"]' in acceptance
     assert 'checks["groq"]' not in acceptance
+
+
+def test_live_ai_acceptance_does_not_create_customer_runtime_conversation():
+    acceptance = source("scripts/production_acceptance.py")
+    assert "ai_engine.generate" in acceptance
+    assert "agent_runtime.chat" not in acceptance
+    assert '"customer_runtime_used": False' in acceptance
+    assert "tools=None" in acceptance
