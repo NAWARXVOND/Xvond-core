@@ -15,6 +15,7 @@ from backend.app.api.admin_ai import router as admin_ai_router
 from backend.app.api.admin_ai_employee import router as admin_ai_employee_router
 from backend.app.api.admin_ai_employee_files import router as admin_ai_employee_files_router
 from backend.app.api.admin_ai_employee_knowledge import router as admin_ai_employee_knowledge_router
+from backend.app.api.admin_agent_actions import router as admin_agent_actions_router
 from backend.app.api.admin_audit import router as admin_audit_router
 from backend.app.api.admin_billing import router as admin_billing_router
 from backend.app.api.admin_business import router as admin_business_router
@@ -104,7 +105,7 @@ async def protect_public_endpoints(request: Request, call_next):
         if not rate_limiter.allow(key,limit,window):return JSONResponse(status_code=429,content={"detail":"Too many requests"},headers={"Retry-After":str(window)})
     return await call_next(request)
 
-for r in [auth_router,users_router,admin_router,admin_ai_router,admin_ai_employee_router,admin_ai_employee_files_router,admin_ai_employee_knowledge_router,admin_audit_router,admin_billing_router,admin_business_router,admin_channels_router,admin_company_view_router,admin_dashboard_router,admin_handoff_router,admin_integrations_router,admin_knowledge_router,admin_operations_router,admin_production_router,admin_providers_router,admin_setup_router,admin_solutions_router,admin_tool_execution_router,admin_tools_router,admin_automation_router,admin_analytics_builder_router,admin_service_billing_router,admin_service_plan_management_router,agent_factory_router,ai_agents_router,public_channels_router,website_widget_router,modules_router,company_modules_router,customer_agents_router,customer_business_router,customer_portal_router,usage_router,whatsapp_webhook_router]:app.include_router(r)
+for r in [auth_router,users_router,admin_router,admin_ai_router,admin_ai_employee_router,admin_ai_employee_files_router,admin_ai_employee_knowledge_router,admin_agent_actions_router,admin_audit_router,admin_billing_router,admin_business_router,admin_channels_router,admin_company_view_router,admin_dashboard_router,admin_handoff_router,admin_integrations_router,admin_knowledge_router,admin_operations_router,admin_production_router,admin_providers_router,admin_setup_router,admin_solutions_router,admin_tool_execution_router,admin_tools_router,admin_automation_router,admin_analytics_builder_router,admin_service_billing_router,admin_service_plan_management_router,agent_factory_router,ai_agents_router,public_channels_router,website_widget_router,modules_router,company_modules_router,customer_agents_router,customer_business_router,customer_portal_router,usage_router,whatsapp_webhook_router]:app.include_router(r)
 
 app.mount("/static",StaticFiles(directory=str(FRONTEND_DIR)),name="static")
 @app.get("/")
