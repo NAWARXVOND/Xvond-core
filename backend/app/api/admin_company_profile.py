@@ -1,8 +1,20 @@
 import json
+import re
+from datetime import datetime
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from backend.app.core.company_catalog import (
+    company_catalog,
+    normalize_business_type,
+    normalize_country,
+    normalize_currency,
+    normalize_language,
+    normalize_languages,
+    normalize_timezone,
+)
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.company import Company
@@ -10,10 +22,20 @@ from backend.app.models.company_profile import CompanyProfile
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.ai_agent.profile_models import AIAgentProfile
-from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeChunk, KnowledgeDocument
+from backend.app.modules.knowledge.models import (
+    AgentKnowledge,
+    KnowledgeChunk,
+    KnowledgeDocument,
+)
 from backend.app.modules.knowledge.service import knowledge_service
 
-router = APIRouter(prefix="/admin/company-profile", tags=["Xvond Admin - Company Profile"])
+router = APIRouter(
+    prefix="/admin/company-profile",
+    tags=["Xvond Admin - Company Profile"],
+)
+
+DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 class CompanyProfileUpdate(BaseModel):
@@ -43,7 +65,7 @@ def _clean(value):
     return text or None
 
 
-def _clean_list(values):
+def _clean_list(values, *, max_items: int = 500):
     result = []
     for value in values or []:
         if isinstance(value, str):
@@ -52,7 +74,96 @@ def _clean_list(values):
                 result.append(item)
         elif value not in (None, "", {}, []):
             result.append(value)
+        if len(result) >= max_items:
+            break
     return result
+
+
+def _validate_email(value: str | None) -> str | None:
+    value = _clean(value)
+    if value and not EMAIL_RE.fullmatch(value):
+        raise ValueError("Invalid company email")
+    return value
+
+
+def _validate_website(value: str | None) -> str | None:
+    value = _clean(value)
+    if not value:
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Company website must be a valid http(s) URL")
+    if parsed.username or parsed.password:
+        raise ValueError("Company website must not contain embedded credentials")
+    return value.rstrip("/")
+
+
+def _validate_working_hours(value: dict | None) -> dict:
+    if not value:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("Working hours must be an object")
+
+    result = {}
+    unknown = set(value) - set(DAY_KEYS)
+    if unknown:
+        raise ValueError("Working hours contain unsupported day keys")
+
+    for day in DAY_KEYS:
+        row = value.get(day)
+        if row in (None, {}):
+            continue
+        if not isinstance(row, dict):
+            raise ValueError(f"Working hours for {day} are invalid")
+        enabled = bool(row.get("enabled", True))
+        if not enabled:
+            result[day] = {"enabled": False}
+            continue
+        start = str(row.get("start") or "").strip()
+        end = str(row.get("end") or "").strip()
+        if not start or not end:
+            raise ValueError(f"Working hours for {day} require start and end")
+        try:
+            start_time = datetime.strptime(start, "%H:%M")
+            end_time = datetime.strptime(end, "%H:%M")
+        except ValueError as exc:
+            raise ValueError(
+                f"Working hours for {day} must use HH:MM"
+            ) from exc
+        if end_time <= start_time:
+            raise ValueError(
+                f"Working hours for {day} must end after they start"
+            )
+        result[day] = {"enabled": True, "start": start, "end": end}
+    return result
+
+
+def _normalize_profile(data: CompanyProfileUpdate) -> dict:
+    primary_language = normalize_language(data.primary_language)
+    additional_languages = normalize_languages(data.additional_languages)
+    if primary_language:
+        additional_languages = [
+            item for item in additional_languages if item != primary_language
+        ]
+
+    return {
+        "business_type": normalize_business_type(data.business_type),
+        "description": _clean(data.description),
+        "country": normalize_country(data.country),
+        "currency": normalize_currency(data.currency),
+        "timezone": normalize_timezone(data.timezone),
+        "primary_language": primary_language,
+        "additional_languages": additional_languages,
+        "phone": _clean(data.phone),
+        "email": _validate_email(data.email),
+        "website": _validate_website(data.website),
+        "working_hours": _validate_working_hours(data.working_hours),
+        "locations": _clean_list(data.locations),
+        "services": _clean_list(data.services),
+        "service_areas": _clean_list(data.service_areas),
+        "policies": _clean_list(data.policies),
+        "business_rules": _clean_list(data.business_rules),
+    }
 
 
 def _serialize(company: Company, row: CompanyProfile | None) -> dict:
@@ -76,6 +187,7 @@ def _serialize(company: Company, row: CompanyProfile | None) -> dict:
         "service_areas": list(row.service_areas or []) if row else [],
         "policies": list(row.policies or []) if row else [],
         "business_rules": list(row.business_rules or []) if row else [],
+        "catalog": company_catalog(),
     }
 
 
@@ -96,7 +208,9 @@ def _business_knowledge_content(company: Company, row: CompanyProfile) -> str:
         if value:
             blocks.append(f"{label}: {value}")
     if row.additional_languages:
-        blocks.append("Additional Languages: " + ", ".join(row.additional_languages))
+        blocks.append(
+            "Additional Languages: " + ", ".join(row.additional_languages)
+        )
 
     structured = [
         ("Working Hours", row.working_hours),
@@ -108,11 +222,15 @@ def _business_knowledge_content(company: Company, row: CompanyProfile) -> str:
     ]
     for label, value in structured:
         if value:
-            blocks.append(f"{label}:\n{json.dumps(value, ensure_ascii=False, indent=2)}")
+            blocks.append(
+                f"{label}:\n{json.dumps(value, ensure_ascii=False, indent=2)}"
+            )
     return "\n\n".join(blocks).strip()
 
 
-def _remove_legacy_company_knowledge(db, company_id: int, canonical_document_id: int) -> None:
+def _remove_legacy_company_knowledge(
+    db, company_id: int, canonical_document_id: int
+) -> None:
     legacy_documents = (
         db.query(KnowledgeDocument)
         .filter(
@@ -133,8 +251,9 @@ def _remove_legacy_company_knowledge(db, company_id: int, canonical_document_id:
         db.delete(legacy)
 
 
-def sync_company_business_knowledge(db, company: Company, row: CompanyProfile) -> KnowledgeDocument:
-    # Company Profile is the single source of truth for shared company identity.
+def sync_company_business_knowledge(
+    db, company: Company, row: CompanyProfile
+) -> KnowledgeDocument:
     document = (
         db.query(KnowledgeDocument)
         .filter(
@@ -172,7 +291,13 @@ def sync_company_business_knowledge(db, company: Company, row: CompanyProfile) -
             .first()
         )
         if assignment is None:
-            db.add(AgentKnowledge(agent_id=agent.id, document_id=document.id, enabled=True))
+            db.add(
+                AgentKnowledge(
+                    agent_id=agent.id,
+                    document_id=document.id,
+                    enabled=True,
+                )
+            )
         else:
             assignment.enabled = True
 
@@ -182,13 +307,20 @@ def sync_company_business_knowledge(db, company: Company, row: CompanyProfile) -
 
 
 @router.get("/{company_id}")
-def get_company_profile(company_id: int, current_admin: User = Depends(require_xvond_admin)):
+def get_company_profile(
+    company_id: int,
+    current_admin: User = Depends(require_xvond_admin),
+):
     db = SessionLocal()
     try:
         company = db.query(Company).filter(Company.id == company_id).first()
         if company is None:
             raise HTTPException(404, "Company not found")
-        row = db.query(CompanyProfile).filter(CompanyProfile.company_id == company_id).first()
+        row = (
+            db.query(CompanyProfile)
+            .filter(CompanyProfile.company_id == company_id)
+            .first()
+        )
         return _serialize(company, row)
     finally:
         db.close()
@@ -209,32 +341,33 @@ def update_company_profile(
         company_name = _clean(data.company_name)
         if not company_name:
             raise HTTPException(400, "Company name is required")
-        company.name = company_name
+        if len(company_name) > 255:
+            raise HTTPException(400, "Company name is too long")
 
-        row = db.query(CompanyProfile).filter(CompanyProfile.company_id == company_id).first()
+        try:
+            normalized = _normalize_profile(data)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+        company.name = company_name
+        row = (
+            db.query(CompanyProfile)
+            .filter(CompanyProfile.company_id == company_id)
+            .first()
+        )
         if row is None:
             row = CompanyProfile(company_id=company_id)
             db.add(row)
 
-        row.business_type = _clean(data.business_type)
-        row.description = _clean(data.description)
-        row.country = _clean(data.country)
-        row.currency = _clean(data.currency)
-        row.timezone = _clean(data.timezone)
-        row.primary_language = _clean(data.primary_language)
-        row.additional_languages = _clean_list(data.additional_languages)
-        row.phone = _clean(data.phone)
-        row.email = _clean(data.email)
-        row.website = _clean(data.website)
-        row.working_hours = dict(data.working_hours or {})
-        row.locations = _clean_list(data.locations)
-        row.services = _clean_list(data.services)
-        row.service_areas = _clean_list(data.service_areas)
-        row.policies = _clean_list(data.policies)
-        row.business_rules = _clean_list(data.business_rules)
+        for key, value in normalized.items():
+            setattr(row, key, value)
         db.flush()
 
-        profiles = db.query(AIAgentProfile).filter(AIAgentProfile.company_id == company_id).all()
+        profiles = (
+            db.query(AIAgentProfile)
+            .filter(AIAgentProfile.company_id == company_id)
+            .all()
+        )
         for profile in profiles:
             profile.business_name = company.name
             profile.business_type = row.business_type
@@ -242,7 +375,12 @@ def update_company_profile(
         document = sync_company_business_knowledge(db, company, row)
         db.commit()
         result = _serialize(company, row)
-        result.update({"status": "updated", "knowledge_document_id": document.id})
+        result.update(
+            {
+                "status": "updated",
+                "knowledge_document_id": document.id,
+            }
+        )
         return result
     except HTTPException:
         db.rollback()
