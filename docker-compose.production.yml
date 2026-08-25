@@ -91,6 +91,50 @@ services:
       postgres:
         condition: service_healthy
 
+  offsite-backup:
+    image: restic/restic:0.19.1
+    container_name: xvond-offsite-backup
+    hostname: xvond-offsite-backup
+    restart: unless-stopped
+    profiles: ["offsite-backup"]
+    env_file:
+      - .env
+    environment:
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-}
+      OFFSITE_BACKUP_INTERVAL_SECONDS: ${OFFSITE_BACKUP_INTERVAL_SECONDS:-86400}
+      OFFSITE_KEEP_DAILY: ${OFFSITE_KEEP_DAILY:-14}
+      OFFSITE_KEEP_WEEKLY: ${OFFSITE_KEEP_WEEKLY:-8}
+      OFFSITE_KEEP_MONTHLY: ${OFFSITE_KEEP_MONTHLY:-12}
+    volumes:
+      - xvond_backups:/backups:ro
+      - ./scripts:/opt/xvond/scripts:ro
+    entrypoint: ["/bin/sh", "/opt/xvond/scripts/offsite_backup_loop.sh"]
+    depends_on:
+      postgres-backup:
+        condition: service_started
+
+  offsite-restore-verify:
+    image: restic/restic:0.19.1
+    hostname: xvond-offsite-restore-verify
+    profiles: ["offsite-verify"]
+    env_file:
+      - .env
+    environment:
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-}
+      RESTORE_DIR: /restore
+    volumes:
+      - xvond_restore_verify:/restore
+      - ./scripts:/opt/xvond/scripts:ro
+    entrypoint: ["/bin/sh", "/opt/xvond/scripts/offsite_restore_latest.sh"]
+
   redis:
     image: redis:7.4-alpine
     container_name: xvond-redis
@@ -108,3 +152,4 @@ volumes:
   xvond_postgres_data:
   xvond_redis_data:
   xvond_backups:
+  xvond_restore_verify:
