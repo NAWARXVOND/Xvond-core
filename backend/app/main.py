@@ -4,6 +4,7 @@ from pathlib import Path
 from time import perf_counter
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
@@ -67,21 +68,16 @@ async def lifespan(app: FastAPI):
 configure_logging(level=settings.LOG_LEVEL, json_logs=settings.LOG_JSON)
 logger = logging.getLogger("xvond.http")
 app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION, lifespan=lifespan)
+app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=False,allow_methods=["GET","POST","OPTIONS"],allow_headers=["Content-Type","X-Xvond-Widget-Key"])
 
 @app.middleware("http")
 async def request_observability(request: Request, call_next):
-    request_id = safe_request_id(request.headers.get("x-request-id"))
-    token = set_request_id(request_id)
-    started = perf_counter()
-    try:
-        response = await call_next(request)
+    request_id = safe_request_id(request.headers.get("x-request-id"));token = set_request_id(request_id);started = perf_counter()
+    try:response = await call_next(request)
     except Exception:
-        logger.exception("Unhandled request failure", extra={"method": request.method, "path": request.url.path, "client_ip": request_client_ip(request)})
-        raise
-    finally:
-        reset_request_id(token)
-    duration_ms = round((perf_counter() - started) * 1000, 2)
-    response.headers["X-Request-ID"] = request_id
+        logger.exception("Unhandled request failure", extra={"method": request.method, "path": request.url.path, "client_ip": request_client_ip(request)});raise
+    finally:reset_request_id(token)
+    duration_ms = round((perf_counter() - started) * 1000, 2);response.headers["X-Request-ID"] = request_id
     logger.info("Request completed", extra={"request_id": request_id, "method": request.method, "path": request.url.path, "status_code": response.status_code, "duration_ms": duration_ms, "client_ip": request_client_ip(request)})
     return response
 
