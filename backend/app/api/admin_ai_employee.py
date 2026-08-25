@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.company import Company
@@ -91,6 +92,10 @@ def update_settings(company_id:int,agent_id:int,data:AIEmployeeUpdate,current_ad
  except HTTPException:db.rollback();raise
  except Exception:db.rollback();raise
  finally:db.close()
+def _delete_direct_agent_fk_rows(db,agent_id:int):
+ rows=db.execute(text("""SELECT DISTINCT tc.table_name,kcu.column_name FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name=kcu.constraint_name AND tc.constraint_schema=kcu.constraint_schema JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name=tc.constraint_name AND ccu.constraint_schema=tc.constraint_schema WHERE tc.constraint_type='FOREIGN KEY' AND tc.table_schema='public' AND ccu.table_schema='public' AND ccu.table_name='ai_agents' AND ccu.column_name='id'""")).all()
+ for table_name,column_name in rows:
+  if table_name!='ai_agents':db.execute(text(f'DELETE FROM "{table_name}" WHERE "{column_name}"=:agent_id'),{"agent_id":agent_id})
 @router.delete("/companies/{company_id}/{agent_id}")
 def delete_ai_employee(company_id:int,agent_id:int,current_admin:User=Depends(require_xvond_admin)):
  db=SessionLocal()
@@ -101,11 +106,11 @@ def delete_ai_employee(company_id:int,agent_id:int,current_admin:User=Depends(re
   if ch and ch.enabled:raise HTTPException(409,"Disconnect/deactivate the live channel before permanently deleting this AI employee")
   ids=[x[0] for x in db.query(AIConversation.id).filter(AIConversation.agent_id==agent_id).all()]
   if ids:db.query(AIMessage).filter(AIMessage.conversation_id.in_(ids)).delete(synchronize_session=False)
-  db.query(ToolApprovalRequest).filter(ToolApprovalRequest.agent_id==agent_id).delete(synchronize_session=False);db.query(AIConversation).filter(AIConversation.agent_id==agent_id).delete(synchronize_session=False);db.query(AIUsage).filter(AIUsage.agent_id==agent_id).delete(synchronize_session=False);db.query(AgentToolAssignment).filter(AgentToolAssignment.agent_id==agent_id).delete(synchronize_session=False)
-  links=db.query(AgentKnowledge).filter(AgentKnowledge.agent_id==agent_id).all();dids=[x.document_id for x in links];db.query(AgentKnowledge).filter(AgentKnowledge.agent_id==agent_id).delete(synchronize_session=False)
+  links=db.query(AgentKnowledge).filter(AgentKnowledge.agent_id==agent_id).all();dids=[x.document_id for x in links]
+  _delete_direct_agent_fk_rows(db,agent_id)
   for did in dids:
    if not db.query(AgentKnowledge).filter(AgentKnowledge.document_id==did).first():db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id==did).delete(synchronize_session=False);db.query(KnowledgeDocument).filter(KnowledgeDocument.id==did,KnowledgeDocument.company_id==company_id).delete(synchronize_session=False)
-  db.query(AgentChannel).filter(AgentChannel.agent_id==agent_id).delete(synchronize_session=False);db.delete(a);db.commit();return {"status":"deleted"}
+  db.execute(text("DELETE FROM ai_agents WHERE id=:agent_id AND company_id=:company_id"),{"agent_id":agent_id,"company_id":company_id});db.commit();return {"status":"deleted"}
  except HTTPException:db.rollback();raise
  except Exception:db.rollback();raise
  finally:db.close()
