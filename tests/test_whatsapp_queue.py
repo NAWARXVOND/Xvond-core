@@ -229,3 +229,15 @@ def test_retry_delay_increases_with_attempts():
     second = json.loads(scheduled)
     assert second["attempts"] == 2
     assert second["retry_after_seconds"] == 30
+
+
+def test_blocking_reserve_timeout_has_socket_margin():
+    source = (
+        __import__(
+            "pathlib"
+        ).Path(
+            "backend/app/modules/channels/whatsapp_queue.py"
+        ).read_text(encoding="utf-8")
+    )
+    assert "socket_timeout=15" in source
+    assert "def reserve(self, timeout: int = 5)" in source
