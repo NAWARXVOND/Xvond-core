@@ -1,7 +1,11 @@
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from decimal import Decimal
 
+from sqlalchemy import inspect
+
 from backend.app.core.ai.engine import ai_engine
+from backend.app.modules.ai_agent.models import AIUsage
 from backend.app.modules.providers.models import (
     AIModelRecord,
     AIProviderRecord,
@@ -50,7 +54,49 @@ def _append_if_available(db, selections: list[ProviderSelection], provider: str 
         selections.append(candidate)
 
 
-def _automatic_candidates(db) -> list[ProviderSelection]:
+def _recent_runtime_stats(db, company_id: int) -> dict[tuple[str, str], dict]:
+    """Return recent per-model reliability and latency without requiring new schema."""
+    try:
+        if not inspect(db.get_bind()).has_table("ai_usage"):
+            return {}
+        cutoff = datetime.utcnow() - timedelta(hours=24)
+        rows = db.query(AIUsage).filter(
+            AIUsage.company_id == company_id,
+            AIUsage.created_at >= cutoff,
+        ).order_by(AIUsage.id.desc()).limit(300).all()
+    except Exception:
+        return {}
+
+    stats: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        key = (row.provider, row.model)
+        item = stats.setdefault(key, {"total": 0, "failed": 0, "latency_sum": 0})
+        item["total"] += 1
+        if row.status != "success":
+            item["failed"] += 1
+        if row.latency_ms and row.latency_ms > 0:
+            item["latency_sum"] += row.latency_ms
+    return stats
+
+
+def _candidate_score(model: AIModelRecord, provider: AIProviderRecord, stats: dict) -> tuple:
+    runtime = stats.get((model.provider_name, model.model_name), {})
+    total = int(runtime.get("total", 0) or 0)
+    failed = int(runtime.get("failed", 0) or 0)
+    failure_rate = (failed / total) if total else 0.0
+    average_latency = (int(runtime.get("latency_sum", 0) or 0) / total) if total else 0.0
+    price = Decimal(model.input_price_per_million or 0) + Decimal(model.output_price_per_million or 0)
+    return (
+        1 if provider.name == "mock" else 0,
+        round(failure_rate, 4),
+        int(provider.priority or 100),
+        round(average_latency, 2),
+        price,
+        int(model.id or 0),
+    )
+
+
+def _automatic_candidates(db, company_id: int) -> list[ProviderSelection]:
     loaded = set(ai_engine.list_providers())
     rows = (
         db.query(AIModelRecord, AIProviderRecord)
@@ -61,18 +107,12 @@ def _automatic_candidates(db) -> list[ProviderSelection]:
         )
         .all()
     )
-    rows.sort(
-        key=lambda row: (
-            1 if row[1].name == "mock" else 0,
-            int(row[1].priority or 100),
-            Decimal(row[0].input_price_per_million or 0) + Decimal(row[0].output_price_per_million or 0),
-            int(row[0].id or 0),
-        )
-    )
+    stats = _recent_runtime_stats(db, company_id)
+    rows = [row for row in rows if row[1].name in loaded]
+    rows.sort(key=lambda row: _candidate_score(row[0], row[1], stats))
     return [
         ProviderSelection(provider=model.provider_name, model=model.model_name, reason="automatic")
-        for model, provider in rows
-        if provider.name in loaded
+        for model, _provider in rows
     ]
 
 
@@ -82,31 +122,29 @@ def runtime_selections(
     provider: str | None,
     model: str | None,
 ) -> list[ProviderSelection]:
-    """Return a complete provider/model failover chain for runtime use.
+    """Build the full provider/model route for one company request.
 
-    Existing agent/provider choices are preferences, not a single point of failure.
-    Xvond then appends every loaded and enabled model so an outage or quota problem
-    at one vendor can fall through to the next available provider automatically.
+    If the company explicitly pins a default model, that policy is respected first.
+    Otherwise Xvond automatically ranks every loaded/enabled model using recent
+    reliability, admin priority, latency and configured token price. Remaining
+    providers form the failover chain so one vendor is never a single point of failure.
     """
     selections: list[ProviderSelection] = []
     profile = db.query(CompanyAIProfile).filter(CompanyAIProfile.company_id == company_id).first()
 
-    # Company policy wins when explicitly configured.
-    if profile:
+    if profile and profile.default_provider and profile.default_model:
         _append_if_available(db, selections, profile.default_provider, profile.default_model, "company_default")
-
-    # Keep the employee's current model as a preference for backward compatibility.
-    _append_if_available(db, selections, provider, model, "agent_preference")
-
-    # Preserve the explicit legacy fallback as the next preferred route.
-    if profile and profile.allow_fallback:
-        _append_if_available(db, selections, profile.fallback_provider, profile.fallback_model, "company_fallback")
-
-    # Automatic multi-provider routing: append all remaining enabled/loaded models.
-    if profile is None or profile.allow_fallback:
-        for candidate in _automatic_candidates(db):
+        if profile.allow_fallback:
+            _append_if_available(db, selections, profile.fallback_provider, profile.fallback_model, "company_fallback")
+            for candidate in _automatic_candidates(db, company_id):
+                if all((item.provider, item.model) != (candidate.provider, candidate.model) for item in selections):
+                    selections.append(candidate)
+    else:
+        for candidate in _automatic_candidates(db, company_id):
             if all((item.provider, item.model) != (candidate.provider, candidate.model) for item in selections):
                 selections.append(candidate)
+        # A legacy agent choice is only used if it was not already part of the automatic pool.
+        _append_if_available(db, selections, provider, model, "agent_preference")
 
     if not selections:
         raise ValueError("No enabled AI provider/model is available")
