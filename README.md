@@ -65,3 +65,30 @@ GitHub CI also builds a completely fresh PostgreSQL database with Alembic before
 ## Deployment flow
 
 `VS Code -> GitHub -> server`. Commit and push reviewed changes, pull the tagged release on the server, apply migrations, and restart the service.
+
+
+## First customer acceptance
+
+After deployment and migrations, seed the current provider/model catalog:
+
+```bash
+python -m xvond_seed_providers
+```
+
+Run the non-billable production gate for the customer:
+
+```bash
+python -m scripts.production_acceptance --company-id COMPANY_ID
+```
+
+Then perform one explicit billable live-AI check:
+
+```bash
+python -m scripts.production_acceptance \
+  --company-id COMPANY_ID \
+  --agent-id AGENT_ID \
+  --live-ai
+```
+
+Do not activate customer traffic unless the report returns
+`"overall_ok": true`.
