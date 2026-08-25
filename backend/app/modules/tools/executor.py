@@ -2,6 +2,7 @@ from copy import deepcopy
 
 from backend.app.core.config_secrets import reveal_config
 from backend.app.core.module_access import require_company_module
+from backend.app.models.company_module import CompanyModule
 from backend.app.modules.ai_agent.models import AIAgent, AIConversation
 from backend.app.modules.tools.business_models import ActionRequest
 from backend.app.modules.tools.models import AgentToolAssignment, ToolApprovalRequest
@@ -56,9 +57,10 @@ def _runtime_description(tool, config: dict) -> str:
             destination = str((action.get("destination") or {}).get("type") or "unconfigured")
             availability = str((action.get("availability") or {}).get("mode") or "none")
             confirmation = "required" if action.get("confirmation_required", True) else "not required"
+            module = str(action.get("module") or "unassigned")
             rules.append(
                 f"ACTION {action_type} ({action.get('label') or action_type}): "
-                f"purpose={action.get('description') or 'configured business operation'}; "
+                f"module={module}; purpose={action.get('description') or 'configured business operation'}; "
                 f"required details={', '.join(fields) if fields else 'none'}; "
                 f"destination={destination}; availability={availability}; customer confirmation={confirmation}."
             )
@@ -73,7 +75,7 @@ def _runtime_description(tool, config: dict) -> str:
                 " On the customer's next confirming message, call execute for the same action; Xvond will resolve the pending request automatically, so never ask the customer for an internal request ID."
                 " Never claim success until execute returns success."
                 " Never hand off a configured operation unless that operation's configured destination is human_handoff."
-                " If a destination is unconfigured, explain that the operation cannot yet be completed instead of pretending it succeeded."
+                " If a destination is unconfigured or its capability module is disabled, explain that the operation cannot currently be completed instead of pretending it succeeded."
             )
     if tool.name == "lead":
         fields = [str(x).strip() for x in (config.get("required_fields") or []) if str(x).strip()]
@@ -107,6 +109,25 @@ def _pending_request(db, company_id: int, agent_id: int, conversation_id: int | 
     return query.order_by(ActionRequest.id.desc()).first()
 
 
+def _action_module_enabled(db, company_id: int, config: dict, action_type: str) -> bool:
+    action = ((config or {}).get("actions") or {}).get(action_type)
+    if not isinstance(action, dict) or not action.get("enabled", True):
+        return False
+    module_name = str(action.get("module") or "").strip()
+    if not module_name:
+        return False
+    row = (
+        db.query(CompanyModule)
+        .filter(
+            CompanyModule.company_id == company_id,
+            CompanyModule.module_name == module_name,
+            CompanyModule.enabled.is_(True),
+        )
+        .first()
+    )
+    return row is not None
+
+
 class ToolExecutor:
     def __init__(self):
         register_builtin_tools()
@@ -118,12 +139,23 @@ class ToolExecutor:
             .order_by(AgentToolAssignment.id.asc())
             .all()
         )
+        agent = db.query(AIAgent).filter(AIAgent.id == agent_id).first()
+        company_id = agent.company_id if agent else None
         generic_config = {}
         for assignment in assignments:
             if assignment.tool_name == "action_request":
                 generic_config = reveal_config(assignment.config) or {}
                 break
         generic_actions = _enabled_actions(generic_config)
+        if company_id is not None:
+            generic_actions = {
+                key: action
+                for key, action in generic_actions.items()
+                if _action_module_enabled(db, company_id, generic_config, key)
+            }
+            if generic_config.get("actions"):
+                generic_config = dict(generic_config)
+                generic_config["actions"] = generic_actions
         generic_active = bool(generic_actions)
         allows_handoff = any(
             str((action.get("destination") or {}).get("type") or "") == "human_handoff"
@@ -139,11 +171,17 @@ class ToolExecutor:
             tool = tool_registry.get(assignment.tool_name)
             if tool is not None:
                 config = reveal_config(assignment.config) or {}
-                result.append({
-                    "name": tool.name,
-                    "description": _runtime_description(tool, config),
-                    "input_schema": _runtime_schema(tool, config),
-                })
+                if assignment.tool_name == "action_request":
+                    config = generic_config
+                    if not generic_actions:
+                        continue
+                result.append(
+                    {
+                        "name": tool.name,
+                        "description": _runtime_description(tool, config),
+                        "input_schema": _runtime_schema(tool, config),
+                    }
+                )
         return result
 
     def validate_execution_scope(self, db, company_id: int, agent_id: int, conversation_id: int | None = None) -> str | None:
@@ -175,6 +213,18 @@ class ToolExecutor:
         if tool is None:
             return {"success": False, "tool": tool_name, "data": None, "error": "Tool is not registered"}
         config = reveal_config(assignment.config) or {}
+
+        actual_arguments = dict(arguments or {})
+        if tool_name == "action_request":
+            action_type = str(actual_arguments.get("action_type") or "").strip()
+            if not action_type or not _action_module_enabled(db, company_id, config, action_type):
+                return {
+                    "success": False,
+                    "tool": tool_name,
+                    "data": None,
+                    "error": "This business capability is not enabled for the company",
+                }
+
         approval_required = tool_requires_approval(tool_name, config)
         if approval_required and not approval_granted:
             request = ToolApprovalRequest(
@@ -182,14 +232,19 @@ class ToolExecutor:
                 agent_id=agent_id,
                 conversation_id=conversation_id,
                 tool_name=tool_name,
-                arguments=arguments or {},
+                arguments=actual_arguments,
                 status="pending",
             )
             db.add(request)
             db.flush()
-            return {"success": False, "tool": tool_name, "data": {"approval_request_id": request.id, "status": "pending_approval"}, "error": "Tool execution requires human approval", "approval_required": True}
+            return {
+                "success": False,
+                "tool": tool_name,
+                "data": {"approval_request_id": request.id, "status": "pending_approval"},
+                "error": "Tool execution requires human approval",
+                "approval_required": True,
+            }
 
-        actual_arguments = dict(arguments or {})
         if tool_name == "action_request" and not actual_arguments.get("request_id"):
             operation = str(actual_arguments.get("operation") or "").strip()
             action_type = str(actual_arguments.get("action_type") or "").strip()
@@ -198,12 +253,23 @@ class ToolExecutor:
                 if pending is not None:
                     actual_arguments["request_id"] = pending.id
 
-        context = {"db": db, "company_id": company_id, "agent_id": agent_id, "conversation_id": conversation_id, "config": config}
+        context = {
+            "db": db,
+            "company_id": company_id,
+            "agent_id": agent_id,
+            "conversation_id": conversation_id,
+            "config": config,
+        }
         try:
             with db.begin_nested():
                 result = tool.execute(arguments=actual_arguments, context=context)
                 db.flush()
-            return {"success": bool(result.success), "tool": tool_name, "data": result.data, "error": result.error}
+            return {
+                "success": bool(result.success),
+                "tool": tool_name,
+                "data": result.data,
+                "error": result.error,
+            }
         except Exception as exc:
             return {"success": False, "tool": tool_name, "data": None, "error": str(exc)}
 
