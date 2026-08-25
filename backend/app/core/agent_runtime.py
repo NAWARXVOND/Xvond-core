@@ -74,15 +74,28 @@ class AgentRuntime:
   if knowledge:context_parts.append("COMPANY KNOWLEDGE (authoritative facts; use only when relevant to the customer's current intent):\n"+knowledge)
   else:context_parts.append("COMPANY KNOWLEDGE:\nNo relevant business knowledge was retrieved for this message. Do not invent business facts.")
   if history:context_parts.append("CONVERSATION HISTORY (use for continuity; not authoritative for business facts):\n"+history)
-  context_parts.append("CURRENT CUSTOMER MESSAGE (answer this intent directly):\n"+message);runtime_message="\n\n".join(context_parts);user_message=AIMessage(conversation_id=conversation.id,role="user",content=message);db.add(user_message);db.flush();tool_outputs=None;continuation=None;executed_tools=[];total_input_tokens=0;total_output_tokens=0;total_tokens=0;total_provider_cost=Decimal("0");final_text="";started_at=perf_counter()
+  context_parts.append("CURRENT CUSTOMER MESSAGE (answer this intent directly):\n"+message);runtime_message="\n\n".join(context_parts);user_message=AIMessage(conversation_id=conversation.id,role="user",content=message);db.add(user_message);db.flush();tool_outputs=None;continuation=None;executed_tools=[];routing_attempts=[];total_input_tokens=0;total_output_tokens=0;total_tokens=0;total_provider_cost=Decimal("0");final_text="";started_at=perf_counter()
   for _round in range(self.MAX_TOOL_ROUNDS):
    try:
-    try:result=ai_engine.generate(provider_name=active_provider,system_prompt=agent.system_prompt,user_message=runtime_message,model=active_model,tools=tool_definitions,tool_outputs=tool_outputs,continuation=continuation)
-    except Exception:
-     if _round!=0 or len(selections)<2:raise
-     fallback=selections[1];active_provider=fallback.provider;active_model=fallback.model;result=ai_engine.generate(provider_name=active_provider,system_prompt=agent.system_prompt,user_message=runtime_message,model=active_model,tools=tool_definitions,tool_outputs=None,continuation=None)
+    if _round==0:
+     result=None;last_error=None
+     for selection in selections:
+      active_provider=selection.provider;active_model=selection.model
+      try:
+       result=ai_engine.generate(provider_name=active_provider,system_prompt=agent.system_prompt,user_message=runtime_message,model=active_model,tools=tool_definitions,tool_outputs=None,continuation=None)
+       routing_attempts.append({"provider":active_provider,"model":active_model,"reason":selection.reason,"success":True})
+       break
+      except Exception as exc:
+       last_error=exc;routing_attempts.append({"provider":active_provider,"model":active_model,"reason":selection.reason,"success":False,"error":str(exc)[:500]})
+     if result is None:
+      raise last_error or RuntimeError("No AI provider completed the request")
+    else:
+     # Once a provider has emitted a tool call, keep the remaining tool loop on
+     # that provider because continuation formats are provider-specific. If it
+     # fails here, the transaction is rolled back instead of replaying actions.
+     result=ai_engine.generate(provider_name=active_provider,system_prompt=agent.system_prompt,user_message=runtime_message,model=active_model,tools=tool_definitions,tool_outputs=tool_outputs,continuation=continuation)
    except Exception as exc:
-    latency_ms=int((perf_counter()-started_at)*1000);error_message=str(exc)[:2000];db.rollback();db.add(AIUsage(company_id=company_id,agent_id=agent_id,provider=active_provider,model=active_model,input_tokens=total_input_tokens,output_tokens=total_output_tokens,total_tokens=total_tokens,provider_cost=total_provider_cost,status="failed",error_message=error_message,latency_ms=latency_ms));audit_service.log(db=db,company_id=company_id,action="agent.chat_failed",resource_type="ai_agent",resource_id=agent_id,details={"provider":active_provider,"model":active_model,"error":error_message,"latency_ms":latency_ms});db.commit();raise HTTPException(502,"AI provider request failed") from exc
+    latency_ms=int((perf_counter()-started_at)*1000);error_message=str(exc)[:2000];db.rollback();db.add(AIUsage(company_id=company_id,agent_id=agent_id,provider=active_provider,model=active_model,input_tokens=total_input_tokens,output_tokens=total_output_tokens,total_tokens=total_tokens,provider_cost=total_provider_cost,status="failed",error_message=error_message,latency_ms=latency_ms));audit_service.log(db=db,company_id=company_id,action="agent.chat_failed",resource_type="ai_agent",resource_id=agent_id,details={"provider":active_provider,"model":active_model,"error":error_message,"latency_ms":latency_ms,"routing_attempts":routing_attempts});db.commit();raise HTTPException(502,"AI provider request failed") from exc
    total_input_tokens+=result.input_tokens;total_output_tokens+=result.output_tokens;total_tokens+=result.total_tokens;calculated_cost=ai_cost_engine.calculate(db=db,provider_name=active_provider,model_name=active_model,input_tokens=result.input_tokens,output_tokens=result.output_tokens);total_provider_cost+=result.cost if result.cost and result.cost>Decimal("0") else calculated_cost
    if not result.tool_calls:final_text=result.text;break
    continuation=result.continuation;tool_outputs=[]
@@ -90,8 +103,8 @@ class AgentRuntime:
     execution=tool_executor.execute(db=db,company_id=company_id,agent_id=agent.id,tool_name=call.name,arguments=call.arguments or {},conversation_id=conversation.id);output=ToolOutput(call_id=call.id,name=call.name,success=bool(execution.get("success")),data=execution.get("data"),error=execution.get("error"));tool_outputs.append(output);executed_tools.append({"call_id":call.id,"name":call.name,"arguments":call.arguments or {},"success":output.success,"data":output.data,"error":output.error});audit_service.log(db=db,company_id=company_id,action="agent.tool_executed",resource_type="ai_agent",resource_id=agent.id,details={"conversation_id":conversation.id,"tool":call.name,"success":output.success,"error":output.error})
   else:raise HTTPException(500,"Agent exceeded the maximum number of tool execution rounds")
   if not final_text:final_text="The agent completed its actions but did not return a final response."
-  assistant_message=AIMessage(conversation_id=conversation.id,role="assistant",content=final_text);db.add(assistant_message);usage=AIUsage(company_id=company_id,agent_id=agent.id,provider=active_provider,model=active_model,input_tokens=total_input_tokens,output_tokens=total_output_tokens,total_tokens=total_tokens,provider_cost=total_provider_cost,status="success",latency_ms=int((perf_counter()-started_at)*1000));db.add(usage);audit_service.log(db=db,company_id=company_id,action="agent.chat_completed",resource_type="ai_agent",resource_id=agent.id,details={"conversation_id":conversation.id,"provider":active_provider,"model":active_model,"tool_execution_count":len(executed_tools),"total_tokens":total_tokens,"latency_ms":usage.latency_ms});db.flush()
+  assistant_message=AIMessage(conversation_id=conversation.id,role="assistant",content=final_text);db.add(assistant_message);usage=AIUsage(company_id=company_id,agent_id=agent.id,provider=active_provider,model=active_model,input_tokens=total_input_tokens,output_tokens=total_output_tokens,total_tokens=total_tokens,provider_cost=total_provider_cost,status="success",latency_ms=int((perf_counter()-started_at)*1000));db.add(usage);audit_service.log(db=db,company_id=company_id,action="agent.chat_completed",resource_type="ai_agent",resource_id=agent.id,details={"conversation_id":conversation.id,"provider":active_provider,"model":active_model,"tool_execution_count":len(executed_tools),"total_tokens":total_tokens,"latency_ms":usage.latency_ms,"routing_attempts":routing_attempts});db.flush()
   if commit:
    db.commit();db.refresh(user_message);db.refresh(assistant_message)
-  return {"conversation_id":conversation.id,"agent_id":agent.id,"company_id":company_id,"provider":active_provider,"model":active_model,"message":{"id":user_message.id,"role":user_message.role,"content":user_message.content},"response":{"id":assistant_message.id,"role":assistant_message.role,"content":assistant_message.content},"tool_executions":executed_tools,"usage":{"input_tokens":total_input_tokens,"output_tokens":total_output_tokens,"total_tokens":total_tokens,"provider_cost":total_provider_cost,"latency_ms":usage.latency_ms}}
+  return {"conversation_id":conversation.id,"agent_id":agent.id,"company_id":company_id,"provider":active_provider,"model":active_model,"message":{"id":user_message.id,"role":user_message.role,"content":user_message.content},"response":{"id":assistant_message.id,"role":assistant_message.role,"content":assistant_message.content},"tool_executions":executed_tools,"routing_attempts":routing_attempts,"usage":{"input_tokens":total_input_tokens,"output_tokens":total_output_tokens,"total_tokens":total_tokens,"provider_cost":total_provider_cost,"latency_ms":usage.latency_ms}}
 agent_runtime=AgentRuntime()
