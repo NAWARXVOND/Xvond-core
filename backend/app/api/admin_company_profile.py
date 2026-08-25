@@ -10,7 +10,7 @@ from backend.app.models.company_profile import CompanyProfile
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.ai_agent.profile_models import AIAgentProfile
-from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeDocument
+from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeChunk, KnowledgeDocument
 from backend.app.modules.knowledge.service import knowledge_service
 
 router = APIRouter(prefix="/admin/company-profile", tags=["Xvond Admin - Company Profile"])
@@ -112,8 +112,29 @@ def _business_knowledge_content(company: Company, row: CompanyProfile) -> str:
     return "\n\n".join(blocks).strip()
 
 
+def _remove_legacy_company_knowledge(db, company_id: int, canonical_document_id: int) -> None:
+    legacy_documents = (
+        db.query(KnowledgeDocument)
+        .filter(
+            KnowledgeDocument.company_id == company_id,
+            KnowledgeDocument.id != canonical_document_id,
+            KnowledgeDocument.title.in_(("Business Profile", "Business Website")),
+        )
+        .all()
+    )
+
+    for legacy in legacy_documents:
+        db.query(AgentKnowledge).filter(
+            AgentKnowledge.document_id == legacy.id,
+        ).delete(synchronize_session=False)
+        db.query(KnowledgeChunk).filter(
+            KnowledgeChunk.document_id == legacy.id,
+        ).delete(synchronize_session=False)
+        db.delete(legacy)
+
+
 def sync_company_business_knowledge(db, company: Company, row: CompanyProfile) -> KnowledgeDocument:
-    # Reuse the protected title already understood broadly by the knowledge engine.
+    # Company Profile is the single source of truth for shared company identity.
     document = (
         db.query(KnowledgeDocument)
         .filter(
@@ -154,6 +175,8 @@ def sync_company_business_knowledge(db, company: Company, row: CompanyProfile) -
             db.add(AgentKnowledge(agent_id=agent.id, document_id=document.id, enabled=True))
         else:
             assignment.enabled = True
+
+    _remove_legacy_company_knowledge(db, company.id, document.id)
     db.flush()
     return document
 
