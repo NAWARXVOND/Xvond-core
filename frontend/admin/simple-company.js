@@ -3,11 +3,6 @@ function simpleEscape(v){return String(v??"").replaceAll("&","&amp;").replaceAll
 function f(v){return simpleEscape(v||"")}
 function businessTypeOptions(selected=""){const types=["Salon / Beauty","Restaurant / Cafe","Retail Store","E-commerce","Clinic / Medical Center","Dental Clinic","Pharmacy","Real Estate","Hotel / Hospitality","Travel / Tourism","Professional Services","Education / Training","Gym / Fitness","Automotive","Home Services","Maintenance / Contracting","Logistics / Delivery","Technology / Software","Marketing / Media","Financial / Accounting Services","Legal Services","Other"];return `<option value="">Select business type</option>`+types.map(t=>`<option value="${f(t)}" ${t===selected?"selected":""}>${f(t)}</option>`).join("")}
 
-// Shared helpers retained for the current Company Control Center.
-// Company rendering and AI Employee profile forms live in company-control-center.js
-// and employee-capabilities.js. Do not reintroduce company facts or fixed booking/order
-// switches into the employee profile here.
-
 async function setSimpleChannelStatus(c,id,en){try{await api(`/admin/channels/${id}`,{method:"PUT",body:JSON.stringify({enabled:en})});await openSimpleCompany(c)}catch(e){alert(e.message)}}
 
 async function takeOverConversation(c,conversationId,a){try{await api(`/admin/handoff/companies/${c}/conversations/${conversationId}/take-over`,{method:"POST"});await openHumanTakeover(c,a)}catch(e){alert(e.message)}}
@@ -22,7 +17,7 @@ async function openWhatsAppSetup(a,c){
     const channel=(result.channels||[]).find(x=>+x.id===+c)||{};
     const cfg=channel.config||{};
     const secrets=new Set(channel.configured_secret_fields||[]);
-    openModal("WhatsApp Settings",`<div class="modal-intro"><strong>Meta WhatsApp Business</strong><p>Connection credentials and WhatsApp-only conversation behavior. Leave an existing secret blank to keep it unchanged. Activation remains a separate readiness-gated step.</p></div>
+    openModal("WhatsApp Settings",`<div class="modal-intro"><strong>Meta WhatsApp Business</strong><p>For production clients, use Embedded Signup so the client authorizes their own WhatsApp Business account without giving Xvond a password or token.</p><button type="button" onclick="openMetaWhatsAppConnect(${Number(a)})">Connect WhatsApp with Meta</button><p style="margin-top:10px">Manual credentials remain available for development or controlled migrations. Leave an existing secret blank to keep it unchanged.</p></div>
     <div class="form-group"><label>Phone Number ID</label><input id="simple-wa-phone-id" value="${f(cfg.phone_number_id||'')}"></div>
     <div class="form-grid two"><div class="form-group"><label>Access Token</label><input id="simple-wa-access-token" type="password" placeholder="${secrets.has('access_token')?'Already configured — leave blank to keep':'Required'}"></div><div class="form-group"><label>Verify Token</label><input id="simple-wa-verify-token" type="password" placeholder="${secrets.has('verify_token')?'Already configured — leave blank to keep':'Required'}"></div></div>
     <div class="form-grid two"><div class="form-group"><label>App Secret</label><input id="simple-wa-app-secret" type="password" placeholder="${secrets.has('app_secret')?'Already configured — leave blank to keep':'Required'}"></div><div class="form-group"><label>Graph API Version</label><input id="simple-wa-version" value="${f(cfg.graph_api_version||'v23.0')}"></div></div>
