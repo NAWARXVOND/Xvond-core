@@ -25,6 +25,27 @@ def test_meta_completion_subscribes_waba_before_local_activation():
     assert "channel.enabled = not blockers" in api
 
 
+def test_meta_signup_requires_complete_server_configuration_before_launch():
+    api = source("backend/app/api/admin_meta_whatsapp.py")
+    assert "_missing_meta_settings" in api
+    assert 'for key in ("app_id", "app_secret", "config_id", "verify_token")' in api
+    assert '"missing_settings": missing' in api
+
+
+def test_meta_token_exchange_does_not_put_app_secret_in_query_string():
+    api = source("backend/app/api/admin_meta_whatsapp.py")
+    assert '"POST",\n        _graph_url(config["graph_api_version"], "oauth/access_token"),' in api
+    assert "form=form" in api
+    assert '"oauth/access_token", params' not in api
+
+
+def test_meta_reconnect_preserves_existing_channel_behavior():
+    api = source("backend/app/api/admin_meta_whatsapp.py")
+    assert "WHATSAPP_BEHAVIOR_DEFAULTS" in api
+    assert "if channel is None:\n            incoming.update(WHATSAPP_BEHAVIOR_DEFAULTS)" in api
+    assert "validate_channel_config(\"whatsapp\", reveal_config(merged))" in api
+
+
 def test_meta_browser_origin_check_is_not_suffix_only():
     js = source("frontend/admin/meta-whatsapp.js")
     assert "new URL(origin)" in js
