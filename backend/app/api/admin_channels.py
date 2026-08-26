@@ -428,3 +428,10 @@ def delete_channel(
 
     finally:
         db.close()
+
+
+# Meta Embedded Signup is part of the WhatsApp channel lifecycle.
+# Keeping it nested here means main.py does not need a second admin router.
+from backend.app.api.admin_meta_whatsapp import router as meta_whatsapp_router
+
+router.include_router(meta_whatsapp_router)
