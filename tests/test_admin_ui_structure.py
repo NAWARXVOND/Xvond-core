@@ -74,3 +74,13 @@ def test_admin_privacy_boundary_keeps_customer_content_out_of_operator_ui():
     assert "/admin/agent-actions/companies/${companyId}/requests" not in privacy
     assert "/admin/operations/companies/${companyId}/conversations" not in privacy
     assert "/admin/handoff/companies/${companyId}/sessions" not in privacy
+
+
+def test_admin_action_editor_preserves_intentional_state_mutations():
+    privacy = (ADMIN_DIR / "privacy-boundaries.js").read_text(encoding="utf-8-sig")
+
+    assert "renderAgentActionsAfterStateMutation" in privacy
+    assert "skipCollectAfterMutation" in privacy
+    assert "addCustomAgentAction = function" in privacy
+    assert "removeAgentAction = function" in privacy
+    assert "applySuggestedAgentActionTemplate = function" in privacy
