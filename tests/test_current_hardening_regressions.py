@@ -53,7 +53,7 @@ def test_failed_automation_runs_remain_billable_for_capacity():
     runtime = source("backend/app/modules/automation/runtime.py")
     marker = 'metadata={"workflow_id": workflow.id, "status": "failed"}'
     assert marker in runtime
-    assert runtime.count('"automation",\n                "runs"') >= 2
+    assert runtime.count("service_limits.record(") >= 2
 
 
 def test_voice_provisioning_is_resumable_and_readiness_gated():
