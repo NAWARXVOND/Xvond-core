@@ -14,6 +14,7 @@ from backend.app.core.visitor_tokens import (
     verify_website_visitor_token,
 )
 from backend.app.modules.ai_agent.models import AIConversation, AIMessage
+from backend.app.modules.channels.conversation_source import bind_conversation_source
 from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.tools.business_models import HumanHandoff
 
@@ -155,6 +156,14 @@ def website_chat(
             db, channel.company_id, data.conversation_id
         ):
             conversation = _conversation(db, channel, data.conversation_id)
+            bind_conversation_source(
+                db,
+                conversation_id=conversation.id,
+                company_id=channel.company_id,
+                agent_id=channel.agent_id,
+                channel_type="website",
+                channel_id=channel.id,
+            )
             msg = AIMessage(
                 conversation_id=conversation.id,
                 role="user",
@@ -192,6 +201,15 @@ def website_chat(
                 message=data.message,
                 conversation_id=data.conversation_id,
             )
+            bind_conversation_source(
+                db,
+                conversation_id=result["conversation_id"],
+                company_id=channel.company_id,
+                agent_id=channel.agent_id,
+                channel_type="website",
+                channel_id=channel.id,
+            )
+            db.commit()
             result["visitor_token"] = issue_website_visitor_token(
                 channel.id, result["conversation_id"]
             )
@@ -273,6 +291,16 @@ def voice_turn(
             message=data.transcript,
             conversation_id=data.conversation_id,
         )
+        bind_conversation_source(
+            db,
+            conversation_id=result["conversation_id"],
+            company_id=channel.company_id,
+            agent_id=channel.agent_id,
+            channel_type="voice",
+            channel_id=channel.id,
+            external_contact_id=data.session_id,
+        )
+        db.commit()
         return {
             "channel_id": channel.id,
             "session_id": data.session_id,
