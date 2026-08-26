@@ -79,6 +79,11 @@ class AIConversation(Base):
             "company_id",
             "agent_id",
         ),
+        Index(
+            "ix_ai_conversations_company_channel",
+            "company_id",
+            "channel_type",
+        ),
     )
 
     id: Mapped[int] = mapped_column(
@@ -94,6 +99,23 @@ class AIConversation(Base):
     agent_id: Mapped[int] = mapped_column(
         ForeignKey("ai_agents.id"),
         nullable=False,
+        index=True,
+    )
+
+    channel_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agent_channels.id"),
+        nullable=True,
+        index=True,
+    )
+
+    channel_type: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+
+    external_contact_id: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
         index=True,
     )
 
