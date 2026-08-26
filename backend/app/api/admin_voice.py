@@ -7,6 +7,7 @@ from urllib.parse import urljoin
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from backend.app.api.admin_channels import _activation_blockers
 from backend.app.core.config_secrets import merge_config, reveal_config
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
@@ -52,6 +53,13 @@ def _assistant_name(agent: AIAgent) -> str:
     return name[:40] or "Xvond Voice Agent"
 
 
+def _save_provisioning_state(db, channel: AgentChannel, values: dict) -> dict:
+    channel.config = merge_config(channel.config, values)
+    db.commit()
+    db.refresh(channel)
+    return reveal_config(channel.config) or {}
+
+
 @router.get("/vapi/phone-numbers")
 def vapi_phone_numbers(current_admin: User = Depends(require_xvond_admin)):
     items = list_phone_numbers()
@@ -88,17 +96,21 @@ def vapi_channel_status(
         if channel is None:
             raise HTTPException(status_code=404, detail="Voice channel not found")
         config = reveal_config(channel.config) or {}
+        blockers = _activation_blockers(db, channel)
         return {
             "channel_id": channel.id,
             "company_id": channel.company_id,
             "agent_id": channel.agent_id,
             "enabled": channel.enabled,
+            "ready": not blockers,
+            "blockers": blockers,
             "provider": config.get("provider"),
             "phone_number": config.get("phone_number"),
             "vapi_assistant_id": config.get("vapi_assistant_id"),
             "vapi_phone_number_id": config.get("vapi_phone_number_id"),
             "llm_credential_ready": bool(config.get("llm_api_key")),
             "vapi_credential_ready": bool(config.get("vapi_llm_credential_id")),
+            "provisioning_state": config.get("provisioning_state"),
             "provisioned": bool(
                 config.get("vapi_assistant_id")
                 and config.get("vapi_llm_credential_id")
@@ -117,6 +129,7 @@ def provision_vapi_voice_channel(
     current_admin: User = Depends(require_xvond_admin),
 ):
     db = SessionLocal()
+    channel = None
     try:
         channel = (
             db.query(AgentChannel)
@@ -153,6 +166,18 @@ def provision_vapi_voice_channel(
 
         config = reveal_config(channel.config) or {}
         llm_api_key = str(config.get("llm_api_key") or "").strip() or secrets.token_urlsafe(48)
+        config = _save_provisioning_state(
+            db,
+            channel,
+            {
+                "provider": "vapi",
+                "llm_api_key": llm_api_key,
+                "vapi_phone_number_id": phone_number_id,
+                "phone_number": phone_number,
+                "provisioning_state": "provisioning",
+                "provisioning_error": None,
+            },
+        )
 
         credential_id = str(config.get("vapi_llm_credential_id") or "").strip()
         if not credential_id:
@@ -160,6 +185,11 @@ def provision_vapi_voice_channel(
             credential_id = str(credential.get("id") or "").strip()
             if not credential_id:
                 raise HTTPException(status_code=502, detail="Vapi did not return a credential id")
+            config = _save_provisioning_state(
+                db,
+                channel,
+                {"vapi_llm_credential_id": credential_id},
+            )
 
         model_url = urljoin(
             _public_base_url() + "/",
@@ -180,6 +210,14 @@ def provision_vapi_voice_channel(
             assistant_id = str(assistant.get("id") or "").strip()
             if not assistant_id:
                 raise HTTPException(status_code=502, detail="Vapi did not return an assistant id")
+            config = _save_provisioning_state(
+                db,
+                channel,
+                {
+                    "vapi_assistant_id": assistant_id,
+                    "vapi_model_url": model_url,
+                },
+            )
 
         phone_result = attach_assistant_to_phone(phone_number_id, assistant_id)
         bound_assistant_id = str(phone_result.get("assistantId") or assistant_id).strip()
@@ -200,9 +238,13 @@ def provision_vapi_voice_channel(
                 "phone_number": phone_number,
                 "vapi_model_url": model_url,
                 "provisioning_method": "xvond_vapi_api",
+                "provisioning_state": "connected",
+                "provisioning_error": None,
             },
         )
-        channel.enabled = True
+        db.flush()
+        blockers = _activation_blockers(db, channel)
+        channel.enabled = not blockers
         audit_service.log(
             db=db,
             company_id=channel.company_id,
@@ -216,11 +258,13 @@ def provision_vapi_voice_channel(
                 "vapi_phone_number_id": phone_number_id,
                 "phone_number": phone_number,
                 "phone_bound": True,
+                "runtime_ready": not blockers,
+                "blockers": blockers,
             },
         )
         db.commit()
         return {
-            "status": "connected",
+            "status": "connected" if not blockers else "connected_needs_setup",
             "channel_id": channel.id,
             "company_id": channel.company_id,
             "agent_id": channel.agent_id,
@@ -229,12 +273,38 @@ def provision_vapi_voice_channel(
             "phone_number": phone_number,
             "model_url": model_url,
             "phone_bound": True,
+            "ready": not blockers,
+            "blockers": blockers,
         }
-    except HTTPException:
+    except HTTPException as exc:
         db.rollback()
+        if channel is not None and channel.id is not None:
+            failed = db.query(AgentChannel).filter(AgentChannel.id == channel.id).first()
+            if failed is not None:
+                failed.config = merge_config(
+                    failed.config,
+                    {
+                        "provisioning_state": "failed",
+                        "provisioning_error": str(exc.detail)[:500],
+                    },
+                )
+                failed.enabled = False
+                db.commit()
         raise
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        if channel is not None and channel.id is not None:
+            failed = db.query(AgentChannel).filter(AgentChannel.id == channel.id).first()
+            if failed is not None:
+                failed.config = merge_config(
+                    failed.config,
+                    {
+                        "provisioning_state": "failed",
+                        "provisioning_error": str(exc)[:500],
+                    },
+                )
+                failed.enabled = False
+                db.commit()
         raise
     finally:
         db.close()
