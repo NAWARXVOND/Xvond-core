@@ -348,6 +348,9 @@ def company_readiness(db, company_id: int):
             "active": company.active,
         },
         "company_profile_ready": company_profile_ready,
+        # Backward-compatible UI alias. The canonical field remains
+        # company_profile_ready, but older admin workspaces read profile_ready.
+        "profile_ready": company_profile_ready,
         "company_profile_missing": profile_missing,
         "ready": setup_ready,
         "setup_ready": setup_ready,
