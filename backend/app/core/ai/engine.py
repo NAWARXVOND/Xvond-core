@@ -7,6 +7,10 @@ from backend.app.core.ai.provider_registry import (
     provider_registry,
 )
 from backend.app.core.config.settings import settings
+from backend.app.core.privacy import (
+    protect_text,
+    restore_ai_response,
+)
 
 
 class AIEngine:
@@ -188,14 +192,32 @@ class AIEngine:
             provider_name
         )
 
-        return provider.generate(
+        protected = None
+        outbound_user_message = user_message
+
+        if (
+            settings.AI_PII_REDACTION_ENABLED
+            and provider_name != "mock"
+        ):
+            protected = protect_text(user_message)
+            outbound_user_message = protected.text
+
+        response = provider.generate(
             system_prompt=system_prompt,
-            user_message=user_message,
+            user_message=outbound_user_message,
             model=model,
             tools=tools,
             tool_outputs=tool_outputs,
             continuation=continuation,
         )
+
+        if protected is not None:
+            response = restore_ai_response(
+                response,
+                protected.replacements,
+            )
+
+        return response
 
     def list_providers(
         self,
