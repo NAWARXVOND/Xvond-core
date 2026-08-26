@@ -47,9 +47,9 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Build fresh database from migrations
         run: alembic upgrade head
-      - name: Check admin JavaScript syntax
+      - name: Check frontend JavaScript syntax
         run: |
-          for file in frontend/admin/*.js; do
+          for file in frontend/admin/*.js frontend/customer/*.js; do
             node --check "$file"
           done
       - name: Check shell script syntax
