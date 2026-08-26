@@ -2,8 +2,9 @@ name: Xvond Core CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
+    branches: [main, staging]
 
 concurrency:
   group: xvond-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
