@@ -4,6 +4,7 @@ from sqlalchemy import or_
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_customer_manager
 from backend.app.models.user import User
+from backend.app.modules.ai_agent.customer_access import can_view_conversations
 from backend.app.modules.ai_agent.factory_models import AgentConfig
 from backend.app.modules.ai_agent.models import AIAgent, AIConversation, AIMessage
 from backend.app.modules.channels.models import AgentChannel
@@ -27,11 +28,11 @@ def _visible_agents(db, current_user: User) -> list[AIAgent]:
         .filter(AgentConfig.agent_id.in_([item.id for item in agents]))
         .all()
     )
-    controls = {item.agent_id: (item.customer_controls or {}) for item in configs}
+    config_by_agent = {item.agent_id: item for item in configs}
     return [
         item
         for item in agents
-        if controls.get(item.id, {}).get("can_view_conversations", False)
+        if can_view_conversations(config_by_agent.get(item.id))
     ]
 
 
