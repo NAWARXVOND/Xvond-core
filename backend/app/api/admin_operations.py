@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -9,7 +9,7 @@ from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.company import Company
 from backend.app.models.user import User
-from backend.app.modules.ai_agent.models import AIAgent, AIConversation, AIMessage, AIUsage
+from backend.app.modules.ai_agent.models import AIUsage
 from backend.app.modules.billing.service_models import ServicePlan, ServiceSubscription
 from backend.app.modules.channels.whatsapp_queue import whatsapp_job_queue
 from backend.app.modules.solutions.catalog import SERVICE_CATALOG
@@ -25,6 +25,10 @@ class ReconcileExternalOperation(BaseModel):
     note: str | None = None
 
 
+def _utcnow_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
 def get_company_or_404(db, company_id: int):
     company = db.query(Company).filter(Company.id == company_id).first()
     if company is None:
@@ -32,22 +36,21 @@ def get_company_or_404(db, company_id: int):
     return company
 
 
-def _action_data(item: ActionRequest) -> dict:
+def _operation_metadata(item: ActionRequest) -> dict:
+    """Return operator-safe metadata without tenant customer content."""
     return {
         "id": item.id,
         "company_id": item.company_id,
         "agent_id": item.agent_id,
-        "conversation_id": item.conversation_id,
         "action_type": item.action_type,
         "status": item.status,
-        "summary": item.summary,
-        "details": item.details or {},
         "created_at": item.created_at,
     }
 
 
 @router.get("/companies/{company_id}/usage")
 def company_usage(company_id: int, current_admin: User = Depends(require_xvond_admin)):
+    """Operational usage/cost telemetry only; no prompts or conversation content."""
     db = SessionLocal()
     try:
         get_company_or_404(db, company_id)
@@ -80,71 +83,11 @@ def company_usage(company_id: int, current_admin: User = Depends(require_xvond_a
                     "output_tokens": item.output_tokens,
                     "total_tokens": item.total_tokens,
                     "provider_cost": item.provider_cost,
+                    "status": item.status,
+                    "latency_ms": item.latency_ms,
                     "created_at": item.created_at,
                 }
                 for item in items
-            ],
-        }
-    finally:
-        db.close()
-
-
-@router.get("/companies/{company_id}/conversations")
-def company_conversations(company_id: int, current_admin: User = Depends(require_xvond_admin)):
-    db = SessionLocal()
-    try:
-        get_company_or_404(db, company_id)
-        items = db.query(AIConversation).filter(
-            AIConversation.company_id == company_id
-        ).order_by(AIConversation.id.desc()).limit(500).all()
-        return {
-            "company_id": company_id,
-            "conversations": [
-                {
-                    "id": item.id,
-                    "agent_id": item.agent_id,
-                    "title": item.title,
-                    "created_at": item.created_at,
-                }
-                for item in items
-            ],
-        }
-    finally:
-        db.close()
-
-
-@router.get("/companies/{company_id}/conversations/{conversation_id}")
-def conversation_messages(
-    company_id: int,
-    conversation_id: int,
-    current_admin: User = Depends(require_xvond_admin),
-):
-    db = SessionLocal()
-    try:
-        conversation = db.query(AIConversation).filter(
-            AIConversation.id == conversation_id,
-            AIConversation.company_id == company_id,
-        ).first()
-        if conversation is None:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-        messages = db.query(AIMessage).filter(
-            AIMessage.conversation_id == conversation.id
-        ).order_by(AIMessage.id.asc()).all()
-        return {
-            "conversation": {
-                "id": conversation.id,
-                "agent_id": conversation.agent_id,
-                "title": conversation.title,
-                "created_at": conversation.created_at,
-            },
-            "messages": [
-                {
-                    "id": item.id,
-                    "role": item.role,
-                    "content": item.content,
-                    "created_at": item.created_at,
-                }
-                for item in messages
             ],
         }
     finally:
@@ -194,6 +137,7 @@ def unresolved_external_operations(
     company_id: int,
     current_admin: User = Depends(require_xvond_admin),
 ):
+    """Expose only technical operation metadata needed for reconciliation."""
     db = SessionLocal()
     try:
         get_company_or_404(db, company_id)
@@ -201,7 +145,10 @@ def unresolved_external_operations(
             ActionRequest.company_id == company_id,
             ActionRequest.status.in_(UNRESOLVED_EXTERNAL),
         ).order_by(ActionRequest.id.desc()).all()
-        return {"requests": [_action_data(item) for item in items]}
+        return {
+            "count": len(items),
+            "requests": [_operation_metadata(item) for item in items],
+        }
     finally:
         db.close()
 
@@ -226,10 +173,11 @@ def reconcile_external_operation(
         details = dict(item.details or {})
         previous = details.get("_xvond_execution")
         previous = dict(previous) if isinstance(previous, dict) else {}
+        now = _utcnow_naive().isoformat()
         reconciliation = {
             "outcome": outcome,
             "note": (data.note or "").strip()[:1000] or None,
-            "reconciled_at": datetime.utcnow().isoformat(),
+            "reconciled_at": now,
             "previous_state": previous,
         }
         details["_xvond_reconciliation"] = reconciliation
@@ -239,7 +187,7 @@ def reconcile_external_operation(
                 **previous,
                 "state": "confirmed",
                 "operation": "execute",
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": now,
                 "reconciled": True,
             }
             item.status = "confirmed"
@@ -248,18 +196,15 @@ def reconcile_external_operation(
                 **previous,
                 "state": "confirmed",
                 "operation": "cancel",
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": now,
                 "reconciled": True,
             }
             item.status = "cancelled"
         else:
-            # An operator explicitly verified that the external side effect did
-            # not happen. Returning to `new` is the only case where retry is
-            # allowed; the action runtime will reuse the deterministic key.
             details["_xvond_execution"] = {
                 **previous,
                 "state": "reconciled_not_executed",
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": now,
                 "reconciled": True,
             }
             item.status = "new"
@@ -267,7 +212,7 @@ def reconcile_external_operation(
         item.details = details
         db.commit()
         db.refresh(item)
-        return _action_data(item)
+        return _operation_metadata(item)
     except HTTPException:
         db.rollback()
         raise
