@@ -4,7 +4,7 @@ from decimal import Decimal
 from fastapi import HTTPException
 from sqlalchemy import func, text
 
-from backend.app.modules.ai_agent.models import AIUsage
+from backend.app.modules.ai_agent.models import AIAgent, AIUsage
 from backend.app.modules.billing.service_models import ServicePlan, ServiceSubscription, ServiceUsageEvent
 
 
@@ -87,6 +87,11 @@ class ServiceLimits:
         return subscription, plan
 
     def used(self, db, subscription: ServiceSubscription, metric: str) -> Decimal:
+        if subscription.service_code == "ai_agents" and metric == "agents":
+            value = db.query(func.count(AIAgent.id)).filter(
+                AIAgent.company_id == subscription.company_id,
+            ).scalar()
+            return Decimal(str(value or 0))
         if subscription.service_code == "ai_agents" and metric == "tokens":
             value = db.query(func.coalesce(func.sum(AIUsage.total_tokens), 0)).filter(
                 AIUsage.company_id == subscription.company_id,
