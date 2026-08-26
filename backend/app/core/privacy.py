@@ -1,0 +1,90 @@
+import re
+from dataclasses import dataclass
+from typing import Any
+
+from backend.app.core.ai.base import AIResponse, ToolCall
+
+
+_EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+_PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{6,}\d)(?!\w)")
+_OMAN_CIVIL_ID_RE = re.compile(r"(?<!\d)\d{8,9}(?!\d)")
+
+
+@dataclass(frozen=True)
+class ProtectedText:
+    text: str
+    replacements: dict[str, str]
+
+
+def _replace_matches(text: str, pattern: re.Pattern, label: str, replacements: dict[str, str]) -> str:
+    counter = 0
+
+    def repl(match: re.Match) -> str:
+        nonlocal counter
+        original = match.group(0)
+        for token, stored in replacements.items():
+            if stored == original:
+                return token
+        counter += 1
+        token = f"[XVOND_{label}_{counter}]"
+        while token in replacements:
+            counter += 1
+            token = f"[XVOND_{label}_{counter}]"
+        replacements[token] = original
+        return token
+
+    return pattern.sub(repl, text)
+
+
+def protect_text(text: str) -> ProtectedText:
+    """Replace high-confidence PII with reversible local placeholders.
+
+    The mapping stays inside Xvond and is never sent to the external AI provider.
+    Names are intentionally not guessed from free text because heuristic name
+    detection is error-prone. Channel metadata such as WhatsApp wa_id/profile
+    name should remain outside the AI prompt unless explicitly required.
+    """
+    replacements: dict[str, str] = {}
+    protected = str(text or "")
+    protected = _replace_matches(protected, _EMAIL_RE, "EMAIL", replacements)
+    protected = _replace_matches(protected, _PHONE_RE, "PHONE", replacements)
+    protected = _replace_matches(protected, _OMAN_CIVIL_ID_RE, "ID", replacements)
+    return ProtectedText(text=protected, replacements=replacements)
+
+
+def restore_text(text: str, replacements: dict[str, str]) -> str:
+    restored = str(text or "")
+    for token, original in replacements.items():
+        restored = restored.replace(token, original)
+    return restored
+
+
+def restore_value(value: Any, replacements: dict[str, str]) -> Any:
+    if isinstance(value, str):
+        return restore_text(value, replacements)
+    if isinstance(value, list):
+        return [restore_value(item, replacements) for item in value]
+    if isinstance(value, tuple):
+        return tuple(restore_value(item, replacements) for item in value)
+    if isinstance(value, dict):
+        return {
+            key: restore_value(item, replacements)
+            for key, item in value.items()
+        }
+    return value
+
+
+def restore_ai_response(response: AIResponse, replacements: dict[str, str]) -> AIResponse:
+    if not replacements:
+        return response
+
+    response.text = restore_text(response.text, replacements)
+    response.tool_calls = [
+        ToolCall(
+            id=call.id,
+            name=call.name,
+            arguments=restore_value(call.arguments, replacements),
+        )
+        for call in response.tool_calls
+    ]
+    return response
