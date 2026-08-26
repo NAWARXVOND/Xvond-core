@@ -1,4 +1,4 @@
-﻿from datetime import datetime
+﻿from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -15,6 +15,16 @@ from sqlalchemy.orm import (
 )
 
 from backend.app.core.database.base import Base
+
+
+def _utc_now_naive() -> datetime:
+    """Return current UTC time without tzinfo for existing naive DB columns.
+
+    Python 3.14 deprecates datetime.utcnow(). Keeping the stored representation
+    naive avoids a schema migration while still sourcing the value from an
+    explicit UTC-aware clock.
+    """
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class AIProviderRecord(Base):
@@ -49,7 +59,7 @@ class AIProviderRecord(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=_utc_now_naive,
         nullable=False,
     )
 
@@ -105,7 +115,7 @@ class AIModelRecord(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=_utc_now_naive,
         nullable=False,
     )
 
