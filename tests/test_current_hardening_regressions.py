@@ -39,6 +39,11 @@ def test_shared_runtime_resolves_whatsapp_behavior_from_channel():
     assert "system_prompt=system_prompt" in runtime
 
 
+def test_existing_conversation_refreshes_external_channel_binding():
+    runtime = source("backend/app/core/agent_runtime.py")
+    assert ".populate_existing()" in runtime
+
+
 def test_analytics_source_secrets_are_protected_and_not_returned_raw():
     models = source("backend/app/modules/analytics/models.py")
     api = source("backend/app/api/admin_analytics_builder.py")
