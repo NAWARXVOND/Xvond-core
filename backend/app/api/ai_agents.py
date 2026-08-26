@@ -11,6 +11,7 @@ from backend.app.core.dependencies import get_current_user
 
 from backend.app.models.user import User
 
+from backend.app.modules.ai_agent.customer_access import can_view_conversations
 from backend.app.modules.ai_agent.models import (
     AIAgent,
     AIConversation,
@@ -78,16 +79,7 @@ def require_conversation_access(
         .first()
     )
 
-    controls = (
-        config.customer_controls
-        if config
-        else {}
-    )
-
-    if not controls.get(
-        "can_view_conversations",
-        False,
-    ):
+    if not can_view_conversations(config):
         raise HTTPException(
             status_code=403,
             detail=(
