@@ -86,6 +86,19 @@ button {
     margin: 5px 0 30px;
 }
 
+.nav-group {
+    margin: 20px 11px 7px;
+    color: #6b7280;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.nav-group:first-child {
+    margin-top: 0;
+}
+
 .nav-item {
     display: block;
     width: 100%;
@@ -110,6 +123,7 @@ button {
 .main {
     flex: 1;
     padding: 30px;
+    min-width: 0;
 }
 
 .topbar {
@@ -136,7 +150,8 @@ button {
 }
 
 .card,
-.panel {
+.panel,
+.service-card {
     background: white;
     border-radius: 12px;
     padding: 20px;
@@ -151,6 +166,74 @@ button {
 .card strong {
     display: block;
     font-size: 30px;
+    margin-top: 10px;
+}
+
+.service-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.service-card h3,
+.service-card p {
+    margin-top: 0;
+}
+
+.service-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.service-card-head h2,
+.service-card-head h3 {
+    margin: 0 0 6px;
+}
+
+.service-card-head p {
+    margin: 0;
+    color: #6b7280;
+}
+
+.pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 5px 9px;
+    background: #eef2f7;
+    color: #374151;
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: capitalize;
+    white-space: nowrap;
+}
+
+.billing-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 11px 0;
+    border-top: 1px solid #eef0f3;
+}
+
+.billing-row:first-child {
+    border-top: 0;
+}
+
+.billing-row span,
+.muted {
+    color: #6b7280;
+}
+
+.billing-row strong {
+    text-align: right;
+}
+
+.usage-list {
     margin-top: 10px;
 }
 
@@ -218,8 +301,40 @@ button {
 }
 
 @media(max-width: 900px) {
-    .cards {
+    .cards,
+    .service-grid {
         grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media(max-width: 680px) {
+    .portal {
+        display: block;
+    }
+
+    .sidebar {
+        width: 100%;
+        min-height: auto;
+    }
+
+    .main {
+        padding: 20px;
+    }
+
+    .cards,
+    .service-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .topbar,
+    .billing-row,
+    .service-card-head {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .billing-row strong {
+        text-align: left;
     }
 }
 
