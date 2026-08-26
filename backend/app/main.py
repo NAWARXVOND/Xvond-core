@@ -20,6 +20,7 @@ from backend.app.api.admin_ai_employee_knowledge import router as admin_ai_emplo
 from backend.app.api.admin_agent_actions import router as admin_agent_actions_router
 from backend.app.api.admin_audit import router as admin_audit_router
 from backend.app.api.admin_channels import router as admin_channels_router
+from backend.app.api.admin_voice import router as admin_voice_router
 from backend.app.api.admin_company_profile import router as admin_company_profile_router
 from backend.app.api.admin_company_users import router as admin_company_users_router
 from backend.app.api.admin_company_view import router as admin_company_view_router
@@ -38,6 +39,7 @@ from backend.app.api.admin_analytics_builder import router as admin_analytics_bu
 from backend.app.api.admin_service_billing import router as admin_service_billing_router
 from backend.app.api.admin_service_plan_management import router as admin_service_plan_management_router
 from backend.app.api.public_channels import router as public_channels_router
+from backend.app.api.voice_llm import router as voice_llm_router
 from backend.app.api.website_widget import router as website_widget_router
 from backend.app.api.ai_agents import router as ai_agents_router
 from backend.app.api.company_modules import router as company_modules_router
@@ -158,6 +160,8 @@ async def protect_public_endpoints(request: Request, call_next):
             rule = (90, 60)
         elif request.url.path.startswith("/channels/voice/") and request.url.path.endswith("/turn"):
             rule = (180, 60)
+        elif request.url.path.startswith("/v1/voice/") and request.url.path.endswith("/chat/completions"):
+            rule = (240, 60)
     if rule is not None:
         client_ip = request_client_ip(request)
         limit, window = rule
@@ -189,6 +193,7 @@ for r in [
     admin_agent_actions_router,
     admin_audit_router,
     admin_channels_router,
+    admin_voice_router,
     admin_company_profile_router,
     admin_company_users_router,
     admin_company_view_router,
@@ -208,6 +213,7 @@ for r in [
     admin_service_plan_management_router,
     ai_agents_router,
     public_channels_router,
+    voice_llm_router,
     website_widget_router,
     modules_router,
     company_modules_router,
