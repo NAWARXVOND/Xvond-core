@@ -5,10 +5,13 @@ from sqlalchemy import (
     ForeignKey,
     String,
     UniqueConstraint,
+    event,
+    update,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.core.database.base import Base
+from backend.app.modules.ai_agent.models import AIConversation
 
 
 class WhatsAppSession(Base):
@@ -87,6 +90,23 @@ class WhatsAppSession(Base):
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
         nullable=False,
+    )
+
+
+@event.listens_for(WhatsAppSession, "after_insert")
+def _bind_whatsapp_conversation_source(_mapper, connection, target):
+    connection.execute(
+        update(AIConversation)
+        .where(
+            AIConversation.id == target.conversation_id,
+            AIConversation.company_id == target.company_id,
+            AIConversation.agent_id == target.agent_id,
+            AIConversation.channel_type.is_(None),
+        )
+        .values(
+            channel_type="whatsapp",
+            external_contact_id=target.wa_id,
+        )
     )
 
 
