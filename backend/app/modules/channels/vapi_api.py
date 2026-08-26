@@ -29,7 +29,7 @@ def vapi_request(
     method: str,
     path: str,
     payload: dict | None = None,
-) -> dict:
+):
     api_key = ensure_vapi_configured()
     url = VAPI_API_BASE + "/" + str(path or "").lstrip("/")
 
@@ -89,6 +89,21 @@ def update_assistant(assistant_id: str, payload: dict) -> dict:
         f"/assistant/{assistant_id}",
         payload,
     )
+
+
+def list_phone_numbers() -> list[dict]:
+    payload = vapi_request("GET", "/phone-number")
+
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+
+    if isinstance(payload, dict):
+        for key in ("data", "items", "phoneNumbers"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+
+    return []
 
 
 def get_phone_number(phone_number_id: str) -> dict:
