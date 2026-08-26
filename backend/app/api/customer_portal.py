@@ -7,6 +7,7 @@ from backend.app.core.config_secrets import configured_secret_fields, public_con
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_customer_user
 from backend.app.models.company import Company
+from backend.app.models.company_module import CompanyModule
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent, AIConversation, AIUsage
 from backend.app.modules.billing.service_limits import service_limits
@@ -15,6 +16,10 @@ from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.integrations.models import CompanyIntegration
 from backend.app.modules.knowledge.models import KnowledgeDocument
 from backend.app.modules.solutions.catalog import SERVICE_CATALOG
+from backend.app.modules.solutions.portal import (
+    BUSINESS_CAPABILITY_MODULES,
+    build_customer_portal_navigation,
+)
 
 router = APIRouter(prefix="/customer", tags=["Customer Portal"])
 
@@ -70,6 +75,23 @@ def overview(current_user: User = Depends(require_customer_user)):
         services = [_service_data(db, subscription, plan) for subscription, plan in service_rows]
         ai_service = next((x for x in services if x["service_code"] == "ai_agents"), None)
 
+        enabled_module_rows = (
+            db.query(CompanyModule)
+            .filter(
+                CompanyModule.company_id == company_id,
+                CompanyModule.enabled.is_(True),
+            )
+            .all()
+        )
+        enabled_modules = {item.module_name for item in enabled_module_rows}
+        active_service_codes = [
+            item["service_code"] for item in services if item["status"] == "active"
+        ]
+        navigation = build_customer_portal_navigation(
+            active_service_codes,
+            enabled_modules,
+        )
+
         agents = db.query(AIAgent).filter(AIAgent.company_id == company_id).all()
         channels = db.query(AgentChannel).filter(AgentChannel.company_id == company_id).all()
         integrations = db.query(CompanyIntegration).filter(
@@ -90,6 +112,21 @@ def overview(current_user: User = Depends(require_customer_user)):
             # Compatibility for older customer UI consumers while the service
             # list is the canonical billing representation.
             "subscription": ai_service,
+            "portal": {
+                "navigation": navigation,
+                "active_services": active_service_codes,
+                "capabilities": sorted(
+                    enabled_modules.intersection(BUSINESS_CAPABILITY_MODULES)
+                ),
+            },
+            "billing": {
+                # Stable contract for a future card-payment gateway. The portal
+                # already has a Billing surface; a provider can populate these
+                # fields later without redesigning navigation.
+                "online_payments_enabled": False,
+                "payment_provider": None,
+                "payment_method": None,
+            },
             "summary": {
                 "agents": len(agents),
                 "active_agents": sum(1 for item in agents if item.enabled),
