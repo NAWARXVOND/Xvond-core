@@ -44,6 +44,7 @@ from backend.app.api.customer_portal import router as customer_portal_router
 
 from backend.app.api.modules import router as modules_router
 from backend.app.api.usage import router as usage_router
+from backend.app.api.voice_llm import router as voice_llm_router
 from backend.app.api.whatsapp_webhook import router as whatsapp_webhook_router
 
 # ============================================================
@@ -187,6 +188,13 @@ async def protect_public_endpoints(request: Request, call_next):
     ):
         rule = (60, 60)
 
+    if rule is None and (
+        request.method.upper() == "POST"
+        and request.url.path.startswith("/v1/voice/")
+        and request.url.path.endswith("/chat/completions")
+    ):
+        rule = (240, 60)
+
     if rule is not None:
         client_ip = request_client_ip(request)
         limit, window = rule
@@ -261,12 +269,11 @@ app.include_router(usage_router)
 
 
 # ============================================================
-# Routers - Public Webhooks
+# Routers - Public / Provider callbacks
 # ============================================================
 
-app.include_router(
-    whatsapp_webhook_router
-)
+app.include_router(whatsapp_webhook_router)
+app.include_router(voice_llm_router)
 
 
 # ============================================================
