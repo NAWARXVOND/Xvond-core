@@ -11,6 +11,7 @@ Usage:
 from backend.app.core.config.settings import settings
 from backend.app.core.config_secrets import protect_config
 from backend.app.core.database.connection import SessionLocal
+from backend.app.modules.analytics.models import AnalyticsSource
 from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.integrations.models import CompanyIntegration
 from backend.app.modules.tools.models import AgentToolAssignment
@@ -20,6 +21,7 @@ MODELS = (
     AgentChannel,
     CompanyIntegration,
     AgentToolAssignment,
+    AnalyticsSource,
 )
 
 
