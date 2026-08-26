@@ -9,11 +9,22 @@ from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.company import Company
 from backend.app.models.company_profile import CompanyProfile
 from backend.app.models.user import User
+from backend.app.modules.ai_agent.factory_models import AgentConfig
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.ai_agent.profile_models import AIAgentProfile
 from backend.app.modules.channels.models import AgentChannel
 
 router = APIRouter(prefix="/admin/ai-employee-profile", tags=["Xvond Admin - AI Employee Profile"])
+
+
+DEFAULT_CUSTOMER_CONTROLS = {
+    "can_enable_disable": True,
+    "can_view_conversations": True,
+    "can_view_usage": True,
+    "can_edit_prompt": False,
+    "can_change_provider": False,
+    "can_change_model": False,
+}
 
 
 class EmployeeProfileUpdate(BaseModel):
@@ -98,6 +109,32 @@ def _upsert_profile(db, company: Company, agent: AIAgent, data: EmployeeProfileU
     return row
 
 
+def _ensure_agent_config(db, agent: AIAgent) -> AgentConfig:
+    """Keep every admin-created AI employee complete for the customer portal.
+
+    Older employees may predate AgentConfig. Create the missing row on access and
+    fill only missing customer-control keys so an explicit False remains respected.
+    """
+    row = db.query(AgentConfig).filter(AgentConfig.agent_id == agent.id).first()
+    if row is None:
+        row = AgentConfig(
+            agent_id=agent.id,
+            agent_type="custom",
+            settings={},
+            capabilities={},
+            customer_controls=dict(DEFAULT_CUSTOMER_CONTROLS),
+        )
+        db.add(row)
+        db.flush()
+        return row
+
+    controls = dict(DEFAULT_CUSTOMER_CONTROLS)
+    controls.update(row.customer_controls or {})
+    if controls != (row.customer_controls or {}):
+        row.customer_controls = controls
+    return row
+
+
 def _backfill_profile(db, company: Company, agent: AIAgent, channels) -> AIAgentProfile:
     row = db.query(AIAgentProfile).filter(AIAgentProfile.agent_id == agent.id).first()
     if row is not None:
@@ -145,6 +182,7 @@ def create_profile_employee(company_id: int, data: EmployeeProfileUpdate, curren
         db.add(agent)
         db.flush()
         _upsert_profile(db, company, agent, data)
+        _ensure_agent_config(db, agent)
 
         company_profile = _company_profile(db, company_id)
         if company_profile is not None:
@@ -182,6 +220,7 @@ def get_profile(company_id: int, agent_id: int, current_admin: User = Depends(re
             .all()
         )
         profile = _backfill_profile(db, company, agent, channels)
+        _ensure_agent_config(db, agent)
         db.commit()
         return {
             "agent_id": agent.id,
@@ -208,6 +247,7 @@ def update_profile(company_id: int, agent_id: int, data: EmployeeProfileUpdate, 
         agent.name = _clean(data.name) or agent.name
         agent.system_prompt = _profile_prompt(company.name, data)
         profile = _upsert_profile(db, company, agent, data)
+        _ensure_agent_config(db, agent)
         setup = {
             "business_name": company.name,
             "business_type": profile.business_type,
