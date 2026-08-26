@@ -30,6 +30,21 @@
         });
     }
 
+    function renderAgentActionsAfterStateMutation() {
+        // The legacy renderer collects values from the currently mounted cards
+        // before every render. After adding/removing/replacing actions, those
+        // cards still describe the previous array and would overwrite the new
+        // editor state. Skip that one collection pass after an intentional
+        // state mutation; all ordinary field-driven re-renders still collect.
+        const originalCollect = collectCurrentActionEditor;
+        collectCurrentActionEditor = function skipCollectAfterMutation() {};
+        try {
+            renderAgentActionsEditor();
+        } finally {
+            collectCurrentActionEditor = originalCollect;
+        }
+    }
+
     renderOverviewTab = function renderPrivacyAwareOverview() {
         const readiness = xvondWorkspace.data?.readiness;
         if (readiness) {
@@ -56,6 +71,52 @@
                 section.remove();
             }
         });
+    };
+
+    // Preserve deliberate action-array mutations across the legacy renderer's
+    // automatic DOM collection pass.
+    addCustomAgentAction = function addPrivacyAwareCustomAgentAction() {
+        collectCurrentActionEditor();
+        xvondActionEditor.actions.push({
+            key: `custom_operation_${xvondActionEditor.actions.length + 1}`,
+            label: 'Custom Operation',
+            module: '',
+            description: '',
+            enabled: false,
+            fields: [
+                {key: 'customer_name', label: 'Customer name', required: true, type: 'text'},
+                {key: 'phone', label: 'Phone', required: true, type: 'text'},
+            ],
+            confirmation_required: true,
+            availability: {mode: 'none'},
+            destination: {type: 'unconfigured'},
+        });
+        renderAgentActionsAfterStateMutation();
+    };
+
+    removeAgentAction = function removePrivacyAwareAgentAction(index) {
+        collectCurrentActionEditor();
+        xvondActionEditor.actions.splice(index, 1);
+        renderAgentActionsAfterStateMutation();
+    };
+
+    applySuggestedAgentActionTemplate = function applyPrivacyAwareSuggestedTemplate(id) {
+        collectCurrentActionEditor();
+        const template = xvondActionEditor.templates.find(item => item.id === id);
+        if (!template) return;
+        xvondActionEditor.templateId = template.id;
+        xvondActionEditor.actions = deepClone(template.actions || []).map(action => ({
+            ...action,
+            enabled: false,
+        }));
+        renderAgentActionsAfterStateMutation();
+    };
+
+    applyAgentActionTemplate = function applyPrivacyAwareTemplate() {
+        const id = document.getElementById('aa-template')?.value || '';
+        const template = xvondActionEditor.templates.find(item => item.id === id);
+        if (!template) return;
+        applySuggestedAgentActionTemplate(template.id);
     };
 
     loadCompanyControlCenter = async function loadPrivacyAwareCompanyControlCenter(companyId, tab = null) {
