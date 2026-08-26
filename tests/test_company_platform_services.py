@@ -1,4 +1,6 @@
 from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -64,6 +66,18 @@ def test_zero_service_limit_means_unlimited_but_negative_is_invalid():
     plan.limits = {"runs": -1}
     with pytest.raises(HTTPException):
         service_limits.limit_value(plan, "runs")
+
+
+def test_ai_agent_limit_usage_counts_provisioned_agents():
+    db = MagicMock()
+    query = MagicMock()
+    db.query.return_value = query
+    query.filter.return_value = query
+    query.scalar.return_value = 1
+    subscription = SimpleNamespace(service_code="ai_agents", company_id=4)
+
+    assert service_limits.used(db, subscription, "agents") == Decimal("1")
+    query.scalar.assert_called_once()
 
 
 def test_integration_config_requires_real_required_fields():
