@@ -26,6 +26,15 @@ def test_voice_behavior_is_channel_specific_and_spoken():
     assert "Do not read long price lists aloud" in prompt
 
 
+def test_generic_voice_turn_applies_voice_channel_behavior():
+    root = Path(__file__).resolve().parents[1]
+    public_channels = (root / "backend" / "app" / "api" / "public_channels.py").read_text(
+        encoding="utf-8-sig"
+    )
+    assert "build_voice_behavior_prompt" in public_channels
+    assert 'original_prompt + "\\n\\n" + build_voice_behavior_prompt(config)' in public_channels
+
+
 def test_vapi_payload_points_back_to_xvond_and_correlates_call_id():
     payload = build_vapi_assistant_payload(
         assistant_name="Reception",
