@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.app.modules.channels.catalog import validate_channel_config
 from backend.app.modules.channels.vapi import (
     build_vapi_assistant_payload,
     build_voice_behavior_prompt,
@@ -33,6 +34,35 @@ def test_generic_voice_turn_applies_voice_channel_behavior():
     )
     assert "build_voice_behavior_prompt" in public_channels
     assert 'original_prompt + "\\n\\n" + build_voice_behavior_prompt(config)' in public_channels
+
+
+def test_generic_voice_provider_requires_auth_token():
+    with pytest.raises(ValueError, match="auth_token"):
+        validate_channel_config(
+            "voice",
+            {"provider": "custom-telephony", "phone_number": "+96800000000"},
+        )
+    assert validate_channel_config(
+        "voice",
+        {
+            "provider": "custom-telephony",
+            "phone_number": "+96800000000",
+            "auth_token": "server-shared-secret",
+        },
+    )
+
+
+def test_vapi_voice_channel_does_not_require_generic_auth_token():
+    assert validate_channel_config(
+        "voice",
+        {"provider": "vapi", "phone_number": "+96800000000"},
+    )
+    root = Path(__file__).resolve().parents[1]
+    public_channels = (root / "backend" / "app" / "api" / "public_channels.py").read_text(
+        encoding="utf-8-sig"
+    )
+    assert 'if provider == "vapi"' in public_channels
+    assert "dedicated voice LLM callback endpoint" in public_channels
 
 
 def test_vapi_payload_points_back_to_xvond_and_correlates_call_id():
