@@ -63,9 +63,9 @@ def _activation_blockers(db, channel: AgentChannel) -> list[str]:
     if company is None or not company.active: blockers.append("Company must be active")
     if agent is None or not agent.enabled: blockers.append("AI employee must be active")
     elif not _has_real_runtime_provider(db,channel.company_id,agent): blockers.append("At least one real AI provider/model must be enabled and configured")
-    if not _channel_configured(channel): blockers.append("WhatsApp credentials are incomplete")
+    if not _channel_configured(channel): blockers.append(f"{channel.channel_type.title()} channel configuration is incomplete")
     useful=(db.query(KnowledgeDocument).join(AgentKnowledge,AgentKnowledge.document_id==KnowledgeDocument.id).filter(KnowledgeDocument.company_id==channel.company_id,KnowledgeDocument.enabled.is_(True),AgentKnowledge.agent_id==channel.agent_id,AgentKnowledge.enabled.is_(True),KnowledgeDocument.source_type.notin_(["business_profile","website_reference"])).all())
-    if not any(len((doc.content or "").strip())>=20 for doc in useful): blockers.append("Add real business knowledge before activating WhatsApp")
+    if not any(len((doc.content or "").strip())>=20 for doc in useful): blockers.append("Add real business knowledge before activating this channel")
     return blockers
 
 @router.post("/agents/{agent_id}")
@@ -108,7 +108,7 @@ def update_channel(channel_id:int,data:ChannelUpdate,current_admin:User=Depends(
         if data.config is not None: channel.config=merge_config(channel.config,data.config);db.flush()
         if data.enabled is True and channel.enabled is False:
             limits_service.check_channel_limit(db,channel.company_id);blockers=_activation_blockers(db,channel)
-            if blockers: raise HTTPException(409,"WhatsApp is not ready: "+"; ".join(blockers))
+            if blockers: raise HTTPException(409,"Channel is not ready: "+"; ".join(blockers))
             _ensure_channels_module(db,channel.company_id);channel.enabled=True
         elif data.enabled is False: channel.enabled=False
         db.commit();db.refresh(channel);result=serialize_channel(channel);result["status"]="updated";return result
