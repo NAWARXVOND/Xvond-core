@@ -283,6 +283,12 @@ def voice_turn(
     try:
         channel = require_channel(db, channel_id, "voice")
         config = reveal_config(channel.config) or {}
+        provider = str(config.get("provider") or "").strip().lower()
+        if provider == "vapi":
+            raise HTTPException(
+                404,
+                "Vapi voice channels use the dedicated voice LLM callback endpoint",
+            )
         if not secure_equal(x_xvond_voice_token, config.get("auth_token")):
             raise HTTPException(401, "Invalid voice channel token")
 
