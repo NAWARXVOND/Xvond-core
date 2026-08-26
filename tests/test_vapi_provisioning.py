@@ -98,3 +98,33 @@ def test_attach_assistant_to_existing_phone(monkeypatch):
         "path": "/phone-number/phone-1",
         "payload": {"assistantId": "assistant-1"},
     }
+
+
+def test_list_phone_numbers_accepts_vapi_array(monkeypatch):
+    monkeypatch.setattr(
+        vapi_api,
+        "vapi_request",
+        lambda method, path, payload=None: [
+            {"id": "phone-1", "number": "+96824000000"},
+            {"id": "phone-2", "number": "+96824000001"},
+        ],
+    )
+
+    items = vapi_api.list_phone_numbers()
+
+    assert [item["id"] for item in items] == ["phone-1", "phone-2"]
+
+
+def test_list_phone_numbers_accepts_wrapped_payload(monkeypatch):
+    monkeypatch.setattr(
+        vapi_api,
+        "vapi_request",
+        lambda method, path, payload=None: {
+            "data": [{"id": "phone-1", "number": "+96824000000"}]
+        },
+    )
+
+    items = vapi_api.list_phone_numbers()
+
+    assert len(items) == 1
+    assert items[0]["id"] == "phone-1"
