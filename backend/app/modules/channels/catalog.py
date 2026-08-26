@@ -80,6 +80,16 @@ def validate_channel_config(channel_type: str, config: dict):
         if value is None or str(value).strip() == "":
             missing.append(name)
 
+    # Vapi authenticates its dedicated OpenAI-compatible callback with the
+    # per-channel llm_api_key. Other providers that use the generic voice-turn
+    # endpoint must provide an explicit auth_token so that the public endpoint
+    # can never become unauthenticated by configuration accident.
+    if channel_type == "voice":
+        provider = str(config.get("provider") or "").strip().lower()
+        if provider != "vapi" and not str(config.get("auth_token") or "").strip():
+            missing.append("auth_token")
+
     if missing:
+        missing = list(dict.fromkeys(missing))
         raise ValueError("Missing channel configuration: " + ", ".join(missing))
     return True
