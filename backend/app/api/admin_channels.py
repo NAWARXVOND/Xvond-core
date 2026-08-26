@@ -87,6 +87,23 @@ def _has_real_runtime_provider(db, company_id: int, agent: AIAgent | None) -> bo
     return any(item.provider != "mock" for item in selections)
 
 
+def _useful_business_knowledge(document: KnowledgeDocument) -> bool:
+    content = (document.content or "").strip()
+    if len(content) < 20:
+        return False
+    if document.source_type != "business_profile":
+        return True
+    markers = (
+        "Description:",
+        "Working Hours:",
+        "Locations / Branches:",
+        "Services:",
+        "Policies:",
+        "Business Rules:",
+    )
+    return len(content) >= 80 and any(marker in content for marker in markers)
+
+
 def _activation_blockers(db, channel: AgentChannel) -> list[str]:
     blockers = []
     company = db.query(Company).filter(Company.id == channel.company_id).first()
@@ -102,7 +119,7 @@ def _activation_blockers(db, channel: AgentChannel) -> list[str]:
         blockers.append("At least one real AI provider/model must be enabled and configured")
     if not _channel_configured(channel):
         blockers.append(f"{channel.channel_type.title()} channel configuration is incomplete")
-    useful = (
+    docs = (
         db.query(KnowledgeDocument)
         .join(AgentKnowledge, AgentKnowledge.document_id == KnowledgeDocument.id)
         .filter(
@@ -110,11 +127,10 @@ def _activation_blockers(db, channel: AgentChannel) -> list[str]:
             KnowledgeDocument.enabled.is_(True),
             AgentKnowledge.agent_id == channel.agent_id,
             AgentKnowledge.enabled.is_(True),
-            KnowledgeDocument.source_type.notin_(["business_profile", "website_reference"]),
         )
         .all()
     )
-    if not any(len((doc.content or "").strip()) >= 20 for doc in useful):
+    if not any(_useful_business_knowledge(doc) for doc in docs):
         blockers.append("Add real business knowledge before activating this channel")
     return blockers
 
@@ -237,7 +253,6 @@ def configure_whatsapp(channel_id: int, data: WhatsAppConfigUpdate, current_admi
             raise HTTPException(400, detail=str(exc)) from exc
 
         channel.config = new_config
-        # Credential/behavior changes require an explicit readiness-gated activation.
         channel.enabled = False
         _ensure_channels_module(db, channel.company_id)
         db.commit()
