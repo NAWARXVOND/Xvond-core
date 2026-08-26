@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from backend.app.api.admin_channels import _activation_blockers, _ensure_channels_module
-from backend.app.core.config_secrets import merge_config
+from backend.app.core.config_secrets import merge_config, reveal_config
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.user import User
@@ -24,6 +24,16 @@ router = APIRouter(
     prefix="/admin/meta/whatsapp",
     tags=["Xvond Admin - Meta WhatsApp"],
 )
+
+
+WHATSAPP_BEHAVIOR_DEFAULTS = {
+    "language": "auto",
+    "dialect": "auto",
+    "tone": "professional_friendly",
+    "response_style": "conversational",
+    "response_length": "concise",
+    "emoji_style": "minimal",
+}
 
 
 def _env(name: str, default: str = "") -> str:
@@ -41,13 +51,17 @@ def _meta_settings() -> dict:
     }
 
 
-def _ensure_meta_configured() -> dict:
-    config = _meta_settings()
-    missing = [
+def _missing_meta_settings(config: dict) -> list[str]:
+    return [
         key
         for key in ("app_id", "app_secret", "config_id", "verify_token")
-        if not config[key]
+        if not config.get(key)
     ]
+
+
+def _ensure_meta_configured() -> dict:
+    config = _meta_settings()
+    missing = _missing_meta_settings(config)
     if missing:
         raise HTTPException(
             status_code=503,
@@ -109,16 +123,17 @@ def _graph_request(
 
 
 def _exchange_code_for_token(code: str, config: dict) -> str:
-    params = {
+    form = {
         "client_id": config["app_id"],
         "client_secret": config["app_secret"],
         "code": code,
     }
     if config["redirect_uri"]:
-        params["redirect_uri"] = config["redirect_uri"]
+        form["redirect_uri"] = config["redirect_uri"]
     payload = _graph_request(
-        "GET",
-        _graph_url(config["graph_api_version"], "oauth/access_token", params),
+        "POST",
+        _graph_url(config["graph_api_version"], "oauth/access_token"),
+        form=form,
     )
     token = str(payload.get("access_token") or "").strip()
     if not token:
@@ -192,7 +207,8 @@ def embedded_signup_config(
         if agent is None:
             raise HTTPException(status_code=404, detail="AI Employee not found")
         config = _meta_settings()
-        ready = bool(config["app_id"] and config["config_id"])
+        missing = _missing_meta_settings(config)
+        ready = not missing
         return {
             "ready": ready,
             "agent_id": agent.id,
@@ -202,6 +218,7 @@ def embedded_signup_config(
             "graph_api_version": config["graph_api_version"],
             "feature": "whatsapp_embedded_signup",
             "session_info_version": "3",
+            "missing_settings": missing,
         }
     finally:
         db.close()
@@ -257,15 +274,12 @@ def complete_embedded_signup(
             "app_secret": config["app_secret"],
             "graph_api_version": config["graph_api_version"],
             "connection_method": "meta_embedded_signup",
-            "language": "auto",
-            "dialect": "auto",
-            "tone": "professional_friendly",
-            "response_style": "conversational",
-            "response_length": "concise",
-            "emoji_style": "minimal",
         }
+        if channel is None:
+            incoming.update(WHATSAPP_BEHAVIOR_DEFAULTS)
+
         merged = merge_config(channel.config if channel else {}, incoming)
-        validate_channel_config("whatsapp", merged)
+        validate_channel_config("whatsapp", reveal_config(merged))
 
         if channel is None:
             channel = AgentChannel(
