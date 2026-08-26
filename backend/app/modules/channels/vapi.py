@@ -37,6 +37,11 @@ def build_vapi_assistant_payload(
         "provider": "custom-llm",
         "model": "xvond-agent",
         "url": model_url,
+        "headers": {
+            # Vapi resolves this server-side for each call. Xvond uses it to
+            # keep every voice turn on the same persistent conversation.
+            "X-Xvond-Call-Id": "{{call.id}}",
+        },
     }
 
     if credential_id:
