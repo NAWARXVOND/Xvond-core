@@ -59,6 +59,10 @@ def test_failed_automation_runs_remain_billable_for_capacity():
     marker = 'metadata={"workflow_id": workflow.id, "status": "failed"}'
     assert marker in runtime
     assert runtime.count("service_limits.record(") >= 2
+    assert "except Exception as original_error:" in runtime
+    assert 'original_error = __import__("sys").exc_info()[1]' not in runtime
+    assert 'raise original_error' not in runtime
+    assert '"usage_recorded": usage_recorded' in runtime
 
 
 def test_voice_provisioning_is_resumable_and_readiness_gated():
