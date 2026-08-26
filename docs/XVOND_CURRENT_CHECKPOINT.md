@@ -3,18 +3,18 @@
 Date: 2026-08-26 (Asia/Muscat)
 Branch: `staging`
 
-## Validation state
+## Verified validation state
 
-Last locally verified state before the latest admin privacy hardening:
+Latest locally verified full test run:
 
-- `127 passed`
+- `132 passed`
 - `0 failed`
-- `22 warnings`
+- `0 warnings`
 - Alembic upgraded through `c8f2a1d4e930`
 - PostgreSQL and Redis running locally
 - Groq live AI acceptance previously returned `XVOND_OK`
 
-The commits after that 127-test run must be validated locally with `pytest -q` before this checkpoint is considered fully green.
+The previous Python 3.14 `datetime.utcnow()` deprecation warnings and SQLite resource warnings in `tests/test_provider_policy.py` were eliminated. Provider/model timestamps now use an explicit UTC clock while preserving the existing naive database representation, and temporary SQLite engines are disposed after tests.
 
 ## Current product architecture
 
@@ -26,7 +26,7 @@ Xvond is a modular AI business platform. The current core includes:
 - AI Employees
 - Knowledge
 - Actions / business operations
-- Channels (Website, WhatsApp; voice runtime support exists; Instagram adapter is not implemented yet)
+- Channels
 - Integrations
 - Customer Portal
 - Usage/cost tracking
@@ -40,7 +40,7 @@ Canonical company flow:
 
 ## Customer Portal
 
-The modular Customer Portal has been verified locally for Gulf Catering Hub:
+The modular Customer Portal has been manually verified locally for Gulf Catering Hub:
 
 - AI Employees
 - Test AI Employee
@@ -55,7 +55,7 @@ The modular Customer Portal has been verified locally for Gulf Catering Hub:
 - Usage
 - Billing
 
-Conversation source metadata now supports:
+Conversation source metadata supports:
 
 - `channel_id`
 - `channel_type`
@@ -78,7 +78,7 @@ New test-chat conversations are tagged `portal_test` / Test Console. Older conve
 
 ## Business clock
 
-The runtime now injects the company's authoritative timezone/date context. Incomplete future-facing dates must resolve to the next matching future/current date unless the conversation explicitly specifies another year or a past date.
+The runtime injects the company's authoritative timezone/date context. Incomplete future-facing dates resolve to the next matching current/future date unless the conversation explicitly specifies another year or a past date.
 
 ## AI provider architecture
 
@@ -91,22 +91,39 @@ Provider adapters currently exist for:
 - xAI / Grok
 - Mock (development only)
 
-The runtime provider policy can automatically rank enabled models using recent reliability, provider priority, latency and configured token cost. It creates a failover chain and tries the next provider when the initial provider fails.
+Environment keys supported:
 
-Known routing hardening item: after a provider has started a multi-round tool continuation, the continuation currently stays on that provider. Cross-provider recovery during an in-progress tool continuation is not yet implemented.
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GOOGLE_API_KEY`
+- `XAI_API_KEY`
+- `GROQ_API_KEY`
+
+The runtime provider policy supports:
+
+- company default provider/model
+- optional company fallback provider/model
+- automatic ranking across enabled models
+- recent reliability/failure signal
+- provider priority
+- latency signal
+- configured token cost
+- first-request automatic failover across eligible providers
+
+Known hardening item: after a provider starts a multi-round tool continuation, continuation stays on that provider. Cross-provider recovery during an in-progress tool continuation is not yet implemented.
 
 ## Admin / customer privacy boundary
 
 Product decision: Xvond Admin is the operator/configuration control plane. Customer conversation content and customer-created business request payloads belong to the tenant Customer Portal or the tenant's connected external system.
 
-Latest hardening:
+Implemented boundary:
 
-- Removed Admin human-chat router from the active application surface
-- Removed Admin request-list / request-status management routes from the registered Agent Actions router
-- Removed Admin conversation content endpoints from Admin Operations
+- Admin human-chat router removed from the active application surface
+- Admin request-list / request-status management routes removed from the registered Agent Actions router
+- Admin conversation content endpoints removed from Admin Operations
 - Admin External Integration reconciliation returns operator-safe metadata only, without customer request payloads
 - Admin UI no longer loads customer requests, conversations or handoff sessions
-- Admin workspace hides Operations and Conversations customer-content surfaces
+- Admin workspace no longer exposes customer-content Operations or Conversations tabs
 - AI Employee Actions configuration no longer displays Real Customer Operations
 - Usage/cost, configuration, readiness, integrations, billing and audit/runtime health remain available to Xvond Admin
 
@@ -114,9 +131,9 @@ Customer Portal tenant-scoped routes remain the place for the client to view and
 
 ## AI Employee configuration
 
-Admin-created AI Employees now receive `AgentConfig` automatically with Customer Portal controls. Older employees without an AgentConfig are backfilled on profile access. Explicit customer-control values are preserved.
+Admin-created AI Employees receive `AgentConfig` automatically with Customer Portal controls. Older employees without an AgentConfig are backfilled on profile access. Explicit customer-control values are preserved.
 
-Default controls include:
+Default controls:
 
 - can enable/disable: true
 - can view conversations: true
@@ -129,30 +146,33 @@ Default controls include:
 
 Backend canonical readiness field is `company_profile_ready`.
 
-A legacy Admin renderer expected `profile_ready`, causing a false `Needs setup` display even when backend readiness was ACTIVE. The Admin privacy/compatibility layer now maps the canonical field so Company Profile readiness displays correctly.
+A legacy Admin renderer expected `profile_ready`, causing a false `Needs setup` display even when backend readiness was ACTIVE. Compatibility mapping now keeps the display aligned with the canonical readiness result.
 
 ## Billing
 
 Gulf Catering Hub has an AI Agents Starter service subscription. Verified Customer Portal billing showed:
 
 - Agents: `1 / 1`
-- Tokens: `0 / Unlimited` for the current billing period at the time of verification
+- Tokens: `0 / Unlimited` at the time of verification
 - Online payment method: Not configured
 
 Future subscription card payment belongs inside Billing; it is not a separate customer-facing Xvond service.
 
 ## Deployment state
 
-Deployment is intentionally paused. Do not set the local laptop to production just to force readiness green.
+Deployment is intentionally paused. Do not set the local laptop to production merely to force readiness green.
 
-When deployment resumes, deploy the full Xvond Core/runtime with PostgreSQL/Redis, HTTPS/reverse proxy, production secrets, migrations, live acceptance and off-server backups. Production data-residency preference remains Oman.
+When deployment resumes, deploy the complete Xvond runtime with PostgreSQL/Redis, HTTPS/reverse proxy, production secrets, migrations, live acceptance and off-server backups. Production data-residency preference remains Oman.
 
 ## Next engineering priorities
 
-1. Pull latest `staging` and run the complete local test suite. Also verify Admin JS syntax through the existing CI-compatible Node check if needed.
-2. Visually verify the Admin privacy boundary: no Operations/Conversations customer-content tabs, no customer request list inside Actions, and Company Profile readiness displays Ready.
-3. Add and live-test at least one second real AI provider, then validate normal response, tool calling, first-request failover and usage/cost logging across providers.
-4. Run one real External Integration end-to-end: Customer -> AI -> Action -> external API -> verified success -> AI confirmation.
-5. Review and eliminate the remaining pytest deprecation warnings after capturing their exact sources from the next local test run.
-6. Clean old staging-only request/conversation data before production acceptance.
-7. Re-run `scripts.production_acceptance --live-ai` after deployment; only then merge the production PR.
+1. Visually verify the latest Admin privacy/readiness changes after refresh: no customer Operations/Conversations surfaces, no customer request list inside Actions, and Company Profile readiness displays Ready.
+2. Add and live-test at least one second real AI provider, then validate normal response, tool calling, first-request failover and usage/cost logging across providers.
+3. Run one real External Integration end-to-end: Customer -> AI -> Action -> external API -> verified success -> AI confirmation.
+4. Clean old staging-only request/conversation data, especially `catering_quote #1`, before production acceptance.
+5. Run production acceptance only after deployment prerequisites are ready; merge to production only after live acceptance succeeds.
+
+## Stable test checkpoint
+
+Clean local test checkpoint: **132 passed, 0 warnings**.
+Do not re-open previously closed Inbox/filter/privacy/readiness issues unless new code changes or a regression test proves a failure.
