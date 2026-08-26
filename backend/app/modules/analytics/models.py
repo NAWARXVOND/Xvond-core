@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, JSON, String
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from backend.app.core.database.base import Base
 
@@ -20,6 +20,11 @@ class AnalyticsSource(Base):
     config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    @validates("config")
+    def protect_stored_config(self, _key, value):
+        from backend.app.core.config_secrets import protect_config
+        return protect_config(value or {})
 
 
 class AnalyticsDashboard(Base):
