@@ -43,29 +43,21 @@
     <aside class="sidebar">
         <div class="logo">Xvond</div>
         <div class="portal-label">Customer Portal</div>
-        <nav>
-            <button class="nav-item active" onclick="openPage('dashboard',this)">Dashboard</button>
-            <button class="nav-item" onclick="openPage('agents',this)">AI Employees</button>
-            <button class="nav-item" onclick="openPage('chat',this)">Test Chat</button>
-            <button class="nav-item" onclick="openPage('conversations',this)">Conversations</button>
-            <button class="nav-item" onclick="openPage('business',this)">Operations</button>
-            <button class="nav-item" onclick="openPage('usage',this)">Usage</button>
-        </nav>
+        <nav id="portal-nav"></nav>
         <button class="logout" onclick="logout()">Logout</button>
     </aside>
 
     <main class="main">
         <header class="topbar">
-            <div><h1 id="page-title">Dashboard</h1><p>Xvond AI Business Platform</p></div>
+            <div><h1 id="page-title">Overview</h1><p>Xvond AI Business Platform</p></div>
             <div id="user-email"></div>
         </header>
 
         <section id="page-dashboard" class="page">
-            <div class="cards">
-                <div class="card"><span>AI Employees</span><strong id="dash-agents">0</strong></div>
-                <div class="card"><span>Active Employees</span><strong id="dash-active">0</strong></div>
-                <div class="card"><span>AI Requests</span><strong id="dash-requests">0</strong></div>
-                <div class="card"><span>Tokens</span><strong id="dash-tokens">0</strong></div>
+            <div id="dashboard-cards" class="cards"></div>
+            <div class="panel" style="margin-bottom:22px">
+                <h2>My Services</h2>
+                <div id="dashboard-services" class="service-grid"></div>
             </div>
             <div class="panel">
                 <h2>Account</h2>
@@ -128,6 +120,16 @@
                 <div class="card"><span>Total Tokens</span><strong id="usage-total">0</strong></div>
             </div>
         </section>
+
+        <section id="page-integrations" class="page hidden">
+            <div id="customer-integrations-content"></div>
+        </section>
+
+        <section id="page-billing" class="page hidden">
+            <div id="customer-billing-content"></div>
+        </section>
+
+        <div id="dynamic-pages"></div>
     </main>
 </div>
 <script src="/static/customer/app.js"></script>
