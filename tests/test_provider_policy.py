@@ -22,7 +22,12 @@ def make_db():
             CompanyAIProfile.__table__,
         ],
     )
-    return Session(engine)
+    return engine, Session(engine)
+
+
+def close_db(engine, db):
+    db.close()
+    engine.dispose()
 
 
 def add_provider(db, provider, model, enabled=True, priority=10, input_price="0", output_price="0"):
@@ -48,7 +53,7 @@ def add_provider(db, provider, model, enabled=True, priority=10, input_price="0"
 
 
 def test_provider_model_must_be_loaded_and_enabled(monkeypatch):
-    db = make_db()
+    engine, db = make_db()
     try:
         add_provider(db, "groq", "model-a")
         monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["groq"])
@@ -57,11 +62,11 @@ def test_provider_model_must_be_loaded_and_enabled(monkeypatch):
         assert selected.model == "model-a"
         assert not provider_policy.provider_model_available(db, "groq", "missing")
     finally:
-        db.close()
+        close_db(engine, db)
 
 
 def test_runtime_selections_adds_enabled_company_fallback(monkeypatch):
-    db = make_db()
+    engine, db = make_db()
     try:
         add_provider(db, "groq", "primary-model")
         add_provider(db, "openai", "fallback-model")
@@ -83,11 +88,11 @@ def test_runtime_selections_adds_enabled_company_fallback(monkeypatch):
             ("openai", "fallback-model"),
         ]
     finally:
-        db.close()
+        close_db(engine, db)
 
 
 def test_disabled_fallback_is_not_selected(monkeypatch):
-    db = make_db()
+    engine, db = make_db()
     try:
         add_provider(db, "groq", "primary-model")
         add_provider(db, "openai", "fallback-model", enabled=False)
@@ -104,11 +109,11 @@ def test_disabled_fallback_is_not_selected(monkeypatch):
         selections = provider_policy.runtime_selections(db, 7, "groq", "primary-model")
         assert len(selections) == 1
     finally:
-        db.close()
+        close_db(engine, db)
 
 
 def test_runtime_selections_include_all_loaded_enabled_providers(monkeypatch):
-    db = make_db()
+    engine, db = make_db()
     try:
         add_provider(db, "groq", "groq-model", priority=40, input_price="0.2", output_price="0.4")
         add_provider(db, "openai", "openai-model", priority=10, input_price="1", output_price="2")
@@ -128,11 +133,11 @@ def test_runtime_selections_include_all_loaded_enabled_providers(monkeypatch):
         ]
         assert all(item.reason == "automatic" for item in selections)
     finally:
-        db.close()
+        close_db(engine, db)
 
 
 def test_company_default_precedes_automatic_route(monkeypatch):
-    db = make_db()
+    engine, db = make_db()
     try:
         add_provider(db, "openai", "openai-model", priority=10)
         add_provider(db, "anthropic", "claude-model", priority=20)
@@ -153,4 +158,4 @@ def test_company_default_precedes_automatic_route(monkeypatch):
         ]
         assert selections[0].reason == "company_default"
     finally:
-        db.close()
+        close_db(engine, db)
