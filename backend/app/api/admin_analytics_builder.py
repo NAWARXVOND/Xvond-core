@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 
 from backend.app.core.config.settings import settings
+from backend.app.core.config_secrets import configured_secret_fields, public_config
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.company import Company
@@ -129,7 +130,8 @@ def workspace(company_id: int, current_admin: User = Depends(require_xvond_admin
                 "name": x.name,
                 "source_type": x.source_type,
                 "integration_id": x.integration_id,
-                "config": x.config,
+                "config": public_config(x.config),
+                "configured_secret_fields": configured_secret_fields(x.config),
                 "enabled": x.enabled,
                 "record_count": db.query(func.count(AnalyticsRecord.id)).filter(
                     AnalyticsRecord.source_id == x.id
@@ -186,7 +188,12 @@ def create_source(company_id: int, data: SourceCreate, current_admin: User = Dep
         db.add(item)
         db.commit()
         db.refresh(item)
-        return {"id": item.id, "status": "created"}
+        return {
+            "id": item.id,
+            "status": "created",
+            "config": public_config(item.config),
+            "configured_secret_fields": configured_secret_fields(item.config),
+        }
     finally:
         db.close()
 
