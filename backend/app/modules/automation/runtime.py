@@ -73,8 +73,7 @@ class AutomationRuntime:
             db.commit()
             db.refresh(run)
             return run
-        except Exception:
-            original_error = __import__("sys").exc_info()[1]
+        except Exception as original_error:
             error_message = str(original_error)[:2000]
             failed_output = {"state": state, "steps": step_results}
             db.rollback()
@@ -91,8 +90,8 @@ class AutomationRuntime:
                 )
             except Exception:
                 # A concurrent run may have consumed the final quota slot after
-                # the original transaction rolled back. Preserve the original
-                # workflow failure instead of masking it with an accounting race.
+                # the original transaction rolled back. Preserve the workflow
+                # failure instead of masking it with an accounting race.
                 usage_recorded = False
                 db.rollback()
 
@@ -110,7 +109,7 @@ class AutomationRuntime:
             )
             db.add(failed_run)
             db.commit()
-            raise original_error
+            raise
 
     def execute_step(
         self,
