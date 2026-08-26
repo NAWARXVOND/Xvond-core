@@ -145,6 +145,7 @@ class AgentRuntime:
 
         conversation = (
             db.query(AIConversation)
+            .populate_existing()
             .filter(
                 AIConversation.id == conversation_id,
                 AIConversation.company_id == company_id,
@@ -182,9 +183,6 @@ class AgentRuntime:
         conversation: AIConversation,
     ) -> str:
         base = str(agent.system_prompt or "").strip()
-        # Website and Voice currently provide behavior explicitly at their public
-        # adapters. WhatsApp is resolved here because its session is bound before
-        # the shared runtime is called, including on the first inbound message.
         if str(conversation.channel_type or "").lower() != "whatsapp":
             return base
         channel = (
