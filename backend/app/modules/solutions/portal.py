@@ -9,13 +9,62 @@ BUSINESS_CAPABILITY_MODULES = {
     "customer_support",
 }
 
+CAPABILITY_PORTAL_ITEMS = (
+    (
+        "quotation",
+        {
+            "id": "requests-quotation",
+            "label": "Quotation Requests",
+            "loader": "business",
+            "capability_module": "quotation",
+        },
+    ),
+    (
+        "booking",
+        {
+            "id": "requests-booking",
+            "label": "Bookings",
+            "loader": "business",
+            "capability_module": "booking",
+        },
+    ),
+    (
+        "orders",
+        {
+            "id": "requests-orders",
+            "label": "Orders & Requests",
+            "loader": "business",
+            "capability_module": "orders",
+        },
+    ),
+    (
+        "lead_management",
+        {
+            "id": "requests-leads",
+            "label": "Leads",
+            "loader": "business",
+            "capability_module": "lead_management",
+        },
+    ),
+    (
+        "customer_support",
+        {
+            "id": "requests-support",
+            "label": "Support Requests",
+            "loader": "business",
+            "capability_module": "customer_support",
+            "include_handoffs": True,
+        },
+    ),
+)
+
 SERVICE_PORTAL_REGISTRY = {
     "ai_agents": {
         "group": "AI Agents",
         "items": [
             {"id": "agents", "label": "AI Employees", "loader": "agents"},
             {"id": "chat", "label": "Test AI Employee", "loader": "chat"},
-            {"id": "conversations", "label": "Conversations", "loader": "conversations"},
+            {"id": "conversations", "label": "Inbox", "loader": "conversations"},
             {"id": "usage", "label": "Usage", "loader": "usage"},
         ],
     },
@@ -94,19 +143,12 @@ def build_customer_portal_navigation(
 
         group = definition["group"]
         for item in definition["items"]:
-            # Business requests belong to the AI Agents service, but only make
-            # sense when at least one executable business capability is enabled.
             if service_code == "ai_agents" and item["id"] == "usage":
-                if modules.intersection(BUSINESS_CAPABILITY_MODULES):
-                    navigation.append(
-                        {
-                            "id": "business",
-                            "label": "Requests & Operations",
-                            "loader": "business",
-                            "service_code": "ai_agents",
-                            "group": group,
-                        }
-                    )
+                for capability, capability_item in CAPABILITY_PORTAL_ITEMS:
+                    if capability in modules:
+                        navigation.append(
+                            _item_with_group(capability_item, group, "ai_agents")
+                        )
             navigation.append(_item_with_group(item, group, service_code))
 
     navigation.append(
