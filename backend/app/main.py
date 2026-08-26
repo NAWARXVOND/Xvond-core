@@ -33,6 +33,7 @@ from backend.app.api.admin_setup import router as admin_setup_router
 from backend.app.api.admin_solutions import router as admin_solutions_router
 from backend.app.api.admin_tool_execution import router as admin_tool_execution_router
 from backend.app.api.admin_tools import router as admin_tools_router
+from backend.app.api.admin_voice import router as admin_voice_router
 
 from backend.app.api.agent_factory import router as agent_factory_router
 from backend.app.api.ai_agents import router as ai_agents_router
@@ -240,6 +241,7 @@ app.include_router(admin_setup_router)
 app.include_router(admin_solutions_router)
 app.include_router(admin_tool_execution_router)
 app.include_router(admin_tools_router)
+app.include_router(admin_voice_router)
 
 
 # ============================================================
