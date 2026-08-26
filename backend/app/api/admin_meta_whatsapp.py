@@ -18,7 +18,7 @@ from backend.app.modules.channels.models import AgentChannel
 
 
 router = APIRouter(
-    prefix="/admin/meta/whatsapp",
+    prefix="/meta/whatsapp",
     tags=["Xvond Admin - Meta WhatsApp"],
 )
 
@@ -248,6 +248,7 @@ def complete_embedded_signup(
                 enabled=True,
             )
             db.add(channel)
+            db.flush()
         else:
             channel.config = merged
             channel.enabled = True
