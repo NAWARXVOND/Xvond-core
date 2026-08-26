@@ -25,6 +25,7 @@ from backend.app.api.admin_company_view import router as admin_company_view_rout
 from backend.app.api.admin_dashboard import router as admin_dashboard_router
 from backend.app.api.admin_integrations import router as admin_integrations_router
 from backend.app.api.admin_knowledge import router as admin_knowledge_router
+from backend.app.api.admin_meta_whatsapp import router as admin_meta_whatsapp_router
 from backend.app.api.admin_operations import router as admin_operations_router
 from backend.app.api.admin_production import router as admin_production_router
 from backend.app.api.admin_providers import router as admin_providers_router
@@ -223,6 +224,7 @@ app.include_router(admin_company_view_router)
 app.include_router(admin_dashboard_router)
 app.include_router(admin_integrations_router)
 app.include_router(admin_knowledge_router)
+app.include_router(admin_meta_whatsapp_router)
 app.include_router(admin_operations_router)
 app.include_router(admin_production_router)
 app.include_router(admin_providers_router)
