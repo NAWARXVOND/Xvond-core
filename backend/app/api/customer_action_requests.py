@@ -9,7 +9,7 @@ from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.tools.business_models import ActionRequest
 from backend.app.modules.tools.models import AgentToolAssignment
 
-router = APIRouter(prefix="/customer/action-requests", tags=["Customer AI Operations"])
+router = APIRouter(prefix="/customer", tags=["Customer AI Operations"])
 ALLOWED_STATUSES = {"new", "pending_human", "in_progress", "confirmed", "processing", "completed", "cancelled"}
 
 
@@ -69,7 +69,7 @@ def _serialize(item: ActionRequest, catalog: dict[tuple[int, str], dict]) -> dic
     }
 
 
-@router.get("")
+@router.get("/action-requests")
 def list_requests(
     agent_id: int | None = None,
     module: str | None = None,
@@ -92,7 +92,7 @@ def list_requests(
         db.close()
 
 
-@router.patch("/{request_id}")
+@router.patch("/action-requests/{request_id}")
 def update_status(
     request_id: int,
     data: StatusUpdate,
