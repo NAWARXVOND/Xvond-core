@@ -60,3 +60,21 @@ def test_customer_operations_routes_are_registered():
 
     assert "get" in paths.get("/customer/action-requests", {})
     assert "get" in paths.get("/customer/business/handoffs", {})
+    assert "get" in paths.get("/customer/inbox", {})
+
+
+def test_xvond_admin_does_not_expose_customer_content_routes():
+    paths = app.openapi().get("paths", {})
+
+    blocked = {
+        "/admin/agent-actions/companies/{company_id}/requests",
+        "/admin/agent-actions/requests/{request_id}",
+        "/admin/operations/companies/{company_id}/conversations",
+        "/admin/operations/companies/{company_id}/conversations/{conversation_id}",
+        "/admin/handoff/companies/{company_id}/sessions",
+        "/admin/handoff/companies/{company_id}/conversations/{conversation_id}/take-over",
+        "/admin/handoff/companies/{company_id}/conversations/{conversation_id}/return-ai",
+        "/admin/handoff/companies/{company_id}/conversations/{conversation_id}/message",
+    }
+
+    assert blocked.isdisjoint(paths)
