@@ -1,3 +1,48 @@
+COMMON_TEXT_BEHAVIOR_FIELDS = [
+    {
+        "name": "language",
+        "label": "Response Language",
+        "required": False,
+        "secret": False,
+        "default": "auto",
+    },
+    {
+        "name": "dialect",
+        "label": "Dialect",
+        "required": False,
+        "secret": False,
+        "default": "auto",
+    },
+    {
+        "name": "tone",
+        "label": "Tone",
+        "required": False,
+        "secret": False,
+        "default": "professional_friendly",
+    },
+    {
+        "name": "response_style",
+        "label": "Response Style",
+        "required": False,
+        "secret": False,
+        "default": "natural",
+    },
+    {
+        "name": "response_length",
+        "label": "Response Length",
+        "required": False,
+        "secret": False,
+        "default": "concise",
+    },
+    {
+        "name": "channel_instructions",
+        "label": "Channel-specific Instructions",
+        "required": False,
+        "secret": False,
+    },
+]
+
+
 CHANNEL_CATALOG = {
 
     "whatsapp": {
@@ -35,6 +80,20 @@ CHANNEL_CATALOG = {
                 "secret": False,
                 "default": "v23.0",
             },
+            *COMMON_TEXT_BEHAVIOR_FIELDS,
+            {
+                "name": "emoji_style",
+                "label": "Emoji Style",
+                "required": False,
+                "secret": False,
+                "default": "minimal",
+            },
+            {
+                "name": "greeting_message",
+                "label": "WhatsApp Greeting",
+                "required": False,
+                "secret": False,
+            },
         ],
     },
 
@@ -51,6 +110,13 @@ CHANNEL_CATALOG = {
             {
                 "name": "widget_name",
                 "label": "Widget Name",
+                "required": False,
+                "secret": False,
+            },
+            *COMMON_TEXT_BEHAVIOR_FIELDS,
+            {
+                "name": "greeting_message",
+                "label": "Website Greeting",
                 "required": False,
                 "secret": False,
             },
@@ -85,6 +151,86 @@ CHANNEL_CATALOG = {
                 "required": False,
                 "secret": True,
             },
+            {
+                "name": "language",
+                "label": "Spoken Language",
+                "required": False,
+                "secret": False,
+                "default": "auto",
+            },
+            {
+                "name": "dialect",
+                "label": "Spoken Dialect",
+                "required": False,
+                "secret": False,
+                "default": "auto",
+            },
+            {
+                "name": "tone",
+                "label": "Speaking Tone",
+                "required": False,
+                "secret": False,
+                "default": "professional_friendly",
+            },
+            {
+                "name": "voice_id",
+                "label": "Voice ID",
+                "required": False,
+                "secret": False,
+            },
+            {
+                "name": "voice_gender",
+                "label": "Voice Gender",
+                "required": False,
+                "secret": False,
+                "default": "provider_default",
+            },
+            {
+                "name": "speaking_rate",
+                "label": "Speaking Rate",
+                "required": False,
+                "secret": False,
+                "default": "normal",
+            },
+            {
+                "name": "allow_interruption",
+                "label": "Allow Caller Interruption",
+                "required": False,
+                "secret": False,
+                "default": True,
+            },
+            {
+                "name": "response_length",
+                "label": "Spoken Response Length",
+                "required": False,
+                "secret": False,
+                "default": "short",
+            },
+            {
+                "name": "greeting_message",
+                "label": "Call Greeting",
+                "required": False,
+                "secret": False,
+            },
+            {
+                "name": "closing_message",
+                "label": "Call Closing",
+                "required": False,
+                "secret": False,
+            },
+            {
+                "name": "silence_timeout_seconds",
+                "label": "Silence Timeout Seconds",
+                "required": False,
+                "secret": False,
+                "default": 8,
+            },
+            {
+                "name": "channel_instructions",
+                "label": "Voice-specific Instructions",
+                "required": False,
+                "secret": False,
+            },
         ],
     },
 
@@ -98,6 +244,7 @@ CHANNEL_CATALOG = {
                 "required": True,
                 "secret": True,
             },
+            *COMMON_TEXT_BEHAVIOR_FIELDS,
         ],
     },
 
@@ -117,6 +264,7 @@ CHANNEL_CATALOG = {
                 "required": False,
                 "secret": True,
             },
+            *COMMON_TEXT_BEHAVIOR_FIELDS,
         ],
     },
 }
