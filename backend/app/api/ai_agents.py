@@ -16,6 +16,7 @@ from backend.app.modules.ai_agent.models import (
     AIConversation,
     AIMessage,
 )
+from backend.app.modules.channels.conversation_source import bind_conversation_source
 
 from backend.app.modules.ai_agent.factory_models import (
     AgentConfig,
@@ -161,7 +162,7 @@ def chat(
     db = SessionLocal()
 
     try:
-        return agent_runtime.chat(
+        result = agent_runtime.chat(
             db=db,
             company_id=current_user.company_id,
             agent_id=agent_id,
@@ -170,6 +171,15 @@ def chat(
                 data.conversation_id
             ),
         )
+        bind_conversation_source(
+            db,
+            conversation_id=result["conversation_id"],
+            company_id=current_user.company_id,
+            agent_id=agent_id,
+            channel_type="portal_test",
+        )
+        db.commit()
+        return result
 
     except HTTPException:
         db.rollback()
