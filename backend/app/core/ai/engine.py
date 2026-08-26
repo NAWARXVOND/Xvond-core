@@ -6,7 +6,11 @@ from backend.app.core.ai.provider_registry import (
     provider_registry,
 )
 from backend.app.core.config.settings import settings
-from backend.app.core.privacy import protect_text, restore_ai_response
+from backend.app.core.privacy import (
+    protect_text,
+    protect_tool_outputs,
+    restore_ai_response,
+)
 
 
 class AIEngine:
@@ -15,7 +19,6 @@ class AIEngine:
         self._load_core_providers()
 
     def _load_core_providers(self):
-
         if not settings.is_production:
             from backend.app.core.ai.providers.mock import MockProvider
             provider_registry.register("mock", MockProvider())
@@ -75,24 +78,37 @@ class AIEngine:
         continuation=None,
     ) -> AIResponse:
         provider = self.get_provider(provider_name)
-        protected = None
+        replacements: dict[str, str] | None = None
+        outbound_system_prompt = system_prompt
         outbound_user_message = user_message
+        outbound_tool_outputs = tool_outputs
 
         if settings.AI_PII_REDACTION_ENABLED and provider_name != "mock":
-            protected = protect_text(user_message)
-            outbound_user_message = protected.text
+            replacements = {}
+            outbound_system_prompt = protect_text(
+                system_prompt,
+                replacements,
+            ).text
+            outbound_user_message = protect_text(
+                user_message,
+                replacements,
+            ).text
+            outbound_tool_outputs = protect_tool_outputs(
+                tool_outputs,
+                replacements,
+            )
 
         response = provider.generate(
-            system_prompt=system_prompt,
+            system_prompt=outbound_system_prompt,
             user_message=outbound_user_message,
             model=model,
             tools=tools,
-            tool_outputs=tool_outputs,
+            tool_outputs=outbound_tool_outputs,
             continuation=continuation,
         )
 
-        if protected is not None:
-            response = restore_ai_response(response, protected.replacements)
+        if replacements:
+            response = restore_ai_response(response, replacements)
         return response
 
     def list_providers(self) -> list[str]:
