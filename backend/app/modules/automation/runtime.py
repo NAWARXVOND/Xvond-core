@@ -77,6 +77,18 @@ class AutomationRuntime:
             error_message = str(exc)[:2000]
             failed_output = {"state": state, "steps": step_results}
             db.rollback()
+
+            # The original usage event belonged to the rolled-back transaction.
+            # Record it again in the durable failure transaction so failed runs
+            # still consume the configured monthly automation allowance.
+            service_limits.record(
+                db,
+                company_id,
+                "automation",
+                "runs",
+                quantity=1,
+                metadata={"workflow_id": workflow.id, "status": "failed"},
+            )
             failed_run = AutomationRun(
                 company_id=company_id,
                 workflow_id=workflow.id,
@@ -177,9 +189,7 @@ class AutomationRuntime:
             url = str(config.get("url") or "").strip()
             if not url:
                 raise ValueError("Webhook URL is invalid")
-            idempotency_key = (
-                f"xvond-automation-{company_id}-{run_id}-{step_index}-v1"
-            )
+            idempotency_key = f"xvond-automation-{company_id}-{run_id}-{step_index}-v1"
             headers = {
                 "Idempotency-Key": idempotency_key,
                 "X-Xvond-Idempotency-Key": idempotency_key,
