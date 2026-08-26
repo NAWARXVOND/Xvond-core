@@ -57,6 +57,16 @@ class Settings:
         ),
     )
 
+    AI_PII_REDACTION_ENABLED = os.getenv(
+        "AI_PII_REDACTION_ENABLED",
+        "true" if APP_ENV in {"production", "prod"} else "false",
+    ).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
     # Forwarded client headers are trusted only behind a configured
     # reverse proxy. Keeping this disabled prevents IP spoofing from
     # bypassing public-endpoint rate limits.
