@@ -17,6 +17,7 @@ def test_admin_scripts_are_loaded_once_and_workspace_is_consolidated():
     assert scripts.index("/static/admin/privacy-boundaries.js") > scripts.index(
         "/static/admin/company-control-center.js"
     )
+    assert "/static/admin/human-chat.js" not in scripts
     assert not any("company-control-center-runtime" in script for script in scripts)
     assert not any("employee-workspace" in script for script in scripts)
     assert not (ADMIN_DIR / "company-control-center-runtime.js").exists()
