@@ -20,6 +20,7 @@ from backend.app.modules.channels.vapi_api import (
     create_assistant,
     create_custom_llm_credential,
     get_phone_number,
+    list_phone_numbers,
     update_assistant,
 )
 
@@ -52,6 +53,26 @@ def _public_base_url() -> str:
 def _assistant_name(agent: AIAgent) -> str:
     name = str(getattr(agent, "name", "") or "Xvond Voice Agent").strip()
     return name[:40] or "Xvond Voice Agent"
+
+
+@router.get("/vapi/phone-numbers")
+def vapi_phone_numbers(
+    current_admin: User = Depends(require_xvond_admin),
+):
+    items = list_phone_numbers()
+    return {
+        "phone_numbers": [
+            {
+                "id": str(item.get("id") or ""),
+                "number": str(item.get("number") or item.get("phoneNumber") or ""),
+                "name": str(item.get("name") or item.get("number") or ""),
+                "provider": item.get("provider"),
+                "assistant_id": item.get("assistantId"),
+            }
+            for item in items
+            if item.get("id")
+        ]
+    }
 
 
 @router.get("/channels/{channel_id}/vapi/status")
