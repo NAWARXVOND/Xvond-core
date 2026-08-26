@@ -31,7 +31,7 @@ router = APIRouter(
 
 
 class VapiProvisionRequest(BaseModel):
-    phone_number_id: str | None = None
+    phone_number_id: str
 
 
 def _public_base_url() -> str:
@@ -87,6 +87,8 @@ def vapi_channel_status(
             "provisioned": bool(
                 config.get("vapi_assistant_id")
                 and config.get("vapi_llm_credential_id")
+                and config.get("vapi_phone_number_id")
+                and config.get("phone_number")
             ),
         }
     finally:
@@ -123,6 +125,22 @@ def provision_vapi_voice_channel(
         if agent is None:
             raise HTTPException(status_code=404, detail="AI Agent not found")
 
+        phone_number_id = str(data.phone_number_id or "").strip()
+        if not phone_number_id:
+            raise HTTPException(
+                status_code=400,
+                detail="A real Vapi phone_number_id is required",
+            )
+
+        # Validate the Vapi number before creating or changing local state.
+        phone = get_phone_number(phone_number_id)
+        phone_number = str(phone.get("number") or "").strip()
+        if not phone_number:
+            raise HTTPException(
+                status_code=502,
+                detail="Vapi phone number resource did not contain a phone number",
+            )
+
         config = reveal_config(channel.config)
         llm_api_key = str(config.get("llm_api_key") or "").strip()
         if not llm_api_key:
@@ -153,7 +171,7 @@ def provision_vapi_voice_channel(
 
         assistant_id = str(config.get("vapi_assistant_id") or "").strip()
         if assistant_id:
-            assistant = update_assistant(assistant_id, assistant_payload)
+            update_assistant(assistant_id, assistant_payload)
         else:
             assistant = create_assistant(assistant_payload)
             assistant_id = str(assistant.get("id") or "").strip()
@@ -163,34 +181,26 @@ def provision_vapi_voice_channel(
                     detail="Vapi did not return an assistant id",
                 )
 
-        phone_number_id = str(
-            data.phone_number_id
-            or config.get("vapi_phone_number_id")
-            or ""
+        phone_result = attach_assistant_to_phone(
+            phone_number_id,
+            assistant_id,
+        )
+        bound_assistant_id = str(
+            phone_result.get("assistantId") or assistant_id
         ).strip()
-        phone_number = str(config.get("phone_number") or "").strip()
-        phone_result = None
-
-        if phone_number_id:
-            # Fetch first so a bad/foreign ID fails before saving it locally.
-            phone = get_phone_number(phone_number_id)
-            phone_result = attach_assistant_to_phone(
-                phone_number_id,
-                assistant_id,
+        if bound_assistant_id != assistant_id:
+            raise HTTPException(
+                status_code=502,
+                detail="Vapi phone number was not bound to the expected assistant",
             )
-            phone_number = str(
-                phone_result.get("number")
-                or phone.get("number")
-                or phone_number
-            ).strip()
 
         incoming = {
             "provider": "vapi",
             "llm_api_key": llm_api_key,
             "vapi_llm_credential_id": credential_id,
             "vapi_assistant_id": assistant_id,
-            "vapi_phone_number_id": phone_number_id or None,
-            "phone_number": phone_number or config.get("phone_number") or "pending",
+            "vapi_phone_number_id": phone_number_id,
+            "phone_number": phone_number,
             "vapi_model_url": model_url,
             "provisioning_method": "xvond_vapi_api",
         }
@@ -207,8 +217,9 @@ def provision_vapi_voice_channel(
             details={
                 "agent_id": channel.agent_id,
                 "vapi_assistant_id": assistant_id,
-                "vapi_phone_number_id": phone_number_id or None,
-                "phone_bound": bool(phone_number_id),
+                "vapi_phone_number_id": phone_number_id,
+                "phone_number": phone_number,
+                "phone_bound": True,
             },
         )
 
@@ -216,15 +227,15 @@ def provision_vapi_voice_channel(
         db.refresh(channel)
 
         return {
-            "status": "connected" if phone_number_id else "assistant_ready",
+            "status": "connected",
             "channel_id": channel.id,
             "company_id": channel.company_id,
             "agent_id": channel.agent_id,
             "vapi_assistant_id": assistant_id,
-            "vapi_phone_number_id": phone_number_id or None,
-            "phone_number": phone_number or None,
+            "vapi_phone_number_id": phone_number_id,
+            "phone_number": phone_number,
             "model_url": model_url,
-            "phone_bound": bool(phone_number_id),
+            "phone_bound": True,
         }
     finally:
         db.close()
