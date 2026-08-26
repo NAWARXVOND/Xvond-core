@@ -8,6 +8,7 @@ from backend.app.core.ai.engine import ai_engine
 from backend.app.core.ai.provider_policy import runtime_selections
 from backend.app.core.ai.base import ToolOutput
 from backend.app.core.config.settings import settings
+from backend.app.core.config_secrets import reveal_config
 from backend.app.core.module_access import company_module_enabled
 
 from backend.app.models.company import Company
@@ -24,6 +25,9 @@ from backend.app.modules.billing.limits import limits_service
 from backend.app.modules.billing.models import Plan, Subscription
 from backend.app.modules.tools.executor import tool_executor
 from backend.app.modules.audit.service import audit_service
+from backend.app.modules.channels.behavior import build_channel_behavior_prompt
+from backend.app.modules.channels.models import AgentChannel
+from backend.app.modules.channels.whatsapp_models import WhatsAppSession
 
 from backend.app.modules.knowledge.service import (
     knowledge_service,
@@ -206,6 +210,54 @@ class AgentRuntime:
         # growing the AI context forever.
         return history[-12000:]
 
+    def resolve_channel_behavior(
+        self,
+        db,
+        company_id: int,
+        agent_id: int,
+        conversation_id: int,
+    ) -> tuple[str | None, str]:
+        """Resolve behavior for the communication channel behind a conversation.
+
+        WhatsApp is currently resolved from its session table. Other channel
+        runtimes can adopt the same pattern as they are added.
+        """
+        whatsapp_session = (
+            db.query(WhatsAppSession)
+            .filter(
+                WhatsAppSession.company_id == company_id,
+                WhatsAppSession.agent_id == agent_id,
+                WhatsAppSession.conversation_id == conversation_id,
+            )
+            .first()
+        )
+
+        if whatsapp_session is None:
+            return None, ""
+
+        channel = (
+            db.query(AgentChannel)
+            .filter(
+                AgentChannel.company_id == company_id,
+                AgentChannel.agent_id == agent_id,
+                AgentChannel.channel_type == "whatsapp",
+                AgentChannel.enabled.is_(True),
+            )
+            .first()
+        )
+
+        if channel is None:
+            return None, ""
+
+        config = reveal_config(channel.config)
+        return (
+            "whatsapp",
+            build_channel_behavior_prompt(
+                "whatsapp",
+                config,
+            ),
+        )
+
     MAX_TOOL_ROUNDS = 6
 
     def chat(
@@ -263,6 +315,21 @@ class AgentRuntime:
             conversation_id=conversation_id,
             message=message,
         )
+
+        channel_type, channel_behavior = self.resolve_channel_behavior(
+            db=db,
+            company_id=company_id,
+            agent_id=agent.id,
+            conversation_id=conversation.id,
+        )
+
+        system_prompt = agent.system_prompt
+        if channel_behavior:
+            system_prompt = (
+                f"{agent.system_prompt}\n\n"
+                "CHANNEL RESPONSE BEHAVIOR:\n"
+                f"{channel_behavior}"
+            )
 
         history = self.build_history(
             db,
@@ -360,7 +427,7 @@ class AgentRuntime:
                 try:
                     result = ai_engine.generate(
                         provider_name=active_provider,
-                        system_prompt=agent.system_prompt,
+                        system_prompt=system_prompt,
                         user_message=runtime_message,
                         model=active_model,
                         tools=tool_definitions,
@@ -378,7 +445,7 @@ class AgentRuntime:
                     try:
                         result = ai_engine.generate(
                             provider_name=active_provider,
-                            system_prompt=agent.system_prompt,
+                            system_prompt=system_prompt,
                             user_message=runtime_message,
                             model=active_model,
                             tools=tool_definitions,
@@ -422,6 +489,7 @@ class AgentRuntime:
                         "model": active_model,
                         "error": error_message,
                         "latency_ms": latency_ms,
+                        "channel_type": channel_type,
                     },
                 )
                 db.commit()
@@ -546,6 +614,7 @@ class AgentRuntime:
                             output.success,
                         "error":
                             output.error,
+                        "channel_type": channel_type,
                     },
                 )
 
@@ -617,6 +686,7 @@ class AgentRuntime:
                     total_tokens,
                 "latency_ms":
                     usage.latency_ms,
+                "channel_type": channel_type,
             },
         )
 
@@ -636,6 +706,8 @@ class AgentRuntime:
                 agent.provider,
             "model":
                 agent.model,
+            "channel_type":
+                channel_type,
 
             "message": {
                 "id":
@@ -674,4 +746,3 @@ class AgentRuntime:
 
 
 agent_runtime = AgentRuntime()
-
