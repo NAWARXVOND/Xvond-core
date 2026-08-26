@@ -21,3 +21,14 @@ def test_no_duplicate_api_routes():
             seen.add(key)
 
     assert duplicates == []
+
+
+def test_customer_operations_routes_are_registered():
+    registered = {
+        (method, getattr(route, "path", None))
+        for route in app.routes
+        for method in (getattr(route, "methods", None) or set()) - {"HEAD", "OPTIONS"}
+    }
+
+    assert ("GET", "/customer/action-requests") in registered
+    assert ("GET", "/customer/business/handoffs") in registered
