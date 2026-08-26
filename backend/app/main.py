@@ -21,6 +21,7 @@ from backend.app.api.admin_agent_actions import router as admin_agent_actions_ro
 from backend.app.api.admin_audit import router as admin_audit_router
 from backend.app.api.admin_channels import router as admin_channels_router
 from backend.app.api.admin_voice import router as admin_voice_router
+from backend.app.api.admin_meta_whatsapp import router as admin_meta_whatsapp_router
 from backend.app.api.admin_company_profile import router as admin_company_profile_router
 from backend.app.api.admin_company_users import router as admin_company_users_router
 from backend.app.api.admin_company_view import router as admin_company_view_router
@@ -175,9 +176,6 @@ async def protect_public_endpoints(request: Request, call_next):
     return await call_next(request)
 
 
-# Remove customer-created request-management routes from the Xvond operator
-# control plane before FastAPI registers the router. Tenant-scoped customer APIs
-# remain available in the Customer Portal.
 enforce_admin_customer_data_boundary(admin_agent_actions_router)
 
 
@@ -194,6 +192,7 @@ for r in [
     admin_audit_router,
     admin_channels_router,
     admin_voice_router,
+    admin_meta_whatsapp_router,
     admin_company_profile_router,
     admin_company_users_router,
     admin_company_view_router,
