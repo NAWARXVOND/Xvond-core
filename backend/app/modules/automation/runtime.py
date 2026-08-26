@@ -73,34 +73,44 @@ class AutomationRuntime:
             db.commit()
             db.refresh(run)
             return run
-        except Exception as exc:
-            error_message = str(exc)[:2000]
+        except Exception:
+            original_error = __import__("sys").exc_info()[1]
+            error_message = str(original_error)[:2000]
             failed_output = {"state": state, "steps": step_results}
             db.rollback()
 
-            # The original usage event belonged to the rolled-back transaction.
-            # Record it again in the durable failure transaction so failed runs
-            # still consume the configured monthly automation allowance.
-            service_limits.record(
-                db,
-                company_id,
-                "automation",
-                "runs",
-                quantity=1,
-                metadata={"workflow_id": workflow.id, "status": "failed"},
-            )
+            usage_recorded = True
+            try:
+                service_limits.record(
+                    db,
+                    company_id,
+                    "automation",
+                    "runs",
+                    quantity=1,
+                    metadata={"workflow_id": workflow.id, "status": "failed"},
+                )
+            except Exception:
+                # A concurrent run may have consumed the final quota slot after
+                # the original transaction rolled back. Preserve the original
+                # workflow failure instead of masking it with an accounting race.
+                usage_recorded = False
+                db.rollback()
+
             failed_run = AutomationRun(
                 company_id=company_id,
                 workflow_id=workflow.id,
                 status="failed",
                 input_data=original_input,
-                output_data=failed_output,
+                output_data={
+                    **failed_output,
+                    "usage_recorded": usage_recorded,
+                },
                 error_message=error_message,
                 finished_at=datetime.utcnow(),
             )
             db.add(failed_run)
             db.commit()
-            raise
+            raise original_error
 
     def execute_step(
         self,
