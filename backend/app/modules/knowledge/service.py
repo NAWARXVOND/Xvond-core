@@ -1,6 +1,9 @@
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
+from backend.app.core.config.settings import settings
+from backend.app.modules.knowledge.embeddings import knowledge_embedding_client
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeChunk, KnowledgeDocument
 
 
@@ -93,9 +96,7 @@ class KnowledgeService:
 
     def _ordered_phrases(self, text, size=2):
         base = self._base_tokens(text)
-        tokens = [
-            token for token in self.normalize(text).split() if token in base
-        ]
+        tokens = [token for token in self.normalize(text).split() if token in base]
         if len(tokens) < size:
             return set()
         return {
@@ -112,22 +113,14 @@ class KnowledgeService:
             normalized_words = {self.normalize(x) for x in words}
             return bool(t & normalized_words) or any(word in q for word in normalized_words)
 
-        if has({"سعر", "اسعار", "بكم", "تكلفة", "price", "prices", "cost"}):
-            intents.add("price")
-        if has({"خدمات", "خدمة", "service", "services", "menu", "منيو"}):
-            intents.add("services")
-        if has({"دوام", "ساعات", "مفتوح", "اغلاق", "hours", "open", "close"}):
-            intents.add("hours")
-        if has({"وين", "عنوان", "موقع", "فرع", "location", "address", "branch"}):
-            intents.add("location")
-        if has({"حجز", "موعد", "احجز", "booking", "appointment", "reserve"}):
-            intents.add("booking")
-        if has({"طلب", "اطلب", "توصيل", "order", "delivery"}):
-            intents.add("order")
-        if has({"دفع", "بطاقة", "كاش", "payment", "pay", "cash", "card"}):
-            intents.add("delivery_payment")
-        if has({"سياسة", "الغاء", "استرجاع", "تبديل", "policy", "cancel", "refund", "return"}):
-            intents.add("policy")
+        if has({"سعر", "اسعار", "بكم", "تكلفة", "price", "prices", "cost"}): intents.add("price")
+        if has({"خدمات", "خدمة", "service", "services", "menu", "منيو"}): intents.add("services")
+        if has({"دوام", "ساعات", "مفتوح", "اغلاق", "hours", "open", "close"}): intents.add("hours")
+        if has({"وين", "عنوان", "موقع", "فرع", "location", "address", "branch"}): intents.add("location")
+        if has({"حجز", "موعد", "احجز", "booking", "appointment", "reserve"}): intents.add("booking")
+        if has({"طلب", "اطلب", "توصيل", "order", "delivery"}): intents.add("order")
+        if has({"دفع", "بطاقة", "كاش", "payment", "pay", "cash", "card"}): intents.add("delivery_payment")
+        if has({"سياسة", "الغاء", "استرجاع", "تبديل", "policy", "cancel", "refund", "return"}): intents.add("policy")
         return intents
 
     def split_content(self, content, chunk_size=None, overlap=None):
@@ -150,22 +143,52 @@ class KnowledgeService:
             start = max(start + 1, end - overlap)
         return chunks
 
+    def _embedding_text(self, document, content):
+        return f"Title: {document.title}\nCategory: {document.source_type}\n{content}".strip()
+
+    def _embedding_is_current(self, chunk):
+        return bool(
+            isinstance(chunk.embedding, list)
+            and chunk.embedding
+            and chunk.embedding_provider == knowledge_embedding_client.provider
+            and chunk.embedding_model == knowledge_embedding_client.model
+        )
+
+    def _embed_chunks(self, chunks, documents_by_id):
+        if not chunks or not knowledge_embedding_client.available:
+            return 0
+        texts = [
+            self._embedding_text(documents_by_id[chunk.document_id], chunk.content)
+            for chunk in chunks
+        ]
+        vectors = knowledge_embedding_client.embed_many(texts)
+        if len(vectors) != len(chunks):
+            return 0
+        updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        for chunk, vector in zip(chunks, vectors):
+            chunk.embedding = vector
+            chunk.embedding_provider = knowledge_embedding_client.provider
+            chunk.embedding_model = knowledge_embedding_client.model
+            chunk.embedding_updated_at = updated_at
+        return len(chunks)
+
     def rebuild_document_index(self, db, document):
         db.query(KnowledgeChunk).filter(
             KnowledgeChunk.document_id == document.id
         ).delete(synchronize_session=False)
-        chunks = self.split_content(document.content or "")
-        for index, content in enumerate(chunks):
-            db.add(
-                KnowledgeChunk(
-                    company_id=document.company_id,
-                    document_id=document.id,
-                    chunk_index=index,
-                    content=content,
-                    normalized_text=self.normalize(content),
-                )
+        chunks = []
+        for index, content in enumerate(self.split_content(document.content or "")):
+            chunk = KnowledgeChunk(
+                company_id=document.company_id,
+                document_id=document.id,
+                chunk_index=index,
+                content=content,
+                normalized_text=self.normalize(content),
             )
+            db.add(chunk)
+            chunks.append(chunk)
         db.flush()
+        self._embed_chunks(chunks, {document.id: document})
         return len(chunks)
 
     def backfill_company_index(self, db, company_id):
@@ -184,6 +207,20 @@ class KnowledgeService:
             ):
                 self.rebuild_document_index(db, doc)
                 indexed += 1
+
+        if knowledge_embedding_client.available:
+            documents_by_id = {doc.id: doc for doc in docs}
+            chunks = (
+                db.query(KnowledgeChunk)
+                .filter(KnowledgeChunk.company_id == company_id)
+                .all()
+            )
+            stale = [
+                chunk
+                for chunk in chunks
+                if chunk.document_id in documents_by_id and not self._embedding_is_current(chunk)
+            ]
+            self._embed_chunks(stale, documents_by_id)
         return indexed
 
     def _score_match(self, query, chunk, document):
@@ -199,25 +236,19 @@ class KnowledgeService:
         common = qtokens & ctokens
         title_common = qtokens & ttokens
         intents = self.detect_intents(query)
-
         exact_query = bool(qnorm and len(qnorm) >= 4 and qnorm in chunk_norm)
         query_phrases = self._ordered_phrases(query)
         chunk_phrases = self._ordered_phrases(chunk_norm)
         phrase_matches = query_phrases & chunk_phrases
-
         category_boost = sum(
             8
             for intent in intents
             if document.source_type in self.INTENT_CATEGORY_HINTS.get(intent, set())
         )
-
         if not common and not title_common and not phrase_matches and category_boost == 0:
             return None
-
         coverage = len(common) / max(1, len(qtokens))
-        phrase_coverage = (
-            len(phrase_matches) / max(1, len(query_phrases)) if query_phrases else 0
-        )
+        phrase_coverage = len(phrase_matches) / max(1, len(query_phrases)) if query_phrases else 0
         return (
             len(common) * 3
             + len(title_common) * 5
@@ -247,11 +278,29 @@ class KnowledgeService:
             .all()
         )
 
+        query_embedding = (
+            knowledge_embedding_client.embed_one(query)
+            if knowledge_embedding_client.available
+            else None
+        )
         matches = []
         for chunk, doc in rows:
-            score = self._score_match(query, chunk, doc)
-            if score is None:
+            lexical_score = self._score_match(query, chunk, doc)
+            semantic_similarity = None
+            if query_embedding is not None and self._embedding_is_current(chunk):
+                semantic_similarity = knowledge_embedding_client.cosine_similarity(
+                    query_embedding,
+                    chunk.embedding,
+                )
+            semantic_match = bool(
+                semantic_similarity is not None
+                and semantic_similarity >= settings.KNOWLEDGE_SEMANTIC_MIN_SIMILARITY
+            )
+            if lexical_score is None and not semantic_match:
                 continue
+            score = float(lexical_score or 0)
+            if semantic_match:
+                score += max(0.0, semantic_similarity) * settings.KNOWLEDGE_SEMANTIC_WEIGHT
             matches.append(
                 KnowledgeMatch(
                     doc.id,
