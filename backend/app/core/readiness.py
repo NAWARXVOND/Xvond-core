@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 from backend.app.core.ai.provider_policy import runtime_selections
+from backend.app.core.ai.routing_quality import set_quality_tier_cap
 from backend.app.core.config.settings import settings
 from backend.app.core.config_secrets import (
     configured_secret_fields,
@@ -18,6 +19,7 @@ from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.integrations.catalog import validate_integration_config
 from backend.app.modules.integrations.models import CompanyIntegration
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeDocument
+from backend.app.modules.solutions.catalog import AI_AGENT_PACKAGE_QUALITY_CAPS
 from backend.app.modules.tools.executor import tool_executor
 from backend.app.modules.tools.models import AgentToolAssignment
 
@@ -67,8 +69,32 @@ def _service_subscription(db, company_id: int):
     return subscription, plan, active
 
 
-def _provider_runtime(db, company_id: int, agent: AIAgent):
+def _plan_quality_cap(plan: ServicePlan | None) -> int | None:
+    if plan is None:
+        return None
+    explicit = (plan.limits or {}).get("max_quality_tier")
+    value = (
+        explicit
+        if explicit not in (None, "", 0, "0")
+        else AI_AGENT_PACKAGE_QUALITY_CAPS.get(str(plan.tier or "").strip().lower())
+    )
+    if value in (None, "", 0, "0"):
+        return None
     try:
+        tier = int(value)
+    except (TypeError, ValueError):
+        return None
+    return tier if 1 <= tier <= 4 else None
+
+
+def _provider_runtime(
+    db,
+    company_id: int,
+    agent: AIAgent,
+    subscription_plan: ServicePlan | None = None,
+):
+    try:
+        set_quality_tier_cap(_plan_quality_cap(subscription_plan))
         selections = runtime_selections(
             db,
             company_id,
@@ -77,6 +103,8 @@ def _provider_runtime(db, company_id: int, agent: AIAgent):
         )
     except Exception as exc:
         return [], str(exc)
+    finally:
+        set_quality_tier_cap(None)
     real = [selection for selection in selections if selection.provider != "mock"]
     return real, None
 
@@ -223,7 +251,10 @@ def company_readiness(db, company_id: int):
         ready_channels = [item for item in channel_results if item["configured"]]
 
         provider_selections, provider_error = _provider_runtime(
-            db, company_id, agent
+            db,
+            company_id,
+            agent,
+            subscription_plan if subscription_ready else None,
         )
         provider_ready = bool(provider_selections)
         prompt_ready = bool((agent.system_prompt or "").strip())
@@ -279,6 +310,9 @@ def company_readiness(db, company_id: int):
                     }
                     for selection in provider_selections
                 ],
+                "package_max_quality_tier": (
+                    _plan_quality_cap(subscription_plan) if subscription_ready else None
+                ),
                 "prompt_ready": prompt_ready,
                 "profile_exists": employee_profile_ready,
                 "knowledge_count": knowledge_count,
@@ -335,6 +369,8 @@ def company_readiness(db, company_id: int):
             "id": subscription.id,
             "plan_id": subscription.plan_id,
             "plan_name": subscription_plan.name if subscription_plan else None,
+            "plan_tier": subscription_plan.tier if subscription_plan else None,
+            "max_quality_tier": _plan_quality_cap(subscription_plan),
             "status": effective_status,
             "current_period_start": subscription.current_period_start,
             "current_period_end": subscription.current_period_end,
