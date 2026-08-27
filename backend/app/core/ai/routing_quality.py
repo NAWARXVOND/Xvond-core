@@ -15,6 +15,18 @@ _ACTION_TERMS = (
     "استرجاع", "دفع", "عرض سعر",
 )
 
+_ACTION_DETAIL_TERMS = (
+    "name", "phone", "mobile", "number", "date", "time", "service", "branch",
+    "address", "quantity", "اسم", "رقم", "هاتف", "جوال", "تاريخ", "موعد",
+    "ساعة", "وقت", "خدمة", "فرع", "عنوان", "كمية",
+)
+
+_ACTION_COMPLETION_TERMS = (
+    "booking confirmed", "reservation confirmed", "order confirmed", "successfully booked",
+    "successfully placed", "completed successfully", "تم تأكيد الحجز", "تم الحجز",
+    "تم تأكيد الطلب", "تم الطلب", "تم تنفيذ", "بنجاح",
+)
+
 _ADVANCED_TERMS = (
     "compare", "analyse", "analyze", "recommend based on", "multiple conditions",
     "exception", "complaint", "escalation", "policy conflict", "complex",
@@ -28,6 +40,7 @@ _PREMIUM_TERMS = (
 )
 
 _CUSTOMER_MESSAGE_MARKER = "CURRENT CUSTOMER MESSAGE (answer this intent directly):"
+_HISTORY_MARKER = "CONVERSATION HISTORY (use for continuity; not authoritative for business facts):"
 
 
 def model_quality_tier(provider: str, model: str) -> int:
@@ -45,16 +58,36 @@ def model_quality_tier(provider: str, model: str) -> int:
     return 2
 
 
-def _customer_text(message: str | None) -> str:
-    text = str(message or "")
-    if _CUSTOMER_MESSAGE_MARKER in text:
-        text = text.rsplit(_CUSTOMER_MESSAGE_MARKER, 1)[-1]
-    return " ".join(text.lower().split())
+def _normalized(text: str) -> str:
+    return " ".join(str(text or "").lower().split())
+
+
+def _split_runtime_message(message: str | None) -> tuple[str, str]:
+    raw = str(message or "")
+    if _CUSTOMER_MESSAGE_MARKER not in raw:
+        return "", _normalized(raw)
+
+    before, current = raw.rsplit(_CUSTOMER_MESSAGE_MARKER, 1)
+    history = ""
+    if _HISTORY_MARKER in before:
+        history = before.rsplit(_HISTORY_MARKER, 1)[-1]
+    return _normalized(history[-1600:]), _normalized(current)
+
+
+def _active_action_continuation(history: str, current: str) -> bool:
+    if not history or not current or len(current) > 120:
+        return False
+    recent_history = history[-500:]
+    if any(term in recent_history for term in _ACTION_COMPLETION_TERMS):
+        return False
+    has_action = any(term in recent_history for term in _ACTION_TERMS)
+    has_detail_prompt = any(term in recent_history for term in _ACTION_DETAIL_TERMS)
+    return has_action and has_detail_prompt
 
 
 def required_quality_tier(message: str | None) -> int:
     """Estimate the minimum useful model tier without paying for a classifier call."""
-    text = _customer_text(message)
+    history, text = _split_runtime_message(message)
     if not text:
         return 1
 
@@ -73,7 +106,7 @@ def required_quality_tier(message: str | None) -> int:
         return 4
     if advanced_hits or len(text) >= 700 or (action_hits and separators >= 4):
         return 3
-    if action_hits or len(text) >= 280:
+    if action_hits or len(text) >= 280 or _active_action_continuation(history, text):
         return 2
     return 1
 
