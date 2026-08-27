@@ -21,6 +21,12 @@ _ACTION_DETAIL_TERMS = (
     "ساعة", "وقت", "خدمة", "فرع", "عنوان", "كمية",
 )
 
+_ACTION_COMPLETION_TERMS = (
+    "booking confirmed", "reservation confirmed", "order confirmed", "successfully booked",
+    "successfully placed", "completed successfully", "تم تأكيد الحجز", "تم الحجز",
+    "تم تأكيد الطلب", "تم الطلب", "تم تنفيذ", "بنجاح",
+)
+
 _ADVANCED_TERMS = (
     "compare", "analyse", "analyze", "recommend based on", "multiple conditions",
     "exception", "complaint", "escalation", "policy conflict", "complex",
@@ -71,8 +77,11 @@ def _split_runtime_message(message: str | None) -> tuple[str, str]:
 def _active_action_continuation(history: str, current: str) -> bool:
     if not history or not current or len(current) > 120:
         return False
-    has_action = any(term in history for term in _ACTION_TERMS)
-    has_detail_prompt = any(term in history for term in _ACTION_DETAIL_TERMS)
+    recent_history = history[-500:]
+    if any(term in recent_history for term in _ACTION_COMPLETION_TERMS):
+        return False
+    has_action = any(term in recent_history for term in _ACTION_TERMS)
+    has_detail_prompt = any(term in recent_history for term in _ACTION_DETAIL_TERMS)
     return has_action and has_detail_prompt
 
 
