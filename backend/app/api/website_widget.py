@@ -313,11 +313,11 @@ const CHANNEL=__CHANNEL__;
 const WIDGET_KEY=__WIDGET_KEY__;
 const CID_KEY='xvond_conversation_'+CHANNEL;
 const TOKEN_KEY='xvond_visitor_token_'+CHANNEL;
-const LAST_KEY='xvond_last_'+CHANNEL;
-let cid=sessionStorage.getItem(CID_KEY)||null;
-let visitorToken=sessionStorage.getItem(TOKEN_KEY)||null;
-let lastId=Number(sessionStorage.getItem(LAST_KEY)||0);
-if(cid&&!visitorToken){sessionStorage.removeItem(CID_KEY);sessionStorage.removeItem(LAST_KEY);cid=null;lastId=0;}
+let cid=localStorage.getItem(CID_KEY)||null;
+let visitorToken=localStorage.getItem(TOKEN_KEY)||null;
+let lastId=0;
+if(cid&&!visitorToken){localStorage.removeItem(CID_KEY);cid=null;}
+if(visitorToken&&!cid){localStorage.removeItem(TOKEN_KEY);visitorToken=null;}
 const side=__POSITION__;
 const accent=__ACCENT__;
 function requestHeaders(jsonBody=true){const h={'X-Xvond-Widget-Key':WIDGET_KEY};if(jsonBody)h['Content-Type']='application/json';if(visitorToken)h['X-Xvond-Visitor-Token']=visitorToken;return h;}
@@ -328,12 +328,13 @@ const box=document.createElement('div');box.id='xvond-box';box.innerHTML=`<div i
 document.body.append(btn,box);box.querySelector('#xvond-head').textContent=__NAME__;
 const msgs=box.querySelector('#xvond-msgs');
 function add(t,c){if(!t)return;const d=document.createElement('div');d.className='xvond-m '+c;d.textContent=t;msgs.appendChild(d);msgs.scrollTop=msgs.scrollHeight;}
-function remember(id){if(id&&id>lastId){lastId=id;sessionStorage.setItem(LAST_KEY,String(lastId));}}
-function rememberSession(data){if(data.conversation_id){cid=String(data.conversation_id);sessionStorage.setItem(CID_KEY,cid);}if(data.visitor_token){visitorToken=data.visitor_token;sessionStorage.setItem(TOKEN_KEY,visitorToken);}}
-add(__WELCOME__,'xvond-a');
+function remember(id){if(id&&id>lastId)lastId=id;}
+function rememberSession(data){if(data.conversation_id){cid=String(data.conversation_id);localStorage.setItem(CID_KEY,cid);}if(data.visitor_token){visitorToken=data.visitor_token;localStorage.setItem(TOKEN_KEY,visitorToken);}}
+if(!cid||!visitorToken)add(__WELCOME__,'xvond-a');
 btn.onclick=()=>box.style.display=box.style.display==='block'?'none':'block';
 box.querySelector('#xvond-form').onsubmit=async e=>{e.preventDefault();const input=box.querySelector('#xvond-in');const m=input.value.trim();if(!m)return;input.value='';add(m,'xvond-u');try{const r=await fetch(API+'/channels/website/'+CHANNEL+'/chat',{method:'POST',headers:requestHeaders(true),body:JSON.stringify({message:m,conversation_id:cid?Number(cid):null})});const j=await r.json();if(!r.ok)throw new Error(j.detail||'Request failed');rememberSession(j);if(j.message)remember(j.message.id);if(j.response){add(j.response.content,'xvond-a');remember(j.response.id);}}catch(_e){add('تعذر إرسال الرسالة الآن. حاول مرة أخرى.','xvond-a');}};
-async function poll(){if(!cid||!visitorToken)return;try{const r=await fetch(API+'/channels/website/'+CHANNEL+'/conversation/'+cid+'/messages?after_id='+lastId,{headers:requestHeaders(false)});if(!r.ok)return;const j=await r.json();for(const m of (j.messages||[])){remember(m.id);if(m.role==='human')add(m.content,'xvond-a');}}catch(_e){}}
+async function poll(){if(!cid||!visitorToken)return;const restoring=lastId===0;try{const r=await fetch(API+'/channels/website/'+CHANNEL+'/conversation/'+cid+'/messages?after_id='+lastId,{headers:requestHeaders(false)});if(r.status===401||r.status===404){localStorage.removeItem(CID_KEY);localStorage.removeItem(TOKEN_KEY);cid=null;visitorToken=null;lastId=0;if(!msgs.children.length)add(__WELCOME__,'xvond-a');return;}if(!r.ok)return;const j=await r.json();for(const m of (j.messages||[])){remember(m.id);if(restoring){if(m.role==='user')add(m.content,'xvond-u');else if(m.role==='assistant'||m.role==='human')add(m.content,'xvond-a');}else if(m.role==='human')add(m.content,'xvond-a');}}catch(_e){}}
+poll();
 setInterval(poll,2500);
 })();'''
         replacements = {

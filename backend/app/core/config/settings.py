@@ -14,7 +14,7 @@ class Settings:
     REDIS_URL = os.getenv("REDIS_URL", "")
     PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
     WHATSAPP_HUMAN_HANDOFF_MINUTES = max(5, int(os.getenv("WHATSAPP_HUMAN_HANDOFF_MINUTES", "60")))
-    WEBSITE_VISITOR_TOKEN_TTL_SECONDS = max(300, int(os.getenv("WEBSITE_VISITOR_TOKEN_TTL_SECONDS", "86400")))
+    WEBSITE_VISITOR_TOKEN_TTL_SECONDS = max(300, int(os.getenv("WEBSITE_VISITOR_TOKEN_TTL_SECONDS", "2592000")))
     TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "false").strip().lower() in {"1", "true", "yes", "on"}
     AI_PII_REDACTION_ENABLED = os.getenv(
         "AI_PII_REDACTION_ENABLED",
