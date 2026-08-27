@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from backend.app.core.agent_runtime import agent_runtime
 from backend.app.core.config_secrets import reveal_config
@@ -7,6 +7,11 @@ from backend.app.modules.automation.models import AutomationRun, AutomationWorkf
 from backend.app.modules.billing.service_limits import service_limits
 from backend.app.modules.integrations.models import CompanyIntegration
 from backend.app.modules.tools.executor import tool_executor
+
+
+def _utcnow_naive() -> datetime:
+    """Return UTC without tzinfo for compatibility with existing naive DB timestamps."""
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class AutomationRuntime:
@@ -69,7 +74,7 @@ class AutomationRuntime:
 
             run.status = "success"
             run.output_data = {"state": state, "steps": step_results}
-            run.finished_at = datetime.utcnow()
+            run.finished_at = _utcnow_naive()
             db.commit()
             db.refresh(run)
             return run
@@ -105,7 +110,7 @@ class AutomationRuntime:
                     "usage_recorded": usage_recorded,
                 },
                 error_message=error_message,
-                finished_at=datetime.utcnow(),
+                finished_at=_utcnow_naive(),
             )
             db.add(failed_run)
             db.commit()
