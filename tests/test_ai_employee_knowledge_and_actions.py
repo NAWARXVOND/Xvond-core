@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from backend.app.core.agent_runtime import GROUNDING_POLICY
 from backend.app.modules.knowledge.service import KnowledgeService
 from backend.app.modules.tools.builtin import _fact_tokens, _valid_iso_date, _valid_iso_time
@@ -27,6 +29,40 @@ def test_knowledge_intent_routing_for_orders_and_delivery():
     intents = service.detect_intents("بدي اطلب مع توصيل وبطاقة")
     assert "order" in intents
     assert "delivery_payment" in intents
+
+
+def test_knowledge_stop_words_do_not_drive_retrieval():
+    service = KnowledgeService()
+    assert service.tokenize("شو في عندكم") == set()
+    assert "اسعار" in service.tokenize("شو اسعاركم")
+
+
+def test_generic_business_document_does_not_match_unrelated_chunk():
+    service = KnowledgeService()
+    chunk = SimpleNamespace(
+        normalized_text=service.normalize("نقدم القهوة العربية والتمر"),
+        content="نقدم القهوة العربية والتمر",
+    )
+    document = SimpleNamespace(title="Business Information", source_type="business_profile")
+    assert service._score_match("كم سعر تنظيف البشرة؟", chunk, document) is None
+
+
+def test_exact_phrase_scores_above_loose_token_overlap():
+    service = KnowledgeService()
+    exact_chunk = SimpleNamespace(
+        normalized_text=service.normalize("سعر تنظيف البشرة 20 ريال"),
+        content="سعر تنظيف البشرة 20 ريال",
+    )
+    loose_chunk = SimpleNamespace(
+        normalized_text=service.normalize("تنظيف عام وخدمات للعناية بالبشرة"),
+        content="تنظيف عام وخدمات للعناية بالبشرة",
+    )
+    document = SimpleNamespace(title="الخدمات والأسعار", source_type="services_prices")
+    exact_score = service._score_match("سعر تنظيف البشرة", exact_chunk, document)
+    loose_score = service._score_match("سعر تنظيف البشرة", loose_chunk, document)
+    assert exact_score is not None
+    assert loose_score is not None
+    assert exact_score > loose_score
 
 
 def test_business_fact_tokens_handle_arabic_definite_article():
