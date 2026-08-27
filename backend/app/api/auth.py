@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 import hashlib
 import hmac
 import secrets
@@ -42,6 +42,11 @@ class ResetPasswordRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+
+
+def _utcnow_naive() -> datetime:
+    """Return UTC without tzinfo for compatibility with existing naive DB timestamps."""
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -148,7 +153,7 @@ def customer_forgot_password(data: ForgotPasswordRequest):
             .order_by(PasswordResetCode.id.desc())
             .first()
         )
-        now = datetime.utcnow()
+        now = _utcnow_naive()
         if latest is not None and (now - latest.created_at).total_seconds() < 60:
             return generic_response
 
@@ -177,7 +182,7 @@ def customer_forgot_password(data: ForgotPasswordRequest):
         try:
             send_password_reset_code(email, code)
         except Exception:
-            reset.used_at = datetime.utcnow()
+            reset.used_at = _utcnow_naive()
             db.commit()
             raise HTTPException(status_code=503, detail="Email service is unavailable")
         return generic_response
@@ -208,7 +213,7 @@ def customer_reset_password(data: ResetPasswordRequest, response: Response):
             .order_by(PasswordResetCode.id.desc())
             .first()
         )
-        now = datetime.utcnow()
+        now = _utcnow_naive()
         if reset is None or reset.expires_at < now or reset.attempts >= 5:
             raise HTTPException(status_code=400, detail="Invalid or expired code")
 
