@@ -4,8 +4,6 @@ def build_text_channel_behavior_prompt(
 ) -> str:
     config = config or {}
     channel_type = str(channel_type or "").strip().lower()
-    language = str(config.get("language") or "auto").strip()
-    dialect = str(config.get("dialect") or "auto").strip()
     tone = str(config.get("tone") or "professional_friendly").strip()
     response_style = str(config.get("response_style") or "conversational").strip()
     response_length = str(config.get("response_length") or "concise").strip()
@@ -14,8 +12,7 @@ def build_text_channel_behavior_prompt(
 
     parts = [
         f"{channel_type.upper()} CHANNEL BEHAVIOR:",
-        f"Language: {language}.",
-        f"Dialect: {dialect}.",
+        "Language and dialect are controlled by the AI Employee profile and must not be overridden by channel settings.",
         f"Tone: {tone}.",
         f"Response style: {response_style}.",
         f"Response length: {response_length}.",
