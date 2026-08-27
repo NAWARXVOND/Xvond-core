@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from backend.app.api.admin_customer_operations import router as customer_operations_router
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.core.security import hash_password
@@ -98,12 +97,3 @@ def list_companies(current_admin: User = Depends(require_xvond_admin)):
         return {"companies": [{"id": company.id, "name": company.name, "active": company.active, "created_at": company.created_at} for company in companies]}
     finally:
         db.close()
-
-
-# The child API is authored with its canonical /admin prefix so it can also be
-# mounted independently in tests. Strip that one prefix while composing it
-# into this already-/admin-prefixed router.
-for _route in customer_operations_router.routes:
-    if _route.path.startswith("/admin/"):
-        _route.path = _route.path[len("/admin"):]
-router.include_router(customer_operations_router)
