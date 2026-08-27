@@ -32,7 +32,10 @@ class KnowledgeService:
 
     ARABIC_EQUIVALENTS = {
         "اسعار": {"السعر", "سعر", "الاسعار", "أسعار", "الأسعار", "بكم", "تكلفة", "تكلفه", "ثمن"},
-        "خدمات": {"خدمة", "الخدمات", "خدمات", "بتعملو", "تقدمون", "عندكم"},
+        "خدمات": {
+            "خدمة", "الخدمات", "خدمات", "بتعملو", "بتعملوا", "تقدمون", "تقدموا", "بتقدموا", "نقدم",
+            "service", "services", "offer", "offers", "offering", "provide", "provides",
+        },
         "حجز": {"موعد", "مواعيد", "احجز", "الحجز", "حجز", "احجزلي", "موعدي"},
         "دوام": {"ساعات", "الدوام", "دوام", "مفتوح", "تفتحون", "تسكرون", "اغلاق", "إغلاق"},
         "موقع": {"العنوان", "عنوان", "وين", "الموقع", "موقع", "فرع", "فروع"},
@@ -43,7 +46,7 @@ class KnowledgeService:
 
     INTENT_CATEGORY_HINTS = {
         "price": {"services_prices", "menu", "products"},
-        "services": {"services_prices", "menu", "products", "general"},
+        "services": {"services_prices", "menu", "products", "general", "business_profile"},
         "hours": {"hours", "branches", "general", "business_profile"},
         "location": {"branches", "general", "business_profile"},
         "booking": {"booking_rules", "services_prices", "hours", "general"},
@@ -114,7 +117,10 @@ class KnowledgeService:
             return bool(t & normalized_words) or any(word in q for word in normalized_words)
 
         if has({"سعر", "اسعار", "بكم", "تكلفة", "price", "prices", "cost"}): intents.add("price")
-        if has({"خدمات", "خدمة", "service", "services", "menu", "منيو"}): intents.add("services")
+        if has({
+            "خدمات", "خدمة", "service", "services", "menu", "منيو", "offer", "offers", "offering",
+            "provide", "provides", "تقدمون", "تقدموا", "بتقدموا", "بتعملوا", "بتعملو", "نقدم",
+        }): intents.add("services")
         if has({"دوام", "ساعات", "مفتوح", "اغلاق", "hours", "open", "close"}): intents.add("hours")
         if has({"وين", "عنوان", "موقع", "فرع", "location", "address", "branch"}): intents.add("location")
         if has({"حجز", "موعد", "احجز", "booking", "appointment", "reserve"}): intents.add("booking")
