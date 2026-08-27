@@ -5,6 +5,7 @@ from typing import Iterable
 import httpx
 
 from backend.app.core.config.settings import settings
+from backend.app.core.privacy import protect_text
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,12 @@ class KnowledgeEmbeddingClient:
             and settings.OPENAI_API_KEY
         )
 
+    def _prepare_text(self, text: str) -> str:
+        value = str(text or "").strip()
+        if settings.AI_PII_REDACTION_ENABLED:
+            value = protect_text(value).text
+        return value
+
     def _embed_batch(self, values: list[str]) -> list[list[float]]:
         payload = {"model": self.model, "input": values, "encoding_format": "float"}
         with httpx.Client(timeout=60.0) as client:
@@ -51,7 +58,7 @@ class KnowledgeEmbeddingClient:
         return [[float(number) for number in vector] for vector in vectors]
 
     def embed_many(self, texts: Iterable[str]) -> list[list[float]]:
-        values = [str(text or "").strip() for text in texts]
+        values = [self._prepare_text(text) for text in texts]
         if not values or not self.available:
             return []
         vectors: list[list[float]] = []
