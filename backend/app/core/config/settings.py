@@ -33,6 +33,11 @@ class Settings:
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
     XAI_API_KEY = os.getenv("XAI_API_KEY", "")
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+    KNOWLEDGE_SEMANTIC_ENABLED = os.getenv("KNOWLEDGE_SEMANTIC_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+    KNOWLEDGE_EMBEDDING_PROVIDER = os.getenv("KNOWLEDGE_EMBEDDING_PROVIDER", "openai").strip().lower()
+    KNOWLEDGE_EMBEDDING_MODEL = os.getenv("KNOWLEDGE_EMBEDDING_MODEL", "text-embedding-3-small").strip()
+    KNOWLEDGE_SEMANTIC_MIN_SIMILARITY = min(1.0, max(-1.0, float(os.getenv("KNOWLEDGE_SEMANTIC_MIN_SIMILARITY", "0.35"))))
+    KNOWLEDGE_SEMANTIC_WEIGHT = max(0.0, float(os.getenv("KNOWLEDGE_SEMANTIC_WEIGHT", "20")))
     CONFIG_ENCRYPTION_KEY = os.getenv("CONFIG_ENCRYPTION_KEY", "")
     SMTP_HOST = os.getenv("SMTP_HOST", "")
     SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
@@ -50,6 +55,8 @@ class Settings:
             errors.append("DATABASE_URL is required")
         if not self.JWT_SECRET:
             errors.append("JWT_SECRET is required")
+        if self.KNOWLEDGE_EMBEDDING_PROVIDER not in {"openai"}:
+            errors.append("KNOWLEDGE_EMBEDDING_PROVIDER must be a supported provider")
         if self.is_production:
             if not self.REDIS_URL:
                 errors.append("REDIS_URL is required in production")
