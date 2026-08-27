@@ -1,5 +1,6 @@
 import logging
 import math
+from time import monotonic
 from typing import Iterable
 
 import httpx
@@ -19,10 +20,12 @@ class KnowledgeEmbeddingClient:
     """
 
     BATCH_SIZE = 64
+    FAILURE_COOLDOWN_SECONDS = 60.0
 
     def __init__(self) -> None:
         self.provider = settings.KNOWLEDGE_EMBEDDING_PROVIDER
         self.model = settings.KNOWLEDGE_EMBEDDING_MODEL
+        self._retry_after = 0.0
 
     @property
     def available(self) -> bool:
@@ -31,6 +34,10 @@ class KnowledgeEmbeddingClient:
             and self.provider == "openai"
             and settings.OPENAI_API_KEY
         )
+
+    @property
+    def ready(self) -> bool:
+        return self.available and monotonic() >= self._retry_after
 
     def _prepare_text(self, text: str) -> str:
         value = str(text or "").strip()
@@ -59,14 +66,16 @@ class KnowledgeEmbeddingClient:
 
     def embed_many(self, texts: Iterable[str]) -> list[list[float]]:
         values = [self._prepare_text(text) for text in texts]
-        if not values or not self.available:
+        if not values or not self.ready:
             return []
         vectors: list[list[float]] = []
         try:
             for start in range(0, len(values), self.BATCH_SIZE):
                 vectors.extend(self._embed_batch(values[start : start + self.BATCH_SIZE]))
+            self._retry_after = 0.0
             return vectors
         except Exception as exc:
+            self._retry_after = monotonic() + self.FAILURE_COOLDOWN_SECONDS
             logger.warning("Knowledge embedding request failed; using lexical fallback: %s", exc)
             return []
 
