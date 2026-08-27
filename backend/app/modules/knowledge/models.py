@@ -1,30 +1,29 @@
-
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
-    Index,
 )
-from sqlalchemy.orm import (
-    Mapped,
-    mapped_column,
-)
+from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.core.database.base import Base
+
+
+def utc_now_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class KnowledgeDocument(Base):
     __tablename__ = "knowledge_documents"
 
-    id: Mapped[int] = mapped_column(
-        primary_key=True,
-    )
+    id: Mapped[int] = mapped_column(primary_key=True)
 
     company_id: Mapped[int] = mapped_column(
         ForeignKey("companies.id"),
@@ -32,10 +31,7 @@ class KnowledgeDocument(Base):
         index=True,
     )
 
-    title: Mapped[str] = mapped_column(
-        String(250),
-        nullable=False,
-    )
+    title: Mapped[str] = mapped_column(String(250), nullable=False)
 
     source_type: Mapped[str] = mapped_column(
         String(50),
@@ -43,10 +39,7 @@ class KnowledgeDocument(Base):
         nullable=False,
     )
 
-    content: Mapped[str] = mapped_column(
-        Text,
-        nullable=False,
-    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
 
     enabled: Mapped[bool] = mapped_column(
         Boolean,
@@ -56,7 +49,7 @@ class KnowledgeDocument(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utc_now_naive,
         nullable=False,
     )
 
@@ -73,9 +66,7 @@ class AgentKnowledge(Base):
         ),
     )
 
-    id: Mapped[int] = mapped_column(
-        primary_key=True,
-    )
+    id: Mapped[int] = mapped_column(primary_key=True)
 
     agent_id: Mapped[int] = mapped_column(
         ForeignKey("ai_agents.id"),
@@ -107,9 +98,7 @@ class KnowledgeChunk(Base):
         ),
     )
 
-    id: Mapped[int] = mapped_column(
-        primary_key=True,
-    )
+    id: Mapped[int] = mapped_column(primary_key=True)
 
     company_id: Mapped[int] = mapped_column(
         ForeignKey("companies.id"),
@@ -123,23 +112,31 @@ class KnowledgeChunk(Base):
         index=True,
     )
 
-    chunk_index: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+
+    embedding: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+
+    embedding_provider: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
     )
 
-    content: Mapped[str] = mapped_column(
-        Text,
-        nullable=False,
+    embedding_model: Mapped[str | None] = mapped_column(
+        String(120),
+        nullable=True,
     )
 
-    normalized_text: Mapped[str] = mapped_column(
-        Text,
-        nullable=False,
+    embedding_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utc_now_naive,
         nullable=False,
     )
