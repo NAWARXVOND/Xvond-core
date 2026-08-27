@@ -19,7 +19,11 @@ def test_admin_created_ai_employees_default_to_customer_portal_visibility():
 def test_profile_api_ensures_agent_config_on_create_and_legacy_access():
     source = PROFILE_API.read_text(encoding="utf-8-sig")
     assert "def _ensure_agent_config" in source
-    assert source.count("_ensure_agent_config(db, agent)") >= 3
+    assert "def _set_agent_dialect" in source
+    assert "def _agent_dialect" in source
+    assert "row = _ensure_agent_config(db, agent)" in source
+    assert "_set_agent_dialect(db, agent, data.dialect)" in source
+    assert "dialect = _agent_dialect(db, agent, channels)" in source
     assert "controls.update(row.customer_controls or {})" in source
 
 
