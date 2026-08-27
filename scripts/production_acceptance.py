@@ -8,10 +8,12 @@ from sqlalchemy import text
 
 from backend.app.core.ai.engine import ai_engine
 from backend.app.core.ai.provider_policy import runtime_selections
+from backend.app.core.ai.routing_quality import set_quality_tier_cap
 from backend.app.core.config.settings import settings
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.readiness import company_readiness
 from backend.app.modules.ai_agent.models import AIAgent
+from backend.app.modules.billing.limits import limits_service
 from backend.app.modules.channels.whatsapp_queue import whatsapp_job_queue
 from backend.app.modules.providers.models import AIModelRecord, AIProviderRecord
 
@@ -79,6 +81,23 @@ def check_release(company_id: int, agent_id: int | None = None, live_ai: bool = 
                 checks["routing"] = {"ok": False, "error": "AI employee not found"}
             else:
                 try:
+                    if settings.is_production:
+                        _subscription, plan, quality_cap = limits_service.apply_ai_quality_limit(
+                            db, company_id
+                        )
+                        checks["package_quality"] = {
+                            "ok": True,
+                            "plan_id": plan.id,
+                            "plan_tier": plan.tier,
+                            "max_quality_tier": quality_cap,
+                        }
+                    else:
+                        set_quality_tier_cap(None)
+                        checks["package_quality"] = {
+                            "ok": True,
+                            "skipped": True,
+                            "reason": "Package enforcement is production-only",
+                        }
                     route = runtime_selections(db, company_id, agent.provider, agent.model)
                     checks["routing"] = {
                         "ok": bool(route),
@@ -90,6 +109,8 @@ def check_release(company_id: int, agent_id: int | None = None, live_ai: bool = 
                 except Exception as exc:
                     route = []
                     checks["routing"] = {"ok": False, "error": str(exc)[:500]}
+                    if "package_quality" not in checks:
+                        checks["package_quality"] = {"ok": False, "error": str(exc)[:500]}
 
         if live_ai:
             if agent_id is None:
@@ -126,6 +147,7 @@ def check_release(company_id: int, agent_id: int | None = None, live_ai: bool = 
         db.rollback()
         checks["database"] = {"ok": False, "error": str(exc)[:500]}
     finally:
+        set_quality_tier_cap(None)
         db.close()
 
     checks["environment"] = {"ok": settings.is_production, "value": settings.APP_ENV}
