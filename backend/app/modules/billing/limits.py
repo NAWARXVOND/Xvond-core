@@ -5,6 +5,7 @@ from backend.app.core.config.settings import settings
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.billing.service_limits import service_limits
 from backend.app.modules.channels.models import AgentChannel
+from backend.app.modules.solutions.catalog import AI_AGENT_PACKAGE_QUALITY_CAPS
 
 
 class LimitsService:
@@ -39,11 +40,17 @@ class LimitsService:
             return
 
         # Resolve the active plan once per chat and expose its model-quality ceiling
-        # to the request-local Smart Router context. Missing max_quality_tier means
-        # unrestricted quality for backward compatibility with existing plans.
+        # to the request-local Smart Router context. Plans may explicitly override
+        # max_quality_tier; otherwise their commercial tier supplies the safe default.
         _subscription, plan = service_limits.entitlement(db, company_id, "ai_agents")
+        explicit_cap = (plan.limits or {}).get("max_quality_tier")
+        quality_cap = (
+            explicit_cap
+            if explicit_cap not in (None, "", 0, "0")
+            else AI_AGENT_PACKAGE_QUALITY_CAPS.get(str(plan.tier or "").strip().lower())
+        )
         try:
-            set_quality_tier_cap((plan.limits or {}).get("max_quality_tier"))
+            set_quality_tier_cap(quality_cap)
         except ValueError as exc:
             raise RuntimeError(
                 f"Invalid max_quality_tier in AI Agents plan {plan.id}: {exc}"
