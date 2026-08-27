@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from backend.app.api.admin_customer_operations import router as customer_operations_router
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.core.security import hash_password
@@ -97,3 +98,11 @@ def list_companies(current_admin: User = Depends(require_xvond_admin)):
         return {"companies": [{"id": company.id, "name": company.name, "active": company.active, "created_at": company.created_at} for company in companies]}
     finally:
         db.close()
+
+
+# Customer 360, Notification Center and Business Analytics live under the same
+# Xvond admin boundary. The child router intentionally carries the full
+# /admin/customer-operations prefix, so attach its routes directly to the app
+# through a tiny proxy router without adding another /admin prefix.
+customer_operations_proxy = APIRouter()
+customer_operations_proxy.include_router(customer_operations_router)
