@@ -58,6 +58,8 @@ def test_runtime_and_admin_are_off_legacy_billing_authority():
     assert "modules.billing.models" not in dashboard
     assert "admin_billing_router" not in main
     assert "admin_business_router" not in main
+    assert not Path("backend/app/api/admin_billing.py").exists()
+    assert not Path("backend/app/api/admin_business.py").exists()
     assert "ServiceSubscription" in readiness
 
 
@@ -90,7 +92,7 @@ def test_human_whatsapp_reply_calls_real_sender_before_db_sent_record():
 
 def test_admin_and_customer_logout_call_server_logout():
     assert 'api("/auth/logout"' in source("frontend/admin/app.js")
-    assert 'api("/auth/logout"' in source("frontend/customer/app.js")
+    assert 'api("/auth/logout"' in source("frontend/customer/session-security.js")
 
 
 def test_production_acceptance_is_not_vendor_specific():
