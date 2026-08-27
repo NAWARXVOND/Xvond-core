@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
 from backend.app.core.agent_runtime import GROUNDING_POLICY
+from backend.app.core.config.settings import settings
+from backend.app.modules.knowledge.embeddings import KnowledgeEmbeddingClient
 from backend.app.modules.knowledge.service import KnowledgeService
 from backend.app.modules.tools.builtin import _fact_tokens, _valid_iso_date, _valid_iso_time
 
@@ -63,6 +65,35 @@ def test_exact_phrase_scores_above_loose_token_overlap():
     assert exact_score is not None
     assert loose_score is not None
     assert exact_score > loose_score
+
+
+def test_semantic_cosine_similarity_is_real_vector_math():
+    client = KnowledgeEmbeddingClient()
+    assert client.cosine_similarity([1.0, 0.0], [1.0, 0.0]) == 1.0
+    assert client.cosine_similarity([1.0, 0.0], [0.0, 1.0]) == 0.0
+    assert client.cosine_similarity([1.0], [1.0, 0.0]) is None
+
+
+def test_semantic_embedding_text_redacts_pii_when_enabled(monkeypatch):
+    client = KnowledgeEmbeddingClient()
+    monkeypatch.setattr(settings, "AI_PII_REDACTION_ENABLED", True)
+    prepared = client._prepare_text("Call +968 9123 4567 or a@example.com")
+    assert "+968 9123 4567" not in prepared
+    assert "a@example.com" not in prepared
+    assert "XVOND_PHONE" in prepared
+    assert "XVOND_EMAIL" in prepared
+
+
+def test_embedding_current_requires_same_provider_and_model():
+    service = KnowledgeService()
+    chunk = SimpleNamespace(
+        embedding=[0.1, 0.2],
+        embedding_provider="openai",
+        embedding_model=settings.KNOWLEDGE_EMBEDDING_MODEL,
+    )
+    assert service._embedding_is_current(chunk) is True
+    chunk.embedding_model = "old-embedding-model"
+    assert service._embedding_is_current(chunk) is False
 
 
 def test_business_fact_tokens_handle_arabic_definite_article():
