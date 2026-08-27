@@ -4,7 +4,7 @@ from backend.app.api.admin_customer_operations import DEFAULT_EVENTS, _identity
 
 
 def test_customer_operations_routes_are_mounted_once_under_admin():
-    paths = {route.path for route in app.routes if hasattr(route, "path")}
+    paths = set(app.openapi()["paths"])
     assert "/admin/customer-operations/companies/{company_id}/customers" in paths
     assert "/admin/customer-operations/companies/{company_id}/notifications" in paths
     assert "/admin/customer-operations/companies/{company_id}/analytics" in paths
