@@ -12,6 +12,7 @@ from sqlalchemy import text
 from backend.app.api.auth import router as auth_router
 from backend.app.api.users import router as users_router
 from backend.app.api.admin import router as admin_router
+from backend.app.api.admin_customer_operations import router as admin_customer_operations_router
 from backend.app.api.admin_ai import router as admin_ai_router
 from backend.app.api.admin_ai_employee import router as admin_ai_employee_router
 from backend.app.api.admin_ai_employee_profile import router as admin_ai_employee_profile_router
@@ -183,6 +184,7 @@ for r in [
     auth_router,
     users_router,
     admin_router,
+    admin_customer_operations_router,
     admin_ai_router,
     admin_ai_employee_router,
     admin_ai_employee_profile_router,
