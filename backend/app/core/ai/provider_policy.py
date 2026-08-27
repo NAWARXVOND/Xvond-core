@@ -5,7 +5,12 @@ from decimal import Decimal
 from sqlalchemy import inspect
 
 from backend.app.core.ai.engine import ai_engine
-from backend.app.core.ai.routing_quality import model_quality_tier, required_quality_tier
+from backend.app.core.ai.routing_quality import (
+    current_quality_tier_cap,
+    effective_required_quality_tier,
+    model_allowed_by_quality_cap,
+    model_quality_tier,
+)
 from backend.app.modules.ai_agent.models import AIUsage
 from backend.app.modules.providers.models import (
     AIModelRecord,
@@ -42,13 +47,23 @@ def provider_model_available(db, provider: str, model: str) -> bool:
 def require_provider_model(db, provider: str, model: str) -> ProviderSelection:
     if not provider_model_available(db, provider, model):
         raise ValueError("AI provider/model is not loaded and enabled")
+    if not model_allowed_by_quality_cap(provider, model):
+        raise ValueError("AI provider/model exceeds the active package quality tier")
     return ProviderSelection(provider=provider.strip(), model=model.strip(), reason="requested")
 
 
-def _append_if_available(db, selections: list[ProviderSelection], provider: str | None, model: str | None, reason: str):
+def _append_if_available(
+    db,
+    selections: list[ProviderSelection],
+    provider: str | None,
+    model: str | None,
+    reason: str,
+):
     provider = (provider or "").strip()
     model = (model or "").strip()
     if not provider or not model or not provider_model_available(db, provider, model):
+        return
+    if not model_allowed_by_quality_cap(provider, model):
         return
     candidate = ProviderSelection(provider=provider, model=model, reason=reason)
     if all((item.provider, item.model) != (candidate.provider, candidate.model) for item in selections):
@@ -110,22 +125,39 @@ def _automatic_candidates(db, company_id: int, required_tier: int = 1) -> list[P
     )
     stats = _recent_runtime_stats(db, company_id)
     rows = [row for row in rows if row[1].name in loaded]
-    eligible = [
-        row for row in rows
-        if model_quality_tier(row[0].provider_name, row[0].model_name) >= required_tier
-    ]
+
+    cap = current_quality_tier_cap()
+    if cap is not None:
+        required_tier = min(required_tier, cap)
+
+    def allowed(row) -> bool:
+        tier = model_quality_tier(row[0].provider_name, row[0].model_name)
+        return tier >= required_tier and (cap is None or tier <= cap)
+
+    eligible = [row for row in rows if allowed(row)]
     if not eligible and rows:
-        strongest = max(model_quality_tier(row[0].provider_name, row[0].model_name) for row in rows)
-        eligible = [
+        allowed_rows = [
             row for row in rows
-            if model_quality_tier(row[0].provider_name, row[0].model_name) == strongest
+            if cap is None
+            or model_quality_tier(row[0].provider_name, row[0].model_name) <= cap
         ]
+        if allowed_rows:
+            strongest = max(
+                model_quality_tier(row[0].provider_name, row[0].model_name)
+                for row in allowed_rows
+            )
+            eligible = [
+                row for row in allowed_rows
+                if model_quality_tier(row[0].provider_name, row[0].model_name) == strongest
+            ]
+
     eligible.sort(key=lambda row: _candidate_score(row[0], row[1], stats))
+    reason_suffix = f":cap{cap}" if cap is not None else ""
     return [
         ProviderSelection(
             provider=model.provider_name,
             model=model.model_name,
-            reason=f"automatic:tier{required_tier}",
+            reason=f"automatic:tier{required_tier}{reason_suffix}",
         )
         for model, _provider in eligible
     ]
@@ -140,28 +172,51 @@ def runtime_selections(
 ) -> list[ProviderSelection]:
     """Build the provider/model route for one request.
 
-    Company-pinned models remain first. In automatic mode Xvond ranks eligible
-    models by reliability, cost, latency and admin priority. The engine applies the
-    live message quality floor before provider execution, allowing one shared routing
-    behavior across website, WhatsApp and future text channels.
+    Company-pinned models remain first when they fit the active package ceiling.
+    In automatic mode Xvond ranks eligible models by reliability, cost, latency
+    and admin priority. The package max_quality_tier is a hard ceiling while the
+    runtime quality classifier chooses the cheapest sufficient model inside it.
     """
     selections: list[ProviderSelection] = []
     profile = db.query(CompanyAIProfile).filter(CompanyAIProfile.company_id == company_id).first()
+    required_tier = effective_required_quality_tier(message)
 
     if profile and profile.default_provider and profile.default_model:
-        _append_if_available(db, selections, profile.default_provider, profile.default_model, "company_default")
+        _append_if_available(
+            db,
+            selections,
+            profile.default_provider,
+            profile.default_model,
+            "company_default",
+        )
         if profile.allow_fallback:
-            _append_if_available(db, selections, profile.fallback_provider, profile.fallback_model, "company_fallback")
-            for candidate in _automatic_candidates(db, company_id, required_quality_tier(message)):
-                if all((item.provider, item.model) != (candidate.provider, candidate.model) for item in selections):
+            _append_if_available(
+                db,
+                selections,
+                profile.fallback_provider,
+                profile.fallback_model,
+                "company_fallback",
+            )
+            for candidate in _automatic_candidates(db, company_id, required_tier):
+                if all(
+                    (item.provider, item.model) != (candidate.provider, candidate.model)
+                    for item in selections
+                ):
                     selections.append(candidate)
     else:
-        required_tier = required_quality_tier(message)
         for candidate in _automatic_candidates(db, company_id, required_tier):
-            if all((item.provider, item.model) != (candidate.provider, candidate.model) for item in selections):
+            if all(
+                (item.provider, item.model) != (candidate.provider, candidate.model)
+                for item in selections
+            ):
                 selections.append(candidate)
         _append_if_available(db, selections, provider, model, "agent_preference")
 
     if not selections:
+        cap = current_quality_tier_cap()
+        if cap is not None:
+            raise ValueError(
+                f"No enabled AI provider/model is available within package quality tier {cap}"
+            )
         raise ValueError("No enabled AI provider/model is available")
     return selections
