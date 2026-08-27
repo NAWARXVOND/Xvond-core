@@ -16,6 +16,7 @@ from backend.app.core.visitor_tokens import (
 from backend.app.modules.ai_agent.models import AIConversation, AIMessage
 from backend.app.modules.channels.conversation_source import bind_conversation_source
 from backend.app.modules.channels.models import AgentChannel
+from backend.app.modules.channels.vapi import build_voice_behavior_prompt
 from backend.app.modules.tools.business_models import HumanHandoff
 
 router = APIRouter(prefix="/channels", tags=["Public Agent Channels"])
@@ -282,15 +283,31 @@ def voice_turn(
     try:
         channel = require_channel(db, channel_id, "voice")
         config = reveal_config(channel.config) or {}
+        provider = str(config.get("provider") or "").strip().lower()
+        if provider == "vapi":
+            raise HTTPException(
+                404,
+                "Vapi voice channels use the dedicated voice LLM callback endpoint",
+            )
         if not secure_equal(x_xvond_voice_token, config.get("auth_token")):
             raise HTTPException(401, "Invalid voice channel token")
-        result = agent_runtime.chat(
-            db=db,
-            company_id=channel.company_id,
-            agent_id=channel.agent_id,
-            message=data.transcript,
-            conversation_id=data.conversation_id,
-        )
+
+        agent = agent_runtime.get_agent(db, channel.company_id, channel.agent_id)
+        original_prompt = agent.system_prompt or ""
+        try:
+            agent.system_prompt = (
+                original_prompt + "\n\n" + build_voice_behavior_prompt(config)
+            ).strip()
+            result = agent_runtime.chat(
+                db=db,
+                company_id=channel.company_id,
+                agent_id=channel.agent_id,
+                message=data.transcript,
+                conversation_id=data.conversation_id,
+            )
+        finally:
+            agent.system_prompt = original_prompt
+
         bind_conversation_source(
             db,
             conversation_id=result["conversation_id"],

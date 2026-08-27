@@ -1,15 +1,19 @@
 const API="";
-let token=localStorage.getItem("xvond_admin_token");
+let token=null;
 let companiesCache=[];
 let agentTestConversationId=null;
 
+// Remove browser-readable bearer tokens left by older Xvond builds.
+localStorage.removeItem("xvond_admin_token");
+localStorage.removeItem("xvond_admin_user");
+
 function escapeAdmin(value){return String(value??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;")}
 function escapeProduction(value){return escapeAdmin(value)}
-function authHeaders(){return {Authorization:`Bearer ${token}`,"Content-Type":"application/json"}}
-function clearAdminSession(){localStorage.removeItem("xvond_admin_token");localStorage.removeItem("xvond_admin_user");token=null;document.getElementById("app")?.classList.add("hidden");document.getElementById("login-screen")?.classList.remove("hidden")}
+function authHeaders(){return {"Content-Type":"application/json"}}
+function clearAdminSession(){token=null;document.getElementById("app")?.classList.add("hidden");document.getElementById("login-screen")?.classList.remove("hidden")}
 
 async function api(url,options={}){
-  const response=await fetch(API+url,{...options,headers:{...(options.headers||{}),...(token?{Authorization:`Bearer ${token}`}:{}) ,"Content-Type":"application/json"}});
+  const response=await fetch(API+url,{...options,credentials:"same-origin",headers:{...(options.headers||{}),"Content-Type":"application/json"}});
   let data={};try{data=await response.json()}catch(_e){}
   if(response.status===401){clearAdminSession();throw new Error("Authentication expired")}
   if(!response.ok){const detail=typeof data.detail==='string'?data.detail:(data.detail?.message||"Request failed");throw new Error(detail)}
@@ -20,17 +24,27 @@ async function login(){
   const email=document.getElementById("login-email").value.trim(),password=document.getElementById("login-password").value,error=document.getElementById("login-error");error.textContent="";
   try{
     const data=await api("/auth/login",{method:"POST",body:JSON.stringify({email,password})});
-    if(!["super_admin","xvond_admin"].includes(data.user?.role))throw new Error("Xvond admin account required");
-    token=data.access_token;if(!token)throw new Error("Login token not returned");
-    localStorage.setItem("xvond_admin_token",token);localStorage.setItem("xvond_admin_user",JSON.stringify(data.user));startApp();
+    if(!["super_admin","xvond_admin"].includes(data.user?.role)){
+      try{await api("/auth/logout",{method:"POST",body:"{}"})}catch(_e){}
+      throw new Error("Xvond admin account required");
+    }
+    startApp(data.user);
   }catch(e){error.textContent=e.message}
 }
 
-async function logout(){try{if(token)await api("/auth/logout",{method:"POST",body:"{}"})}catch(_e){}finally{clearAdminSession()}}
+async function logout(){try{await api("/auth/logout",{method:"POST",body:"{}"})}catch(_e){}finally{clearAdminSession()}}
 
-function startApp(){
+function startApp(user={}){
   document.getElementById("login-screen").classList.add("hidden");document.getElementById("app").classList.remove("hidden");
-  const user=JSON.parse(localStorage.getItem("xvond_admin_user")||"{}");document.getElementById("current-user").textContent=user.email||"Xvond Admin";showPage("dashboard",document.querySelector('.nav-item'));
+  document.getElementById("current-user").textContent=user.email||"Xvond Admin";showPage("dashboard",document.querySelector('.nav-item'));
+}
+
+async function resumeAdminSession(){
+  try{
+    const user=await api("/users/me");
+    if(!["super_admin","xvond_admin"].includes(user?.role)){clearAdminSession();return}
+    startApp(user);
+  }catch(_e){clearAdminSession()}
 }
 
 async function showPage(name,button=null){
@@ -62,4 +76,4 @@ async function sendAgentTestMessage(companyId,agentId){
   try{const result=await api(`/admin/companies/${companyId}/agents/${agentId}/test-chat`,{method:"POST",body:JSON.stringify({message,conversation_id:agentTestConversationId})});agentTestConversationId=result.conversation_id;transcript.innerHTML+=`<div class="test-message test-user"><strong>You</strong><div>${escapeAdmin(message)}</div></div><div class="test-message test-assistant"><strong>AI Employee</strong><div>${escapeAdmin(result.response?.content||"")}</div><small>${Number(result.usage?.total_tokens||0)} tokens · ${Number(result.usage?.latency_ms||0)} ms</small></div>`;input.value="";transcript.scrollTop=transcript.scrollHeight}catch(error){transcript.innerHTML+=`<div class="test-message test-error"><strong>Error</strong><div>${escapeAdmin(error.message)}</div></div>`}finally{button.disabled=false;button.textContent="Send Message"}
 }
 
-if(token)startApp();
+resumeAdminSession();

@@ -10,6 +10,7 @@ from backend.app.core.ai.cost_engine import ai_cost_engine
 from backend.app.core.ai.engine import ai_engine
 from backend.app.core.ai.provider_policy import runtime_selections
 from backend.app.core.config.settings import settings
+from backend.app.core.config_secrets import reveal_config
 from backend.app.core.module_access import company_module_enabled
 from backend.app.models.company import Company
 from backend.app.models.company_module import CompanyModule
@@ -23,6 +24,8 @@ from backend.app.modules.ai_agent.models import (
 from backend.app.modules.audit.service import audit_service
 from backend.app.modules.billing.limits import limits_service
 from backend.app.modules.billing.service_limits import service_limits
+from backend.app.modules.channels.behavior import build_text_channel_behavior_prompt
+from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.knowledge.service import knowledge_service
 from backend.app.modules.tools.executor import tool_executor
 
@@ -87,10 +90,7 @@ class AgentRuntime:
     def assert_company_runtime_access(self, db, company_id: int) -> None:
         company = (
             db.query(Company)
-            .filter(
-                Company.id == company_id,
-                Company.active.is_(True),
-            )
+            .filter(Company.id == company_id, Company.active.is_(True))
             .first()
         )
         if company is None:
@@ -114,10 +114,7 @@ class AgentRuntime:
     def get_agent(self, db, company_id: int, agent_id: int) -> AIAgent:
         agent = (
             db.query(AIAgent)
-            .filter(
-                AIAgent.id == agent_id,
-                AIAgent.company_id == company_id,
-            )
+            .filter(AIAgent.id == agent_id, AIAgent.company_id == company_id)
             .first()
         )
         if agent is None:
@@ -148,6 +145,7 @@ class AgentRuntime:
 
         conversation = (
             db.query(AIConversation)
+            .populate_existing()
             .filter(
                 AIConversation.id == conversation_id,
                 AIConversation.company_id == company_id,
@@ -168,9 +166,7 @@ class AgentRuntime:
             .all()
         )
         messages.reverse()
-        return "\n".join(
-            f"{item.role}: {item.content}" for item in messages
-        )[-12000:]
+        return "\n".join(f"{item.role}: {item.content}" for item in messages)[-12000:]
 
     def build_business_clock(self, db, company_id: int) -> str:
         profile = (
@@ -179,6 +175,33 @@ class AgentRuntime:
             .first()
         )
         return _business_clock_context(profile.timezone if profile else None)
+
+    def build_runtime_system_prompt(
+        self,
+        db,
+        agent: AIAgent,
+        conversation: AIConversation,
+    ) -> str:
+        base = str(agent.system_prompt or "").strip()
+        if str(conversation.channel_type or "").lower() != "whatsapp":
+            return base
+        channel = (
+            db.query(AgentChannel)
+            .filter(
+                AgentChannel.company_id == conversation.company_id,
+                AgentChannel.agent_id == conversation.agent_id,
+                AgentChannel.channel_type == "whatsapp",
+                AgentChannel.enabled.is_(True),
+            )
+            .first()
+        )
+        if channel is None:
+            return base
+        behavior = build_text_channel_behavior_prompt(
+            "whatsapp",
+            reveal_config(channel.config) or {},
+        )
+        return (base + "\n\n" + behavior).strip()
 
     def _record_failed_request(
         self,
@@ -247,12 +270,7 @@ class AgentRuntime:
         agent = self.get_agent(db, company_id, agent_id)
 
         try:
-            selections = runtime_selections(
-                db,
-                company_id,
-                agent.provider,
-                agent.model,
-            )
+            selections = runtime_selections(db, company_id, agent.provider, agent.model)
         except ValueError as exc:
             raise HTTPException(503, str(exc)) from exc
         if not selections:
@@ -261,40 +279,27 @@ class AgentRuntime:
         active_provider = selections[0].provider
         active_model = selections[0].model
         conversation = self.get_or_create_conversation(
-            db,
-            company_id,
-            agent.id,
-            conversation_id,
-            message,
+            db, company_id, agent.id, conversation_id, message
         )
+        system_prompt = self.build_runtime_system_prompt(db, agent, conversation)
         history = self.build_history(db, conversation.id)
         business_clock = self.build_business_clock(db, company_id)
 
         knowledge = ""
         if company_module_enabled(db, company_id, "knowledge"):
             knowledge = knowledge_service.get_agent_context(
-                db,
-                company_id,
-                agent.id,
-                message,
+                db, company_id, agent.id, message
             )
 
         available_tools = []
-        if (
-            allow_tools
-            and company_module_enabled(db, company_id, "tools")
-        ):
-            available_tools = tool_executor.get_agent_tools(
-                db=db,
-                agent_id=agent.id,
-            )
+        if allow_tools and company_module_enabled(db, company_id, "tools"):
+            available_tools = tool_executor.get_agent_tools(db=db, agent_id=agent.id)
         tool_definitions = [
             {
                 "name": tool["name"],
                 "description": tool["description"],
                 "input_schema": tool.get(
-                    "input_schema",
-                    {"type": "object", "properties": {}},
+                    "input_schema", {"type": "object", "properties": {}}
                 ),
             }
             for tool in available_tools
@@ -351,7 +356,7 @@ class AgentRuntime:
                         try:
                             result = ai_engine.generate(
                                 provider_name=active_provider,
-                                system_prompt=agent.system_prompt,
+                                system_prompt=system_prompt,
                                 user_message=runtime_message,
                                 model=active_model,
                                 tools=tool_definitions,
@@ -385,7 +390,7 @@ class AgentRuntime:
                 else:
                     result = ai_engine.generate(
                         provider_name=active_provider,
-                        system_prompt=agent.system_prompt,
+                        system_prompt=system_prompt,
                         user_message=runtime_message,
                         model=active_model,
                         tools=tool_definitions,
@@ -396,9 +401,6 @@ class AgentRuntime:
                 latency_ms = int((perf_counter() - started_at) * 1000)
                 error_message = str(exc)[:2000]
                 if commit:
-                    # Durable external actions may already have committed their own
-                    # execution truth. Roll back only the current chat transaction,
-                    # then persist the provider failure separately.
                     db.rollback()
                     self._record_failed_request(
                         db,
@@ -492,9 +494,7 @@ class AgentRuntime:
             )
 
         if not final_text:
-            final_text = (
-                "The agent completed its actions but did not return a final response."
-            )
+            final_text = "The agent completed its actions but did not return a final response."
 
         assistant_message = AIMessage(
             conversation_id=conversation.id,
@@ -515,8 +515,6 @@ class AgentRuntime:
             latency_ms=int((perf_counter() - started_at) * 1000),
         )
         if settings.is_production and total_tokens > 0:
-            # AIUsage is the canonical token ledger. Check the new usage before
-            # adding the current AIUsage row so this request is counted exactly once.
             service_limits.check(
                 db,
                 company_id,
@@ -526,7 +524,6 @@ class AgentRuntime:
             )
 
         db.add(usage)
-
         audit_service.log(
             db=db,
             company_id=company_id,

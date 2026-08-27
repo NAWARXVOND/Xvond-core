@@ -29,6 +29,21 @@ def test_legacy_pilot_files_are_removed():
     assert not (ADMIN_DIR / "pilot_upgrade.js").exists()
 
 
+def test_obsolete_admin_workspace_files_are_removed():
+    obsolete = {
+        "business.js",
+        "company_workspace.js",
+        "company_workspace_automation.js",
+        "company_workspace_plans.js",
+        "human-chat.js",
+        "operations.js",
+        "services.js",
+        "solutions.js",
+    }
+    for filename in obsolete:
+        assert not (ADMIN_DIR / filename).exists(), filename
+
+
 def test_ai_employee_profile_does_not_duplicate_company_or_fixed_operations():
     legacy = (ADMIN_DIR / "simple-company.js").read_text(encoding="utf-8-sig")
     profile = (ADMIN_DIR / "employee-capabilities.js").read_text(encoding="utf-8-sig")

@@ -16,6 +16,10 @@ class Settings:
     WHATSAPP_HUMAN_HANDOFF_MINUTES = max(5, int(os.getenv("WHATSAPP_HUMAN_HANDOFF_MINUTES", "60")))
     WEBSITE_VISITOR_TOKEN_TTL_SECONDS = max(300, int(os.getenv("WEBSITE_VISITOR_TOKEN_TTL_SECONDS", "86400")))
     TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "false").strip().lower() in {"1", "true", "yes", "on"}
+    AI_PII_REDACTION_ENABLED = os.getenv(
+        "AI_PII_REDACTION_ENABLED",
+        "true" if APP_ENV in {"production", "prod"} else "false",
+    ).strip().lower() in {"1", "true", "yes", "on"}
     JWT_SECRET = os.getenv("JWT_SECRET", "")
     JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
     JWT_ISSUER = os.getenv("JWT_ISSUER", "xvond-core")
