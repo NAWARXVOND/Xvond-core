@@ -1,5 +1,6 @@
 from sqlalchemy import func
 
+from backend.app.core.ai.routing_quality import set_quality_tier_cap
 from backend.app.core.config.settings import settings
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.billing.service_limits import service_limits
@@ -33,7 +34,21 @@ class LimitsService:
 
     def check_token_limit(self, db, company_id: int):
         if not settings.is_production:
+            # Development/test must never inherit a package cap from another request.
+            set_quality_tier_cap(None)
             return
+
+        # Resolve the active plan once per chat and expose its model-quality ceiling
+        # to the request-local Smart Router context. Missing max_quality_tier means
+        # unrestricted quality for backward compatibility with existing plans.
+        _subscription, plan = service_limits.entitlement(db, company_id, "ai_agents")
+        try:
+            set_quality_tier_cap((plan.limits or {}).get("max_quality_tier"))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Invalid max_quality_tier in AI Agents plan {plan.id}: {exc}"
+            ) from exc
+
         # Actual token usage is read from successful AIUsage rows. A request is
         # rejected once the current period has reached its configured token cap.
         service_limits.check(
