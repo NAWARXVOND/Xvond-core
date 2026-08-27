@@ -5,6 +5,7 @@ from decimal import Decimal
 from sqlalchemy import inspect
 
 from backend.app.core.ai.engine import ai_engine
+from backend.app.core.ai.routing_quality import model_quality_tier, required_quality_tier
 from backend.app.modules.ai_agent.models import AIUsage
 from backend.app.modules.providers.models import (
     AIModelRecord,
@@ -18,78 +19,6 @@ class ProviderSelection:
     provider: str
     model: str
     reason: str = "automatic"
-
-
-# Commercially useful quality bands. Packages can later cap the maximum tier
-# without changing the routing algorithm itself.
-MODEL_QUALITY_TIERS = {
-    ("groq", "openai/gpt-oss-20b"): 1,
-    ("groq", "openai/gpt-oss-120b"): 2,
-    ("openai", "gpt-5-mini"): 2,
-    ("openai", "gpt-5.6-luna"): 2,
-    ("openai", "gpt-5.6-terra"): 3,
-    ("openai", "gpt-5.6-sol"): 4,
-    ("openai", "gpt-5.6"): 4,
-}
-
-_ACTION_TERMS = (
-    "book", "booking", "reserve", "reservation", "appointment", "order",
-    "cancel", "reschedule", "refund", "payment", "quote", "quotation",
-    "حجز", "احجز", "موعد", "طلب", "اطلب", "إلغاء", "الغاء", "تعديل الموعد",
-    "استرجاع", "دفع", "عرض سعر",
-)
-
-_ADVANCED_TERMS = (
-    "compare", "analyse", "analyze", "recommend based on", "multiple conditions",
-    "exception", "complaint", "escalation", "policy conflict", "complex",
-    "قارن", "حلل", "حلّل", "شروط", "عدة خيارات", "استثناء", "شكوى",
-    "تصعيد", "سياسة", "معقد", "معقّد",
-)
-
-_PREMIUM_TERMS = (
-    "deep analysis", "detailed strategy", "multi-step reasoning", "root cause",
-    "تحليل عميق", "استراتيجية مفصلة", "استراتيجية تفصيلية", "تحليل جذري",
-)
-
-
-def model_quality_tier(provider: str, model: str) -> int:
-    """Return a stable quality band for routing and future package entitlements."""
-    key = ((provider or "").strip().lower(), (model or "").strip().lower())
-    if key in MODEL_QUALITY_TIERS:
-        return MODEL_QUALITY_TIERS[key]
-    model_name = key[1]
-    if any(tag in model_name for tag in ("sol", "opus", "pro")):
-        return 4
-    if any(tag in model_name for tag in ("terra", "120b")):
-        return 3
-    if any(tag in model_name for tag in ("luna", "mini")):
-        return 2
-    return 2
-
-
-def required_quality_tier(message: str | None) -> int:
-    """Classify customer work without spending another model call just to route it.
-
-    The classifier is intentionally conservative and deterministic: ordinary support
-    stays cheap, operational actions get a stronger floor, and genuinely complex
-    multi-condition requests are promoted. This avoids paying twice for every turn.
-    """
-    text = " ".join(str(message or "").lower().split())
-    if not text:
-        return 1
-
-    premium_hits = sum(term in text for term in _PREMIUM_TERMS)
-    advanced_hits = sum(term in text for term in _ADVANCED_TERMS)
-    action_hits = sum(term in text for term in _ACTION_TERMS)
-    separators = text.count(",") + text.count(";") + text.count("،") + text.count(" and ") + text.count(" و")
-
-    if premium_hits or len(text) >= 1800 or (advanced_hits >= 2 and separators >= 3):
-        return 4
-    if advanced_hits or len(text) >= 700 or (action_hits and separators >= 4):
-        return 3
-    if action_hits or len(text) >= 280:
-        return 2
-    return 1
 
 
 def provider_model_available(db, provider: str, model: str) -> bool:
@@ -211,11 +140,10 @@ def runtime_selections(
 ) -> list[ProviderSelection]:
     """Build the provider/model route for one request.
 
-    Company-pinned models remain authoritative. In automatic mode Xvond first
-    determines the minimum quality tier needed for the customer message, then picks
-    the cheapest reliable enabled model that satisfies that floor. Remaining eligible
-    models form the failover chain, so rate limits and provider failures do not become
-    a single point of failure.
+    Company-pinned models remain first. In automatic mode Xvond ranks eligible
+    models by reliability, cost, latency and admin priority. The engine applies the
+    live message quality floor before provider execution, allowing one shared routing
+    behavior across website, WhatsApp and future text channels.
     """
     selections: list[ProviderSelection] = []
     profile = db.query(CompanyAIProfile).filter(CompanyAIProfile.company_id == company_id).first()
