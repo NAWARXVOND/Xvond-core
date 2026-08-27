@@ -5,6 +5,7 @@ from backend.app.core.ai.base import (
 from backend.app.core.ai.provider_registry import (
     provider_registry,
 )
+from backend.app.core.ai.routing_quality import assert_model_quality
 from backend.app.core.config.settings import settings
 from backend.app.core.privacy import (
     protect_text,
@@ -77,6 +78,9 @@ class AIEngine:
         tool_outputs: list | None = None,
         continuation=None,
     ) -> AIResponse:
+        if provider_name != "mock":
+            assert_model_quality(provider_name, model, user_message)
+
         provider = self.get_provider(provider_name)
         replacements: dict[str, str] | None = None
         outbound_system_prompt = system_prompt

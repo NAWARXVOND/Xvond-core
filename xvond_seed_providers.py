@@ -31,6 +31,27 @@ MODELS = [
         Decimal("0.15"),
         Decimal("0.60"),
     ),
+    (
+        "openai",
+        "gpt-5.6-luna",
+        "GPT-5.6 Luna",
+        Decimal("0.20"),
+        Decimal("1.20"),
+    ),
+    (
+        "openai",
+        "gpt-5.6-terra",
+        "GPT-5.6 Terra",
+        Decimal("2.00"),
+        Decimal("12.00"),
+    ),
+    (
+        "openai",
+        "gpt-5.6-sol",
+        "GPT-5.6 Sol",
+        Decimal("4.00"),
+        Decimal("20.00"),
+    ),
 ]
 
 

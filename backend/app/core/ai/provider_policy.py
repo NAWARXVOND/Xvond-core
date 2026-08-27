@@ -5,6 +5,7 @@ from decimal import Decimal
 from sqlalchemy import inspect
 
 from backend.app.core.ai.engine import ai_engine
+from backend.app.core.ai.routing_quality import model_quality_tier, required_quality_tier
 from backend.app.modules.ai_agent.models import AIUsage
 from backend.app.modules.providers.models import (
     AIModelRecord,
@@ -89,14 +90,14 @@ def _candidate_score(model: AIModelRecord, provider: AIProviderRecord, stats: di
     return (
         1 if provider.name == "mock" else 0,
         round(failure_rate, 4),
-        int(provider.priority or 100),
-        round(average_latency, 2),
         price,
+        round(average_latency, 2),
+        int(provider.priority or 100),
         int(model.id or 0),
     )
 
 
-def _automatic_candidates(db, company_id: int) -> list[ProviderSelection]:
+def _automatic_candidates(db, company_id: int, required_tier: int = 1) -> list[ProviderSelection]:
     loaded = set(ai_engine.list_providers())
     rows = (
         db.query(AIModelRecord, AIProviderRecord)
@@ -109,10 +110,24 @@ def _automatic_candidates(db, company_id: int) -> list[ProviderSelection]:
     )
     stats = _recent_runtime_stats(db, company_id)
     rows = [row for row in rows if row[1].name in loaded]
-    rows.sort(key=lambda row: _candidate_score(row[0], row[1], stats))
+    eligible = [
+        row for row in rows
+        if model_quality_tier(row[0].provider_name, row[0].model_name) >= required_tier
+    ]
+    if not eligible and rows:
+        strongest = max(model_quality_tier(row[0].provider_name, row[0].model_name) for row in rows)
+        eligible = [
+            row for row in rows
+            if model_quality_tier(row[0].provider_name, row[0].model_name) == strongest
+        ]
+    eligible.sort(key=lambda row: _candidate_score(row[0], row[1], stats))
     return [
-        ProviderSelection(provider=model.provider_name, model=model.model_name, reason="automatic")
-        for model, _provider in rows
+        ProviderSelection(
+            provider=model.provider_name,
+            model=model.model_name,
+            reason=f"automatic:tier{required_tier}",
+        )
+        for model, _provider in eligible
     ]
 
 
@@ -121,13 +136,14 @@ def runtime_selections(
     company_id: int,
     provider: str | None,
     model: str | None,
+    message: str | None = None,
 ) -> list[ProviderSelection]:
-    """Build the full provider/model route for one company request.
+    """Build the provider/model route for one request.
 
-    If the company explicitly pins a default model, that policy is respected first.
-    Otherwise Xvond automatically ranks every loaded/enabled model using recent
-    reliability, admin priority, latency and configured token price. Remaining
-    providers form the failover chain so one vendor is never a single point of failure.
+    Company-pinned models remain first. In automatic mode Xvond ranks eligible
+    models by reliability, cost, latency and admin priority. The engine applies the
+    live message quality floor before provider execution, allowing one shared routing
+    behavior across website, WhatsApp and future text channels.
     """
     selections: list[ProviderSelection] = []
     profile = db.query(CompanyAIProfile).filter(CompanyAIProfile.company_id == company_id).first()
@@ -136,14 +152,14 @@ def runtime_selections(
         _append_if_available(db, selections, profile.default_provider, profile.default_model, "company_default")
         if profile.allow_fallback:
             _append_if_available(db, selections, profile.fallback_provider, profile.fallback_model, "company_fallback")
-            for candidate in _automatic_candidates(db, company_id):
+            for candidate in _automatic_candidates(db, company_id, required_quality_tier(message)):
                 if all((item.provider, item.model) != (candidate.provider, candidate.model) for item in selections):
                     selections.append(candidate)
     else:
-        for candidate in _automatic_candidates(db, company_id):
+        required_tier = required_quality_tier(message)
+        for candidate in _automatic_candidates(db, company_id, required_tier):
             if all((item.provider, item.model) != (candidate.provider, candidate.model) for item in selections):
                 selections.append(candidate)
-        # A legacy agent choice is only used if it was not already part of the automatic pool.
         _append_if_available(db, selections, provider, model, "agent_preference")
 
     if not selections:
