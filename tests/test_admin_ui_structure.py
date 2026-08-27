@@ -36,6 +36,8 @@ def test_obsolete_admin_workspace_files_are_removed():
         "company_workspace_automation.js",
         "company_workspace_plans.js",
         "human-chat.js",
+        "operations.js",
+        "services.js",
         "solutions.js",
     }
     for filename in obsolete:
