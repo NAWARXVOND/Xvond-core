@@ -49,6 +49,10 @@ class Settings:
     def is_production(self) -> bool:
         return self.APP_ENV in {"production", "prod"}
 
+    @property
+    def is_test(self) -> bool:
+        return self.APP_ENV in {"test", "testing"}
+
     def validate(self):
         errors = []
         if not self.DATABASE_URL:
