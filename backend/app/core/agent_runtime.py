@@ -86,6 +86,9 @@ def _business_clock_context(
 
 class AgentRuntime:
     MAX_TOOL_ROUNDS = 6
+    HISTORY_MAX_MESSAGES = 32
+    HISTORY_MAX_CHARS = 8000
+    HISTORY_ALLOWED_ROLES = {"user", "assistant", "human"}
 
     def assert_company_runtime_access(self, db, company_id: int) -> None:
         company = (
@@ -162,11 +165,29 @@ class AgentRuntime:
             db.query(AIMessage)
             .filter(AIMessage.conversation_id == conversation_id)
             .order_by(AIMessage.id.desc())
-            .limit(40)
+            .limit(self.HISTORY_MAX_MESSAGES)
             .all()
         )
-        messages.reverse()
-        return "\n".join(f"{item.role}: {item.content}" for item in messages)[-12000:]
+
+        selected = []
+        used_chars = 0
+        for item in messages:
+            role = str(item.role or "").strip().lower()
+            content = str(item.content or "").strip()
+            if role not in self.HISTORY_ALLOWED_ROLES or not content:
+                continue
+            line = f"{role}: {content}"
+            line_size = len(line) + (1 if selected else 0)
+            if selected and used_chars + line_size > self.HISTORY_MAX_CHARS:
+                break
+            if not selected and line_size > self.HISTORY_MAX_CHARS:
+                line = line[: self.HISTORY_MAX_CHARS]
+                line_size = len(line)
+            selected.append(line)
+            used_chars += line_size
+
+        selected.reverse()
+        return "\n".join(selected)
 
     def build_business_clock(self, db, company_id: int) -> str:
         profile = (
