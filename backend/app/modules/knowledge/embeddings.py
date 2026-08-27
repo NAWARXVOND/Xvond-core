@@ -10,12 +10,14 @@ logger = logging.getLogger(__name__)
 
 
 class KnowledgeEmbeddingClient:
-    """Small provider boundary for semantic knowledge embeddings.
+    """Provider boundary for semantic knowledge embeddings.
 
-    Semantic retrieval is enabled only when explicitly configured and a supported
-    provider credential is available. Failures never take the agent offline; the
-    knowledge service falls back to lexical retrieval.
+    Semantic retrieval is enabled only when configured and a supported provider
+    credential is available. Failures never take the AI employee offline; callers
+    can safely fall back to deterministic lexical retrieval.
     """
+
+    BATCH_SIZE = 64
 
     def __init__(self) -> None:
         self.provider = settings.KNOWLEDGE_EMBEDDING_PROVIDER
@@ -29,30 +31,34 @@ class KnowledgeEmbeddingClient:
             and settings.OPENAI_API_KEY
         )
 
+    def _embed_batch(self, values: list[str]) -> list[list[float]]:
+        payload = {"model": self.model, "input": values, "encoding_format": "float"}
+        with httpx.Client(timeout=60.0) as client:
+            response = client.post(
+                "https://api.openai.com/v1/embeddings",
+                headers={
+                    "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        response.raise_for_status()
+        data = response.json().get("data") or []
+        ordered = sorted(data, key=lambda item: int(item.get("index", 0)))
+        vectors = [item.get("embedding") for item in ordered]
+        if len(vectors) != len(values) or any(not isinstance(vector, list) for vector in vectors):
+            raise RuntimeError("Embedding provider returned an incomplete response")
+        return [[float(number) for number in vector] for vector in vectors]
+
     def embed_many(self, texts: Iterable[str]) -> list[list[float]]:
         values = [str(text or "").strip() for text in texts]
-        if not values:
+        if not values or not self.available:
             return []
-        if not self.available:
-            return []
-        payload = {"model": self.model, "input": values, "encoding_format": "float"}
+        vectors: list[list[float]] = []
         try:
-            with httpx.Client(timeout=60.0) as client:
-                response = client.post(
-                    "https://api.openai.com/v1/embeddings",
-                    headers={
-                        "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-            response.raise_for_status()
-            data = response.json().get("data") or []
-            ordered = sorted(data, key=lambda item: int(item.get("index", 0)))
-            vectors = [item.get("embedding") for item in ordered]
-            if len(vectors) != len(values) or any(not isinstance(v, list) for v in vectors):
-                raise RuntimeError("Embedding provider returned an incomplete response")
-            return [[float(number) for number in vector] for vector in vectors]
+            for start in range(0, len(values), self.BATCH_SIZE):
+                vectors.extend(self._embed_batch(values[start : start + self.BATCH_SIZE]))
+            return vectors
         except Exception as exc:
             logger.warning("Knowledge embedding request failed; using lexical fallback: %s", exc)
             return []
