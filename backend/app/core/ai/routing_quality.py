@@ -1,3 +1,6 @@
+from contextvars import ContextVar
+
+
 MODEL_QUALITY_TIERS = {
     ("groq", "openai/gpt-oss-20b"): 1,
     ("groq", "openai/gpt-oss-120b"): 2,
@@ -7,6 +10,18 @@ MODEL_QUALITY_TIERS = {
     ("openai", "gpt-5.6-sol"): 4,
     ("openai", "gpt-5.6"): 4,
 }
+
+QUALITY_TIER_NAMES = {
+    1: "simple",
+    2: "standard",
+    3: "advanced",
+    4: "premium",
+}
+
+_MAX_QUALITY_TIER: ContextVar[int | None] = ContextVar(
+    "xvond_max_quality_tier",
+    default=None,
+)
 
 _ACTION_TERMS = (
     "book", "booking", "reserve", "reservation", "appointment", "order",
@@ -43,6 +58,29 @@ _CUSTOMER_MESSAGE_MARKER = "CURRENT CUSTOMER MESSAGE (answer this intent directl
 _HISTORY_MARKER = "CONVERSATION HISTORY (use for continuity; not authoritative for business facts):"
 
 
+def normalize_quality_tier(value) -> int | None:
+    if value in (None, "", 0, "0"):
+        return None
+    try:
+        tier = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("max_quality_tier must be an integer from 1 to 4") from exc
+    if tier not in QUALITY_TIER_NAMES:
+        raise ValueError("max_quality_tier must be between 1 and 4")
+    return tier
+
+
+def set_quality_tier_cap(value) -> int | None:
+    """Set the per-request commercial model-quality ceiling."""
+    tier = normalize_quality_tier(value)
+    _MAX_QUALITY_TIER.set(tier)
+    return tier
+
+
+def current_quality_tier_cap() -> int | None:
+    return _MAX_QUALITY_TIER.get()
+
+
 def model_quality_tier(provider: str, model: str) -> int:
     """Return the routing/commercial quality band for a provider model."""
     key = ((provider or "").strip().lower(), (model or "").strip().lower())
@@ -56,6 +94,11 @@ def model_quality_tier(provider: str, model: str) -> int:
     if any(tag in model_name for tag in ("120b", "luna", "mini")):
         return 2
     return 2
+
+
+def model_allowed_by_quality_cap(provider: str, model: str) -> bool:
+    cap = current_quality_tier_cap()
+    return cap is None or model_quality_tier(provider, model) <= cap
 
 
 def _normalized(text: str) -> str:
@@ -111,9 +154,20 @@ def required_quality_tier(message: str | None) -> int:
     return 1
 
 
-def assert_model_quality(provider: str, model: str, message: str | None) -> None:
+def effective_required_quality_tier(message: str | None) -> int:
     required = required_quality_tier(message)
+    cap = current_quality_tier_cap()
+    return min(required, cap) if cap is not None else required
+
+
+def assert_model_quality(provider: str, model: str, message: str | None) -> None:
+    required = effective_required_quality_tier(message)
     actual = model_quality_tier(provider, model)
+    cap = current_quality_tier_cap()
+    if cap is not None and actual > cap:
+        raise ValueError(
+            f"Model quality tier {actual} exceeds package tier cap {cap}; trying allowed fallback"
+        )
     if actual < required:
         raise ValueError(
             f"Model quality tier {actual} is below required tier {required}; trying stronger fallback"
