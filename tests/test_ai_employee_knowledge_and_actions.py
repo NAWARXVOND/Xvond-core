@@ -33,6 +33,42 @@ def test_knowledge_intent_routing_for_orders_and_delivery():
     assert "delivery_payment" in intents
 
 
+def test_service_queries_route_to_business_profile():
+    service = KnowledgeService()
+    assert "business_profile" in service.INTENT_CATEGORY_HINTS["services"]
+    for query in ("ماهي خدماتكم", "شو بتقدموا؟", "what do you offer?"):
+        assert "services" in service.detect_intents(query)
+
+
+def test_service_tokens_expand_across_arabic_and_english():
+    service = KnowledgeService()
+    arabic_tokens = service.tokenize("ماهي خدماتكم")
+    english_tokens = service.tokenize("catering services")
+    conversational_tokens = service.tokenize("شو بتقدموا")
+    assert "خدمات" in arabic_tokens
+    assert "services" in arabic_tokens
+    assert "خدمات" in english_tokens
+    assert "services" in conversational_tokens
+
+
+def test_arabic_service_question_matches_english_business_profile():
+    service = KnowledgeService()
+    content = (
+        "Gulf Catering Hub connects customers and businesses with catering and "
+        "hospitality services in Oman."
+    )
+    chunk = SimpleNamespace(
+        normalized_text=service.normalize(content),
+        content=content,
+    )
+    document = SimpleNamespace(
+        title="Business Information",
+        source_type="business_profile",
+    )
+    for query in ("ماهي خدماتكم", "شو بتقدموا؟", "what do you offer?"):
+        assert service._score_match(query, chunk, document) is not None
+
+
 def test_knowledge_stop_words_do_not_drive_retrieval():
     service = KnowledgeService()
     assert service.tokenize("شو في عندكم") == set()
