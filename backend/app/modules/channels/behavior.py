@@ -4,6 +4,8 @@ def build_text_channel_behavior_prompt(
 ) -> str:
     config = config or {}
     channel_type = str(channel_type or "").strip().lower()
+    legacy_language = str(config.get("language") or "auto").strip()
+    legacy_dialect = str(config.get("dialect") or "auto").strip()
     tone = str(config.get("tone") or "professional_friendly").strip()
     response_style = str(config.get("response_style") or "conversational").strip()
     response_length = str(config.get("response_length") or "concise").strip()
@@ -13,6 +15,10 @@ def build_text_channel_behavior_prompt(
     parts = [
         f"{channel_type.upper()} CHANNEL BEHAVIOR:",
         "Language and dialect are controlled by the AI Employee profile and must not be overridden by channel settings.",
+        (
+            "Deprecated channel metadata only — NEVER use this to override the AI Employee profile: "
+            f"Language: {legacy_language}. Dialect: {legacy_dialect}."
+        ),
         f"Tone: {tone}.",
         f"Response style: {response_style}.",
         f"Response length: {response_length}.",
