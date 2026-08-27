@@ -8,7 +8,8 @@ function wsDate(value){
   if(!value)return '—';
   try{
     const date=new Date(xvondNormalizeUtcTimestamp(value));
-    const timeZone=window.xvondWorkspace?.data?.profile?.timezone||'Asia/Muscat';
+    const workspaceTimeZone=typeof xvondWorkspace!=='undefined'?xvondWorkspace?.data?.profile?.timezone:null;
+    const timeZone=workspaceTimeZone||'Asia/Muscat';
     return date.toLocaleString(undefined,{timeZone});
   }catch(_error){
     return String(value);
