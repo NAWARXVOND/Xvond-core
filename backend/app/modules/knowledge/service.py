@@ -61,13 +61,24 @@ class KnowledgeService:
         text = re.sub(r"[^\w\u0600-\u06FF]+", " ", text)
         return " ".join(text.split())
 
+    def _token_forms(self, token):
+        forms = {token}
+        if re.search(r"[\u0600-\u06FF]", token):
+            if token.startswith("ال") and len(token) > 4:
+                forms.add(token[2:])
+            for suffix in ("كم", "كن", "نا", "هم", "هن"):
+                if token.endswith(suffix) and len(token) - len(suffix) >= 3:
+                    forms.add(token[: -len(suffix)])
+        return forms
+
     def _base_tokens(self, text):
         stop = {self.normalize(word) for word in self.STOP_WORDS}
-        return {
-            token
-            for token in self.normalize(text).split()
-            if len(token) >= 2 and token not in stop
-        }
+        tokens = set()
+        for token in self.normalize(text).split():
+            if len(token) < 2 or token in stop:
+                continue
+            tokens |= {form for form in self._token_forms(token) if form not in stop}
+        return tokens
 
     def tokenize(self, text):
         tokens = self._base_tokens(text)
