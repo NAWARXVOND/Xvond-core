@@ -100,9 +100,10 @@ def list_companies(current_admin: User = Depends(require_xvond_admin)):
         db.close()
 
 
-# Customer 360, Notification Center and Business Analytics live under the same
-# Xvond admin boundary. The child router intentionally carries the full
-# /admin/customer-operations prefix, so attach its routes directly to the app
-# through a tiny proxy router without adding another /admin prefix.
-customer_operations_proxy = APIRouter()
-customer_operations_proxy.include_router(customer_operations_router)
+# The child API is authored with its canonical /admin prefix so it can also be
+# mounted independently in tests. Strip that one prefix while composing it
+# into this already-/admin-prefixed router.
+for _route in customer_operations_router.routes:
+    if _route.path.startswith("/admin/"):
+        _route.path = _route.path[len("/admin"):]
+router.include_router(customer_operations_router)
