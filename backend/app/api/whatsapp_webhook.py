@@ -8,6 +8,11 @@ from sqlalchemy.exc import IntegrityError
 from redis.exceptions import RedisError
 
 from backend.app.core.config_secrets import reveal_config
+from backend.app.core.customer_runtime_policy import (
+    human_handoff_acknowledgement,
+    is_service_access_error,
+    safe_service_unavailable_message,
+)
 from backend.app.models.company_module import CompanyModule
 from backend.app.core.agent_runtime import agent_runtime
 from backend.app.core.database.connection import SessionLocal
@@ -119,6 +124,61 @@ def process_business_app_echo(db, channel: AgentChannel, value: dict) -> list[di
         )
         processed.append({"message_id": message_id, "conversation_id": session.conversation_id, "status": "human_active"})
     return processed
+
+
+def _get_or_create_whatsapp_session(db, channel: AgentChannel, wa_id: str, phone_number_id: str, incoming_text: str):
+    session = (
+        db.query(WhatsAppSession)
+        .filter(WhatsAppSession.agent_id == channel.agent_id, WhatsAppSession.wa_id == wa_id)
+        .first()
+    )
+    if session is None:
+        conversation = agent_runtime.get_or_create_conversation(
+            db=db,
+            company_id=channel.company_id,
+            agent_id=channel.agent_id,
+            conversation_id=None,
+            message=incoming_text,
+        )
+        session = WhatsAppSession(
+            company_id=channel.company_id,
+            agent_id=channel.agent_id,
+            conversation_id=conversation.id,
+            wa_id=wa_id,
+            phone_number_id=phone_number_id,
+        )
+        db.add(session)
+        db.flush()
+    return session
+
+
+def _service_access_fallback(db, *, channel: AgentChannel, config: dict, wa_id: str, phone_number_id: str, incoming_text: str, message_id: str, error: HTTPException):
+    db.rollback()
+    lock_contact(db, channel.agent_id, wa_id)
+    session = _get_or_create_whatsapp_session(db, channel, wa_id, phone_number_id, incoming_text)
+    agent = agent_runtime.get_agent(db, channel.company_id, channel.agent_id)
+    activate_human_handoff(session, reason="service_limit_or_entitlement")
+    reply_text = safe_service_unavailable_message(agent.system_prompt or "", incoming_text)
+    send_result = whatsapp_sender.send_text(config=config, to=wa_id, text=reply_text)
+    if not send_result.get("success"):
+        db.rollback()
+        release_message_claim(db, message_id)
+        raise RuntimeError("WhatsApp service fallback delivery failed")
+    audit_service.log(
+        db=db,
+        company_id=channel.company_id,
+        action="whatsapp.customer_service_fallback",
+        resource_type="channel",
+        resource_id=channel.id,
+        details={
+            "message_id": message_id,
+            "conversation_id": session.conversation_id,
+            "internal_status": error.status_code,
+            "internal_detail": error.detail,
+        },
+    )
+    db.commit()
+    return session.conversation_id
 
 
 @router.get("")
@@ -247,35 +307,15 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
 
                     try:
                         lock_contact(db, channel.agent_id, wa_id)
-                        session = (
-                            db.query(WhatsAppSession)
-                            .filter(WhatsAppSession.agent_id == channel.agent_id, WhatsAppSession.wa_id == wa_id)
-                            .first()
-                        )
-                        if session is None:
-                            conversation = agent_runtime.get_or_create_conversation(
-                                db=db,
-                                company_id=channel.company_id,
-                                agent_id=channel.agent_id,
-                                conversation_id=None,
-                                message=incoming_text,
-                            )
-                            session = WhatsAppSession(
-                                company_id=channel.company_id,
-                                agent_id=channel.agent_id,
-                                conversation_id=conversation.id,
-                                wa_id=wa_id,
-                                phone_number_id=phone_number_id,
-                            )
-                            db.add(session)
-                            db.flush()
+                        session = _get_or_create_whatsapp_session(db, channel, wa_id, phone_number_id, incoming_text)
+                        agent = agent_runtime.get_agent(db, channel.company_id, channel.agent_id)
 
                         if requests_human(incoming_text):
                             activate_human_handoff(session, reason="customer_request")
                             send_result = whatsapp_sender.send_text(
                                 config=config,
                                 to=wa_id,
-                                text="تم تحويل المحادثة إلى موظف. سيتم الرد عليك من واتساب بزنس.",
+                                text=human_handoff_acknowledgement(agent.system_prompt or "", incoming_text),
                             )
                             if not send_result.get("success"):
                                 db.rollback()
@@ -321,6 +361,32 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                             conversation_id=session.conversation_id,
                             commit=False,
                         )
+                    except HTTPException as exc:
+                        if is_service_access_error(exc):
+                            conversation_id = _service_access_fallback(
+                                db,
+                                channel=channel,
+                                config=config,
+                                wa_id=wa_id,
+                                phone_number_id=phone_number_id,
+                                incoming_text=incoming_text,
+                                message_id=message_id,
+                                error=exc,
+                            )
+                            processed.append({"message_id": message_id, "conversation_id": conversation_id, "status": "waiting_for_human"})
+                            continue
+                        db.rollback()
+                        release_message_claim(db, message_id)
+                        audit_service.log(
+                            db=db,
+                            company_id=channel.company_id,
+                            action="whatsapp.runtime_failed",
+                            resource_type="channel",
+                            resource_id=channel.id,
+                            details={"message_id": message_id, "error": str(exc)[:1000]},
+                        )
+                        db.commit()
+                        raise
                     except Exception as exc:
                         db.rollback()
                         release_message_claim(db, message_id)
