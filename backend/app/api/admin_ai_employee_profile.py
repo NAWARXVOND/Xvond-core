@@ -12,6 +12,7 @@ from backend.app.models.user import User
 from backend.app.modules.ai_agent.factory_models import AgentConfig
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.ai_agent.profile_models import AIAgentProfile
+from backend.app.modules.billing.limits import limits_service
 from backend.app.modules.channels.models import AgentChannel
 
 router = APIRouter(prefix="/admin/ai-employee-profile", tags=["Xvond Admin - AI Employee Profile"])
@@ -212,6 +213,9 @@ def create_profile_employee(company_id: int, data: EmployeeProfileUpdate, curren
         company = db.query(Company).filter(Company.id == company_id).first()
         if not company:
             raise HTTPException(404, "Company not found")
+        # The product creates enabled employees, so package capacity must be
+        # enforced at this canonical creation path before any row is inserted.
+        limits_service.check_agent_limit(db, company_id)
         for module_name in ("ai_agent", "knowledge", "tools"):
             _ensure_module(db, company_id, module_name)
         provider, model = _select_model(db, company_id)
