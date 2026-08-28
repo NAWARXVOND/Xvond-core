@@ -1,5 +1,5 @@
 (function(){
-  function data(){return window.xvondWorkspace?.data||null}
+  function data(){return typeof xvondWorkspace!=='undefined'?(xvondWorkspace?.data||null):null}
   function metricCard(label){
     return [...document.querySelectorAll('.metric-card')].find(card=>card.querySelector('span')?.textContent?.trim()===label)||null;
   }
@@ -16,7 +16,7 @@
   }
 
   function fixOverview(d){
-    if(window.xvondWorkspace?.tab!=='overview')return;
+    if(typeof xvondWorkspace==='undefined'||xvondWorkspace.tab!=='overview')return;
     const channels=d.channels||[];
     const active=channels.filter(x=>x.enabled===true).length;
     const configured=channels.filter(x=>x.configured===true).length;
@@ -37,7 +37,7 @@
   }
 
   function fixEmployeeCards(d){
-    if(window.xvondWorkspace?.tab!=='agents')return;
+    if(typeof xvondWorkspace==='undefined'||xvondWorkspace.tab!=='agents')return;
     const cards=[...document.querySelectorAll('.employee-grid .employee-card')];
     (d.agentMeta||[]).forEach((row,index)=>{
       const card=cards[index];if(!card)return;
@@ -52,7 +52,7 @@
   }
 
   function fixBilling(d){
-    if(window.xvondWorkspace?.tab!=='billing')return;
+    if(typeof xvondWorkspace==='undefined'||xvondWorkspace.tab!=='billing')return;
     const cards=[...document.querySelectorAll('#workspace-content .integration-grid .integration-card')];
     (d.billingServices||[]).forEach((service,index)=>{
       const card=cards[index],state=limitState(service);if(!card||!state)return;
@@ -73,7 +73,7 @@
   }
 
   function fixNotificationDestinations(){
-    if(window.xvondWorkspace?.tab!=='notifications')return;
+    if(typeof xvondWorkspace==='undefined'||xvondWorkspace.tab!=='notifications')return;
     const boxes=[...document.querySelectorAll('.co-destination')];
     for(const input of boxes){
       if(input.value==='dashboard')continue;
@@ -93,6 +93,6 @@
   }
 
   function apply(){const d=data();if(!d)return;fixOverview(d);fixEmployeeCards(d);fixBilling(d);fixNotificationDestinations()}
-  const base=window.renderCompanyControlCenter;
-  if(typeof base==='function')window.renderCompanyControlCenter=function(){const result=base.apply(this,arguments);apply();return result};
+  const base=renderCompanyControlCenter;
+  if(typeof base==='function')renderCompanyControlCenter=function(){const result=base.apply(this,arguments);apply();return result};
 })();

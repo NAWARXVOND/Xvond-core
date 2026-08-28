@@ -12,6 +12,12 @@ def test_admin_accuracy_layer_is_loaded_last():
     assert html.rfind('/static/admin/dashboard-accuracy.js') > html.rfind('/static/admin/billing-plan-management.js')
 
 
+def test_admin_accuracy_uses_lexical_workspace_state():
+    source = ACCURACY_JS.read_text(encoding="utf-8")
+    assert "window.xvondWorkspace" not in source
+    assert "typeof xvondWorkspace" in source
+
+
 def test_employee_channel_count_uses_enabled_channels_only():
     source = ACCURACY_JS.read_text(encoding="utf-8")
     assert "x.enabled===true" in source
