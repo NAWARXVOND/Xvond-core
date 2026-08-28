@@ -7,8 +7,10 @@ const XVOND_BILLING_SERVICE_LABELS = {
 
 const XVOND_BILLING_PLAN_LIMIT_FIELDS = {
     ai_agents: [
-        ['agents', 'AI Employees'],
+        ['agents', 'Active AI Employees'],
+        ['channels', 'Active Channels'],
         ['tokens', 'AI tokens / month'],
+        ['requests', 'AI requests / month'],
     ],
     automation: [
         ['workflows', 'Workflows'],
@@ -201,7 +203,7 @@ function renderWorkspacePackageLimits() {
     if (!serviceCode || !target) return;
     target.innerHTML = `
         <h3 style="margin-top:16px">Monthly Limits</h3>
-        <p class="meta">Use 0 for unlimited.</p>
+        <p class="meta">Use 0 for unlimited. Employee/channel limits are active-capacity limits; token/request limits reset each billing period.</p>
         ${billingPlanLimitFields(serviceCode)}
     `;
 }
@@ -261,7 +263,7 @@ function openWorkspaceEditServicePlan(planId) {
             </div>
         </div>
         <h3 style="margin-top:16px">Monthly Limits</h3>
-        <p class="meta">Use 0 for unlimited.</p>
+        <p class="meta">Use 0 for unlimited. Employee/channel limits are active-capacity limits; token/request limits reset each billing period.</p>
         ${billingPlanLimitFields(plan.service_code, plan.limits || {}, 'billing-edit-limit')}
         <button class="modal-submit" onclick="saveWorkspaceServicePlanEdit(${plan.id},'${plan.service_code}')">Save Package</button>
     `);
