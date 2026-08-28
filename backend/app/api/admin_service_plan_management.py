@@ -3,6 +3,8 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from backend.app.api.admin_service_billing import _serialized_limits, _validated_limits
+from backend.app.core.company_catalog import normalize_currency
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.user import User
@@ -39,12 +41,12 @@ def update_service_plan(
         if data.monthly_price is not None:
             item.monthly_price = data.monthly_price
         if data.currency is not None:
-            currency = data.currency.strip().upper()
-            if not currency:
-                raise HTTPException(status_code=400, detail="Currency cannot be empty")
-            item.currency = currency
+            try:
+                item.currency = normalize_currency(data.currency) or item.currency
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         if data.limits is not None:
-            item.limits = data.limits
+            item.limits = _validated_limits(data.limits)
         if data.enabled is not None:
             item.enabled = data.enabled
 
@@ -57,7 +59,7 @@ def update_service_plan(
             "name": item.name,
             "monthly_price": item.monthly_price,
             "currency": item.currency,
-            "limits": item.limits,
+            "limits": _serialized_limits(item.limits),
             "enabled": item.enabled,
         }
     finally:
