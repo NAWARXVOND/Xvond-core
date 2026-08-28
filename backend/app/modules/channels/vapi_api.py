@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import json
 import os
-import urllib.error
-import urllib.request
 
+import httpx
 from fastapi import HTTPException
 
 
@@ -28,34 +26,40 @@ def ensure_vapi_configured() -> str:
 def vapi_request(method: str, path: str, payload: dict | None = None):
     api_key = ensure_vapi_configured()
     url = VAPI_API_BASE + "/" + str(path or "").lstrip("/")
-    body = None
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {api_key}",
+        "User-Agent": "Xvond/1.0",
     }
-    if payload is not None:
-        body = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
 
-    request = urllib.request.Request(
-        url=url,
-        data=body,
-        headers=headers,
-        method=method.upper(),
-    )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            raw = response.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        raise HTTPException(
-            status_code=502,
-            detail=f"Vapi API error ({exc.code}): {raw[:800]}",
-        ) from exc
+        response = httpx.request(
+            method=method.upper(),
+            url=url,
+            headers=headers,
+            json=payload,
+            timeout=30.0,
+        )
+        if response.status_code >= 400:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Vapi API error ({response.status_code}): "
+                    f"{response.text[:800]}"
+                ),
+            )
+        if not response.content:
+            return {}
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Vapi API returned an invalid JSON response",
+            ) from exc
     except HTTPException:
         raise
-    except Exception as exc:
+    except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=502,
             detail=f"Vapi API request failed: {exc}",
