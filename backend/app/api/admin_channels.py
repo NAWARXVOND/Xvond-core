@@ -33,6 +33,8 @@ class WhatsAppConfigUpdate(BaseModel):
     verify_token: str | None = None
     app_secret: str | None = None
     graph_api_version: str | None = None
+    # Legacy metadata kept for backward compatibility only. AI Employee profile
+    # is authoritative for language/dialect.
     language: str | None = None
     dialect: str | None = None
     tone: str | None = None
@@ -152,7 +154,8 @@ def create_channel(agent_id: int, data: ChannelCreate, current_admin: User = Dep
             AgentChannel.channel_type == channel_type,
         ).first() is not None:
             raise HTTPException(409, "This channel type is already assigned to the agent")
-        limits_service.check_channel_limit(db, agent.company_id)
+        # Creation is configuration only and starts disabled. Commercial channel
+        # capacity is consumed only when a channel is actually activated.
         channel = AgentChannel(
             company_id=agent.company_id,
             agent_id=agent.id,
@@ -280,6 +283,6 @@ def delete_channel(channel_id: int, current_admin: User = Depends(require_xvond_
             raise HTTPException(404, "Channel not found")
         db.delete(channel)
         db.commit()
-        return {"channel_id": channel_id, "status": "deleted"}
+        return {"status": "deleted", "channel_id": channel_id}
     finally:
         db.close()

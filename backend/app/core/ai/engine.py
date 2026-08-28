@@ -5,6 +5,7 @@ from backend.app.core.ai.base import (
 from backend.app.core.ai.provider_registry import (
     provider_registry,
 )
+from backend.app.core.ai.response_language import apply_response_language
 from backend.app.core.ai.routing_quality import assert_model_quality
 from backend.app.core.config.settings import settings
 from backend.app.core.privacy import (
@@ -83,14 +84,17 @@ class AIEngine:
 
         provider = self.get_provider(provider_name)
         replacements: dict[str, str] | None = None
-        outbound_system_prompt = system_prompt
+        # Language is an AI Employee policy, not a channel policy. Apply it here so
+        # Website, WhatsApp, Voice, test chat and future channels all behave the same.
+        runtime_system_prompt = apply_response_language(system_prompt, user_message)
+        outbound_system_prompt = runtime_system_prompt
         outbound_user_message = user_message
         outbound_tool_outputs = tool_outputs
 
         if settings.AI_PII_REDACTION_ENABLED and provider_name != "mock":
             replacements = {}
             outbound_system_prompt = protect_text(
-                system_prompt,
+                runtime_system_prompt,
                 replacements,
             ).text
             outbound_user_message = protect_text(

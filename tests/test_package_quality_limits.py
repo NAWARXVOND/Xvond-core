@@ -87,7 +87,8 @@ def test_starter_cap_never_routes_to_advanced_or_premium(monkeypatch):
         assert selections
         assert all(item.model not in {"gpt-5.6-terra", "gpt-5.6-sol"} for item in selections)
         assert selections[0].model == "openai/gpt-oss-120b"
-        assert effective_required_quality_tier("تحليل عميق للمشكلة") == 2
+        assert current_quality_tier_cap() is None
+        assert effective_required_quality_tier("تحليل عميق للمشكلة") == 4
     finally:
         set_quality_tier_cap(None)
         db.close()
@@ -109,6 +110,7 @@ def test_business_cap_allows_advanced_but_not_premium(monkeypatch):
         )
         assert selections[0].model == "gpt-5.6-terra"
         assert all(item.model != "gpt-5.6-sol" for item in selections)
+        assert current_quality_tier_cap() is None
     finally:
         set_quality_tier_cap(None)
         db.close()
@@ -129,6 +131,7 @@ def test_enterprise_cap_allows_premium(monkeypatch):
             message="أريد تحليل عميق للمشكلة مع استراتيجية تفصيلية",
         )
         assert selections[0].model == "gpt-5.6-sol"
+        assert current_quality_tier_cap() is None
     finally:
         set_quality_tier_cap(None)
         db.close()
@@ -153,6 +156,7 @@ def test_company_default_above_plan_cap_is_skipped(monkeypatch):
         selections = provider_policy.runtime_selections(db, 44, None, None, message="مرحبا")
         assert all(item.model != "gpt-5.6-sol" for item in selections)
         assert selections[0].model == "openai/gpt-oss-20b"
+        assert current_quality_tier_cap() is None
     finally:
         set_quality_tier_cap(None)
         db.close()

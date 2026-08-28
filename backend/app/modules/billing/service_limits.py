@@ -6,6 +6,7 @@ from sqlalchemy import func, text
 
 from backend.app.modules.ai_agent.models import AIAgent, AIUsage
 from backend.app.modules.billing.service_models import ServicePlan, ServiceSubscription, ServiceUsageEvent
+from backend.app.modules.channels.models import AgentChannel
 
 
 def _utcnow_naive() -> datetime:
@@ -90,6 +91,13 @@ class ServiceLimits:
         if subscription.service_code == "ai_agents" and metric == "agents":
             value = db.query(func.count(AIAgent.id)).filter(
                 AIAgent.company_id == subscription.company_id,
+                AIAgent.enabled.is_(True),
+            ).scalar()
+            return Decimal(str(value or 0))
+        if subscription.service_code == "ai_agents" and metric == "channels":
+            value = db.query(func.count(AgentChannel.id)).filter(
+                AgentChannel.company_id == subscription.company_id,
+                AgentChannel.enabled.is_(True),
             ).scalar()
             return Decimal(str(value or 0))
         if subscription.service_code == "ai_agents" and metric == "tokens":
@@ -118,7 +126,8 @@ class ServiceLimits:
         if requested < 0:
             raise HTTPException(400, "Usage quantity cannot be negative")
         used = self.used(db, subscription, metric)
-        if used + requested > limit:
+        reached = used >= limit if requested == 0 else used + requested > limit
+        if reached:
             raise HTTPException(
                 status_code=403,
                 detail={
