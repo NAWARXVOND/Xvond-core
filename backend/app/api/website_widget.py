@@ -16,6 +16,8 @@ from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
+from backend.app.modules.billing.limits import limits_service
+from backend.app.modules.billing.service_limits import service_limits
 from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeDocument
 
@@ -97,6 +99,12 @@ def _ready(db, channel: AgentChannel) -> list[str]:
     elif not _has_real_runtime_provider(db, channel.company_id, agent):
         blockers.append("At least one real AI provider/model must be configured")
 
+    if not settings.is_test:
+        try:
+            service_limits.entitlement(db, channel.company_id, "ai_agents")
+        except HTTPException:
+            blockers.append("An active AI Agents service subscription is required")
+
     config = reveal_config(channel.config) or {}
     if not str(config.get("allowed_domain") or "").strip():
         blockers.append("Allowed website domain is required")
@@ -130,71 +138,36 @@ def _behavior(config: dict) -> str:
 
 
 @router.get("/admin/website-channel/agents/{agent_id}")
-def get_config(
-    agent_id: int,
-    current_admin: User = Depends(require_xvond_admin),
-):
+def get_config(agent_id: int, current_admin: User = Depends(require_xvond_admin)):
     db = SessionLocal()
     try:
-        channel = (
-            db.query(AgentChannel)
-            .filter(
-                AgentChannel.agent_id == agent_id,
-                AgentChannel.channel_type == "website",
-            )
-            .first()
-        )
+        channel = db.query(AgentChannel).filter(AgentChannel.agent_id == agent_id, AgentChannel.channel_type == "website").first()
         if not channel:
             return {"configured": False}
         config = reveal_config(channel.config) or {}
         blockers = _ready(db, channel)
         safe = {key: value for key, value in config.items() if key != "widget_key"}
-        return {
-            "configured": True,
-            "channel_id": channel.id,
-            "enabled": channel.enabled,
-            "ready": not blockers,
-            "blockers": blockers,
-            "config": safe,
-            "embed_code": _embed(channel.id),
-        }
+        return {"configured": True, "channel_id": channel.id, "enabled": channel.enabled, "ready": not blockers, "blockers": blockers, "config": safe, "embed_code": _embed(channel.id)}
     finally:
         db.close()
 
 
 @router.put("/admin/website-channel/agents/{agent_id}")
-def configure(
-    agent_id: int,
-    data: WebsiteSetup,
-    current_admin: User = Depends(require_xvond_admin),
-):
+def configure(agent_id: int, data: WebsiteSetup, current_admin: User = Depends(require_xvond_admin)):
     db = SessionLocal()
     try:
         agent = db.query(AIAgent).filter(AIAgent.id == agent_id).first()
         if not agent:
             raise HTTPException(404, "AI employee not found")
         domain = _normalized_domain(data.allowed_domain)
-        channel = (
-            db.query(AgentChannel)
-            .filter(
-                AgentChannel.agent_id == agent_id,
-                AgentChannel.channel_type == "website",
-            )
-            .first()
-        )
+        channel = db.query(AgentChannel).filter(AgentChannel.agent_id == agent_id, AgentChannel.channel_type == "website").first()
         config = {
             "allowed_domain": domain,
             "widget_name": (data.widget_name or agent.name).strip()[:120],
-            "welcome_message": (
-                data.welcome_message or "مرحباً، كيف يمكنني مساعدتك؟"
-            ).strip()[:1000],
+            "welcome_message": (data.welcome_message or "مرحباً، كيف يمكنني مساعدتك؟").strip()[:1000],
             "position": "left" if data.position == "left" else "right",
             "custom_instructions": (data.custom_instructions or "").strip()[:4000],
-            "accent_color": (
-                data.accent_color
-                if data.accent_color.startswith("#") and len(data.accent_color) in {4, 7}
-                else "#111827"
-            ),
+            "accent_color": data.accent_color if data.accent_color.startswith("#") and len(data.accent_color) in {4, 7} else "#111827",
             "launcher_label": (data.launcher_label or "Chat").strip()[:30],
         }
         if channel:
@@ -206,73 +179,44 @@ def configure(
             channel.enabled = False
         else:
             config["widget_key"] = secrets.token_urlsafe(32)
-            channel = AgentChannel(
-                company_id=agent.company_id,
-                agent_id=agent.id,
-                channel_type="website",
-                config=config,
-                enabled=False,
-            )
+            channel = AgentChannel(company_id=agent.company_id, agent_id=agent.id, channel_type="website", config=config, enabled=False)
             db.add(channel)
         _ensure_channels_module(db, agent.company_id)
         db.commit()
         db.refresh(channel)
         blockers = _ready(db, channel)
-        return {
-            "status": "configured",
-            "channel_id": channel.id,
-            "ready": not blockers,
-            "blockers": blockers,
-            "embed_code": _embed(channel.id),
-        }
+        return {"status": "configured", "channel_id": channel.id, "ready": not blockers, "blockers": blockers, "embed_code": _embed(channel.id)}
     finally:
         db.close()
 
 
 @router.post("/admin/website-channel/{channel_id}/activate")
-def activate(
-    channel_id: int,
-    current_admin: User = Depends(require_xvond_admin),
-):
+def activate(channel_id: int, current_admin: User = Depends(require_xvond_admin)):
     db = SessionLocal()
     try:
-        channel = (
-            db.query(AgentChannel)
-            .filter(
-                AgentChannel.id == channel_id,
-                AgentChannel.channel_type == "website",
-            )
-            .first()
-        )
+        channel = db.query(AgentChannel).filter(AgentChannel.id == channel_id, AgentChannel.channel_type == "website").first()
         if not channel:
             raise HTTPException(404, "Website channel not found")
         blockers = _ready(db, channel)
         if blockers:
-            raise HTTPException(
-                409, "Website Chat is not ready: " + "; ".join(blockers)
-            )
-        channel.enabled = True
+            raise HTTPException(409, "Website Chat is not ready: " + "; ".join(blockers))
+        if not channel.enabled:
+            limits_service.check_channel_limit(db, channel.company_id)
+            channel.enabled = True
         db.commit()
         return {"status": "active", "channel_id": channel.id}
+    except HTTPException:
+        db.rollback()
+        raise
     finally:
         db.close()
 
 
 @router.post("/admin/website-channel/{channel_id}/deactivate")
-def deactivate(
-    channel_id: int,
-    current_admin: User = Depends(require_xvond_admin),
-):
+def deactivate(channel_id: int, current_admin: User = Depends(require_xvond_admin)):
     db = SessionLocal()
     try:
-        channel = (
-            db.query(AgentChannel)
-            .filter(
-                AgentChannel.id == channel_id,
-                AgentChannel.channel_type == "website",
-            )
-            .first()
-        )
+        channel = db.query(AgentChannel).filter(AgentChannel.id == channel_id, AgentChannel.channel_type == "website").first()
         if not channel:
             raise HTTPException(404, "Website channel not found")
         channel.enabled = False
@@ -286,15 +230,7 @@ def deactivate(
 def widget_js(channel_id: int):
     db = SessionLocal()
     try:
-        channel = (
-            db.query(AgentChannel)
-            .filter(
-                AgentChannel.id == channel_id,
-                AgentChannel.channel_type == "website",
-                AgentChannel.enabled.is_(True),
-            )
-            .first()
-        )
+        channel = db.query(AgentChannel).filter(AgentChannel.id == channel_id, AgentChannel.channel_type == "website", AgentChannel.enabled.is_(True)).first()
         if not channel:
             raise HTTPException(404, "Widget unavailable")
         config = reveal_config(channel.config) or {}
@@ -304,7 +240,6 @@ def widget_js(channel_id: int):
         position = config.get("position") or "right"
         accent = config.get("accent_color") or "#111827"
         label = config.get("launcher_label") or "Chat"
-
         template = r'''(()=>{
 if(window.__xvondWidget)return;
 window.__xvondWidget=1;
@@ -349,14 +284,6 @@ setInterval(poll,2500);
         js = template
         for marker, value in replacements.items():
             js = js.replace(marker, value)
-        return Response(
-            content=js,
-            media_type="application/javascript",
-            headers={"Cache-Control": "no-store"},
-        )
+        return Response(content=js, media_type="application/javascript", headers={"Cache-Control": "no-store"})
     finally:
         db.close()
-
-
-def website_behavior(config: dict) -> str:
-    return _behavior(config)
