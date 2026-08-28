@@ -11,11 +11,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.core.agent_runtime import agent_runtime
 from backend.app.core.config_secrets import reveal_config
+from backend.app.core.customer_runtime_policy import is_service_access_error, safe_service_unavailable_message
 from backend.app.core.database.connection import SessionLocal
-from backend.app.modules.ai_agent.models import AIConversation
+from backend.app.modules.ai_agent.models import AIConversation, AIMessage
 from backend.app.modules.channels.conversation_source import bind_conversation_source
 from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.channels.vapi import build_voice_behavior_prompt, normalize_vapi_messages
+from backend.app.modules.tools.business_models import HumanHandoff
 
 
 router = APIRouter(prefix="/v1/voice", tags=["Voice LLM"])
@@ -125,6 +127,53 @@ def _sse_chunks(conversation_id: int, text: str, model: str) -> Iterator[str]:
     yield "data: [DONE]\n\n"
 
 
+def _voice_service_fallback(db, channel: AgentChannel, transcript: str, conversation_id: int | None, external_call_id: str):
+    db.rollback()
+    conversation = agent_runtime.get_or_create_conversation(
+        db=db,
+        company_id=channel.company_id,
+        agent_id=channel.agent_id,
+        conversation_id=conversation_id,
+        message=transcript,
+    )
+    bind_conversation_source(
+        db,
+        conversation_id=conversation.id,
+        company_id=channel.company_id,
+        agent_id=channel.agent_id,
+        channel_type="voice",
+        channel_id=channel.id,
+        external_contact_id=external_call_id,
+    )
+    agent = agent_runtime.get_agent(db, channel.company_id, channel.agent_id)
+    safe_text = safe_service_unavailable_message(agent.system_prompt or "", transcript)
+    db.add(AIMessage(conversation_id=conversation.id, role="user", content=transcript))
+    db.add(AIMessage(conversation_id=conversation.id, role="assistant", content=safe_text))
+    existing_handoff = (
+        db.query(HumanHandoff)
+        .filter(
+            HumanHandoff.company_id == channel.company_id,
+            HumanHandoff.conversation_id == conversation.id,
+            HumanHandoff.status.in_(["pending", "in_progress"]),
+        )
+        .first()
+    )
+    if existing_handoff is None:
+        db.add(
+            HumanHandoff(
+                company_id=channel.company_id,
+                agent_id=channel.agent_id,
+                conversation_id=conversation.id,
+                reason="service_limit_or_entitlement",
+                priority="high",
+                department="customer_service",
+                status="pending",
+            )
+        )
+    db.commit()
+    return {"conversation_id": conversation.id, "response": {"content": safe_text}}
+
+
 @router.post("/{channel_id}/chat/completions")
 def voice_chat_completions(
     channel_id: int,
@@ -172,14 +221,25 @@ def voice_chat_completions(
             agent.system_prompt = (
                 original_prompt + "\n\n" + build_voice_behavior_prompt(config)
             ).strip()
-            result = agent_runtime.chat(
-                db=db,
-                company_id=channel.company_id,
-                agent_id=channel.agent_id,
-                message=transcript,
-                conversation_id=conversation_id,
-                commit=False,
-            )
+            try:
+                result = agent_runtime.chat(
+                    db=db,
+                    company_id=channel.company_id,
+                    agent_id=channel.agent_id,
+                    message=transcript,
+                    conversation_id=conversation_id,
+                    commit=False,
+                )
+            except HTTPException as exc:
+                if not is_service_access_error(exc):
+                    raise
+                result = _voice_service_fallback(
+                    db,
+                    channel,
+                    transcript,
+                    conversation_id,
+                    external_call_id,
+                )
         finally:
             agent.system_prompt = original_prompt
 
