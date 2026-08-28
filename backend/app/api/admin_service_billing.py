@@ -28,6 +28,7 @@ class ServicePlanInput(BaseModel):
 
 class ServiceSubscriptionInput(BaseModel):
     plan_id: int
+    renew: bool = False
 
 
 class ServiceStatusInput(BaseModel):
@@ -36,6 +37,14 @@ class ServiceStatusInput(BaseModel):
 
 def _utcnow_naive() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _plain_decimal(value) -> str:
+    amount = Decimal(str(value))
+    text = format(amount, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
 
 
 def _validated_limits(value: dict | None) -> dict:
@@ -50,7 +59,17 @@ def _validated_limits(value: dict | None) -> dict:
             raise HTTPException(400, f"Service limit '{metric}' must be numeric") from exc
         if amount < 0:
             raise HTTPException(400, "Service limits cannot be negative")
-        result[metric] = str(amount.normalize()) if amount else 0
+        result[metric] = _plain_decimal(amount) if amount else 0
+    return result
+
+
+def _serialized_limits(limits: dict | None) -> dict:
+    result = {}
+    for key, raw in (limits or {}).items():
+        try:
+            result[key] = _plain_decimal(raw)
+        except (InvalidOperation, ValueError, TypeError):
+            result[key] = raw
     return result
 
 
@@ -62,7 +81,7 @@ def plan_data(item):
         "name": item.name,
         "monthly_price": item.monthly_price,
         "currency": item.currency,
-        "limits": item.limits,
+        "limits": _serialized_limits(item.limits),
         "enabled": item.enabled,
     }
 
@@ -161,10 +180,50 @@ def subscribe_service(
             )
             db.add(item)
         else:
+            previous_plan_id = item.plan_id
+            previous_status = item.status
+            period_expired = item.current_period_end <= now
+            plan_changed = previous_plan_id != plan.id
             item.plan_id = plan.id
             item.status = "active"
-            item.current_period_start = now
-            item.current_period_end = _add_month(now)
+            # Changing plan starts the new plan immediately with a clean billing period.
+            # Saving the same plan does NOT silently renew/reset usage. Renewal must be explicit.
+            if plan_changed or data.renew or period_expired or previous_status == "cancelled":
+                item.current_period_start = now
+                item.current_period_end = _add_month(now)
+        db.commit()
+        db.refresh(item)
+        return company_service_data(db, item, plan)
+    finally:
+        db.close()
+
+
+@router.post("/companies/{company_id}/services/{service_code}/renew")
+def renew_service(
+    company_id: int,
+    service_code: str,
+    current_admin: User = Depends(require_xvond_admin),
+):
+    service_code = service_code.strip().lower()
+    db = SessionLocal()
+    try:
+        item = db.query(ServiceSubscription).filter(
+            ServiceSubscription.company_id == company_id,
+            ServiceSubscription.service_code == service_code,
+        ).first()
+        if item is None:
+            raise HTTPException(status_code=404, detail="Service subscription not found")
+        plan = db.query(ServicePlan).filter(
+            ServicePlan.id == item.plan_id,
+            ServicePlan.enabled.is_(True),
+            ServicePlan.service_code == service_code,
+        ).first()
+        if plan is None:
+            raise HTTPException(status_code=409, detail="Cannot renew a service whose plan is unavailable")
+        now = _utcnow_naive()
+        item.status = "active"
+        item.current_period_start = now
+        item.current_period_end = _add_month(now)
         db.commit()
         db.refresh(item)
         return company_service_data(db, item, plan)
@@ -178,7 +237,7 @@ def company_service_data(db, item, plan=None):
     for metric, limit in (plan.limits or {}).items():
         usage[metric] = {
             "used": service_limits.used(db, item, metric),
-            "limit": limit,
+            "limit": _plain_decimal(limit) if limit not in (None, 0, "0") else 0,
         }
     return {
         "id": item.id,
