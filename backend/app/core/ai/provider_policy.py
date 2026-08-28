@@ -10,6 +10,7 @@ from backend.app.core.ai.routing_quality import (
     effective_required_quality_tier,
     model_allowed_by_quality_cap,
     model_quality_tier,
+    set_quality_tier_cap,
 )
 from backend.app.modules.ai_agent.models import AIUsage
 from backend.app.modules.providers.models import (
@@ -163,20 +164,13 @@ def _automatic_candidates(db, company_id: int, required_tier: int = 1) -> list[P
     ]
 
 
-def runtime_selections(
+def _runtime_selections_with_active_cap(
     db,
     company_id: int,
     provider: str | None,
     model: str | None,
     message: str | None = None,
 ) -> list[ProviderSelection]:
-    """Build the provider/model route for one request.
-
-    Company-pinned models remain first when they fit the active package ceiling.
-    In automatic mode Xvond ranks eligible models by reliability, cost, latency
-    and admin priority. The package max_quality_tier is a hard ceiling while the
-    runtime quality classifier chooses the cheapest sufficient model inside it.
-    """
     selections: list[ProviderSelection] = []
     profile = db.query(CompanyAIProfile).filter(CompanyAIProfile.company_id == company_id).first()
     required_tier = effective_required_quality_tier(message)
@@ -220,3 +214,30 @@ def runtime_selections(
             )
         raise ValueError("No enabled AI provider/model is available")
     return selections
+
+
+def runtime_selections(
+    db,
+    company_id: int,
+    provider: str | None,
+    model: str | None,
+    message: str | None = None,
+) -> list[ProviderSelection]:
+    """Build a package-safe provider/model route and consume the request-local cap.
+
+    Company-pinned models remain first when they fit the active package ceiling.
+    In automatic mode Xvond ranks eligible models by reliability, cost, latency
+    and admin priority. The package cap is needed only while this route is built;
+    clearing it here prevents one company/request from leaking commercial routing
+    state into a later request that reuses the same execution context.
+    """
+    try:
+        return _runtime_selections_with_active_cap(
+            db,
+            company_id,
+            provider,
+            model,
+            message,
+        )
+    finally:
+        set_quality_tier_cap(None)
