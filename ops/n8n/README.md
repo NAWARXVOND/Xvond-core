@@ -116,6 +116,28 @@ A successful side-effect response must only be returned after the external provi
 
 Failures must return `success: false` and an error message without pretending the business operation succeeded.
 
+## Booking adapter
+
+The provider-neutral booking contract is `ops/n8n/booking-adapter.contract.json`.
+
+The workflow database schema for side-effect idempotency is `ops/n8n/idempotency.sql`.
+
+For `booking.execute` and `booking.cancel`, use this order exactly:
+
+1. Validate the canonical Xvond payload.
+2. Atomically claim `idempotency_key` in the workflow database before calling the provider.
+3. If the key already exists with `completed`, return the stored prior result without calling the provider again.
+4. If the key already exists with `processing` or `ambiguous`, do not blindly repeat the provider side effect. Reconcile with the provider first.
+5. Call the configured booking/calendar provider using credentials stored only in the workflow engine.
+6. After confirmed provider success, persist `completed`, the provider reference, and the result payload.
+7. Only then return `success: true` to Xvond.
+8. For a clear provider rejection, persist `failed` and return `success: false`.
+9. For a timeout or unknown provider outcome after the request may have been accepted, persist `ambiguous`; never auto-retry the side effect until reconciliation proves it did not execute.
+
+`booking.check_availability` is read-only and does not require a side-effect claim, but it must still return only provider-confirmed availability.
+
+The first provider binding can be Google Calendar, Microsoft 365 Calendar, a salon/clinic booking API, or another calendar system. The provider binding must preserve the same Xvond booking contract so Xvond Core does not change when providers change.
+
 ## Production promotion checklist
 
 1. Keep the workflow engine bound to localhost and expose it only through the reverse proxy.
