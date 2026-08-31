@@ -32,6 +32,46 @@
       "side_effect": true,
       "idempotent": true,
       "success_data": ["message_id"]
+    },
+    "crm.upsert_contact": {
+      "adapter": "crm",
+      "required_data": ["details", "idempotency_key"],
+      "required_detail_fields": ["customer_name"],
+      "side_effect": true,
+      "idempotent": true,
+      "success_data": ["contact_id"]
+    },
+    "crm.create_lead": {
+      "adapter": "crm",
+      "required_data": ["details", "idempotency_key"],
+      "required_detail_fields": ["customer_name"],
+      "side_effect": true,
+      "idempotent": true,
+      "success_data": ["lead_id"]
+    },
+    "pos.create_order": {
+      "adapter": "pos",
+      "required_data": ["details", "idempotency_key"],
+      "required_detail_fields": ["items"],
+      "side_effect": true,
+      "idempotent": true,
+      "success_data": ["order_id"]
+    },
+    "custom_api.execute": {
+      "adapter": "custom_api",
+      "required_data": ["details", "idempotency_key"],
+      "required_detail_fields": ["operation"],
+      "side_effect": true,
+      "idempotent": true,
+      "success_data": ["provider_reference"]
+    },
+    "notification.send": {
+      "adapter": "notification",
+      "required_data": ["details", "idempotency_key"],
+      "required_detail_fields": ["channel", "recipient", "message"],
+      "side_effect": true,
+      "idempotent": true,
+      "success_data": ["notification_id"]
     }
   },
   "response_contract": {
