@@ -183,6 +183,7 @@ services:
       DB_POSTGRESDB_PASSWORD: ${WORKFLOW_DB_PASSWORD:?WORKFLOW_DB_PASSWORD is required}
       N8N_ENCRYPTION_KEY: ${WORKFLOW_ENCRYPTION_KEY:?WORKFLOW_ENCRYPTION_KEY is required}
       N8N_SHARED_SECRET: ${N8N_SHARED_SECRET:?N8N_SHARED_SECRET is required}
+      XVOND_INTERNAL_ACTION_URL: ${XVOND_INTERNAL_ACTION_URL:-http://app:8000/internal/workflow/xvond-internal}
       N8N_HOST: ${WORKFLOW_HOST:-workflow.xvond.com}
       N8N_PORT: 5678
       N8N_PROTOCOL: https
@@ -198,6 +199,8 @@ services:
       - xvond_workflow_data:/home/node/.n8n
     depends_on:
       workflow-postgres:
+        condition: service_healthy
+      app:
         condition: service_healthy
 
 volumes:
