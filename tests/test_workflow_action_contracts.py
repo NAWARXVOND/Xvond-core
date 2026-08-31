@@ -9,8 +9,12 @@ def test_workflow_action_contracts_are_valid():
     payload = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
     assert payload["version"] == 1
     actions = payload["actions"]
-    assert "create_booking.execute" in actions
+    assert "booking.execute" in actions
     assert "send_email.execute" in actions
+    assert "crm.upsert_contact" in actions
+    assert "pos.create_order" in actions
+    assert "custom_api.execute" in actions
+    assert "notification.send" in actions
 
     for name, contract in actions.items():
         assert "." in name
