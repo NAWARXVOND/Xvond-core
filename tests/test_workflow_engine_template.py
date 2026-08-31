@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 WORKFLOW_PATH = Path("ops/n8n/xvond-actions.workflow.json")
-REGISTRY_PATH = Path("ops/n8n/action-registry.json")
+CONTRACTS_PATH = Path("ops/n8n/action-contracts.json")
 
 
 def _workflow_code() -> str:
@@ -33,23 +33,23 @@ def test_workflow_template_is_valid_and_uses_expected_webhook_contract():
 
 
 def test_registered_actions_are_declared_in_master_workflow():
-    registry = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+    contracts = json.loads(CONTRACTS_PATH.read_text(encoding="utf-8"))
     code = _workflow_code()
-    for action_name in registry["actions"]:
+    for action_name in contracts["actions"]:
         assert action_name in code, f"{action_name} is missing from master workflow routing"
 
 
 def test_mutating_actions_require_idempotency():
-    registry = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
-    assert registry["policy"]["mutating_actions_require_idempotency"] is True
-    for name, spec in registry["actions"].items():
-        if spec.get("mutates"):
+    contracts = json.loads(CONTRACTS_PATH.read_text(encoding="utf-8"))
+    assert contracts["policy"]["mutating_actions_require_idempotency"] is True
+    for name, spec in contracts["actions"].items():
+        if spec.get("side_effect"):
             assert "idempotency_key" in spec.get("required_data", []), name
 
 
 def test_workflow_fail_closed_policy_is_explicit():
-    registry = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
-    policy = registry["policy"]
+    contracts = json.loads(CONTRACTS_PATH.read_text(encoding="utf-8"))
+    policy = contracts["policy"]
     assert policy["provider_success_required_before_success_true"] is True
     assert policy["credentials_live_in_workflow_engine"] is True
     assert policy["xvond_database_access_from_workflows"] is False
