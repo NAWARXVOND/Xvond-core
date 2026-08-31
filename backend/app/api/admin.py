@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from backend.app.core.config.settings import settings
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
+from backend.app.core.n8n_gateway import n8n_gateway
 from backend.app.core.security import hash_password
 from backend.app.core.password_policy import validate_password
 from backend.app.models.company import Company
@@ -22,6 +24,27 @@ class CompanyCreate(BaseModel):
 
 class CompanyStatusUpdate(BaseModel):
     active: bool
+
+
+@router.get("/workflow-engine/status")
+def workflow_engine_status(current_admin: User = Depends(require_xvond_admin)):
+    enabled = bool(settings.N8N_ENABLED)
+    configured = bool(n8n_gateway.configured())
+    if configured:
+        status = "ready"
+    elif enabled:
+        status = "needs_setup"
+    else:
+        status = "disabled"
+    return {
+        "status": status,
+        "enabled": enabled,
+        "configured": configured,
+        "webhook_configured": bool(settings.N8N_WEBHOOK_URL),
+        "authentication_configured": bool(settings.N8N_SHARED_SECRET),
+        "timeout_seconds": settings.N8N_TIMEOUT_SECONDS,
+        "max_retries": settings.N8N_MAX_RETRIES,
+    }
 
 
 @router.post("/companies")
