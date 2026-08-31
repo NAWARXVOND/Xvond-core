@@ -1,4 +1,3 @@
-
 from fastapi import (
     APIRouter,
     Depends,
@@ -58,6 +57,13 @@ def activate_company(
         require_xvond_admin
     ),
 ):
+    """Activate only the company production state.
+
+    AI employee lifecycle is owned exclusively by the Delivery Readiness
+    Draft -> Go Live gate. This endpoint must never enable employees as a side
+    effect, otherwise production activation could bypass employee readiness,
+    package capacity, and channel lifecycle checks.
+    """
     db = SessionLocal()
 
     try:
@@ -101,34 +107,16 @@ def activate_company(
             if item["ready"]
         ]
 
-        if ready_agent_ids:
-            (
-                db.query(AIAgent)
-                .filter(
-                    AIAgent.id.in_(
-                        ready_agent_ids
-                    )
-                )
-                .update(
-                    {
-                        AIAgent.enabled: True
-                    },
-                    synchronize_session=False,
-                )
-            )
-
         db.commit()
 
         return {
             "company_id": company_id,
             "status": "ACTIVE",
-            "ready_agents":
-                ready_agent_ids,
+            "ready_agents": ready_agent_ids,
         }
 
     finally:
         db.close()
-
 
 
 @router.post(
@@ -140,6 +128,11 @@ def deactivate_company(
         require_xvond_admin
     ),
 ):
+    """Emergency company stop: disable the company and all AI employees.
+
+    Re-enabling employees still requires the normal Delivery Readiness Go Live
+    flow, so a company-level stop cannot be undone by this legacy endpoint.
+    """
     db = SessionLocal()
 
     try:
