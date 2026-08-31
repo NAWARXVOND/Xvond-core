@@ -20,10 +20,10 @@ case "$WORKFLOW_PUBLIC_URL" in
     ;;
 esac
 
-docker compose -f "$COMPOSE_FILE" config >/dev/null
-docker compose -f "$COMPOSE_FILE" pull workflow-postgres workflow-engine
-docker compose -f "$COMPOSE_FILE" up -d workflow-postgres workflow-engine
+docker compose -f "$COMPOSE_FILE" --profile workflow config >/dev/null
+docker compose -f "$COMPOSE_FILE" --profile workflow pull workflow-postgres workflow-engine
+docker compose -f "$COMPOSE_FILE" --profile workflow up -d workflow-postgres workflow-engine
 
-docker compose -f "$COMPOSE_FILE" ps workflow-postgres workflow-engine
+docker compose -f "$COMPOSE_FILE" --profile workflow ps workflow-postgres workflow-engine
 
 echo "Workflow engine containers started. Import ops/n8n/xvond-actions.workflow.json and activate it after HTTPS/reverse-proxy setup is verified."
