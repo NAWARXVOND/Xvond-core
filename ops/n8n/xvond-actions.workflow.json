@@ -17,7 +17,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const item = $input.first().json;\nconst headers = item.headers || {};\nconst body = item.body || item;\nconst suppliedSecret = headers['x-xvond-n8n-secret'] || headers['X-Xvond-N8N-Secret'];\nconst expectedSecret = $env.N8N_SHARED_SECRET;\nconst requestId = String(body.request_id || headers['x-xvond-request-id'] || '');\nconst action = String(body.action || '').trim();\nconst data = body.data && typeof body.data === 'object' ? body.data : {};\n\nconst fail = (error, code, extra = {}) => [{ json: { success: false, request_id: requestId, action, data: { code, ...extra }, error } }];\n\nif (!expectedSecret || suppliedSecret !== expectedSecret) {\n  return fail('Unauthorized workflow request', 'unauthorized');\n}\nif (!requestId || !body.company_id || !body.agent_id || !action) {\n  return fail('Invalid workflow request contract', 'invalid_contract');\n}\n\nif (action === 'health_check') {\n  return [{ json: { success: true, request_id: requestId, action, data: { status: 'ok', engine: 'workflow', company_id: body.company_id, agent_id: body.agent_id }, error: null } }];\n}\n\nconst routes = {\n  'create_booking.check_availability': { adapter: 'booking', mutates: false },\n  'create_booking.execute': { adapter: 'booking', mutates: true },\n  'create_booking.cancel': { adapter: 'booking', mutates: true },\n  'send_email.execute': { adapter: 'email', mutates: true },\n  'crm.upsert_contact': { adapter: 'crm', mutates: true },\n  'crm.create_lead': { adapter: 'crm', mutates: true },\n  'pos.create_order': { adapter: 'pos', mutates: true },\n  'custom_api.execute': { adapter: 'custom_api', mutates: true },\n  'notification.send': { adapter: 'notification', mutates: true }\n};\nconst route = routes[action];\nif (!route) {\n  return fail(`Unsupported workflow action: ${action}`, 'unsupported_action');\n}\n\nconst idempotencyKey = String(data.idempotency_key || '');\nif (route.mutates && !idempotencyKey) {\n  return fail('Mutating workflow action requires idempotency_key', 'missing_idempotency_key', { adapter: route.adapter });\n}\n\nreturn fail(`Workflow adapter is not configured: ${route.adapter}`, 'provider_not_configured', { adapter: route.adapter, idempotency_key: idempotencyKey || null });"
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers || {};\nconst body = item.body || item;\nconst suppliedSecret = headers['x-xvond-n8n-secret'] || headers['X-Xvond-N8N-Secret'];\nconst expectedSecret = $env.N8N_SHARED_SECRET;\nconst requestId = String(body.request_id || headers['x-xvond-request-id'] || '');\nconst action = String(body.action || '').trim();\nconst data = body.data && typeof body.data === 'object' ? body.data : {};\n\nconst fail = (error, code, extra = {}) => [{ json: { success: false, request_id: requestId, action, data: { code, ...extra }, error } }];\n\nif (!expectedSecret || suppliedSecret !== expectedSecret) {\n  return fail('Unauthorized workflow request', 'unauthorized');\n}\nif (!requestId || !body.company_id || !body.agent_id || !action) {\n  return fail('Invalid workflow request contract', 'invalid_contract');\n}\n\nif (action === 'health_check') {\n  return [{ json: { success: true, request_id: requestId, action, data: { status: 'ok', engine: 'workflow', company_id: body.company_id, agent_id: body.agent_id }, error: null } }];\n}\n\nconst routes = {\n  'booking.check_availability': { adapter: 'booking', mutates: false },\n  'booking.execute': { adapter: 'booking', mutates: true },\n  'booking.cancel': { adapter: 'booking', mutates: true },\n  'send_email.execute': { adapter: 'email', mutates: true },\n  'crm.upsert_contact': { adapter: 'crm', mutates: true },\n  'crm.create_lead': { adapter: 'crm', mutates: true },\n  'pos.create_order': { adapter: 'pos', mutates: true },\n  'custom_api.execute': { adapter: 'custom_api', mutates: true },\n  'notification.send': { adapter: 'notification', mutates: true }\n};\nconst route = routes[action];\nif (!route) {\n  return fail(`Unsupported workflow action: ${action}`, 'unsupported_action');\n}\n\nconst idempotencyKey = String(data.idempotency_key || '');\nif (route.mutates && !idempotencyKey) {\n  return fail('Mutating workflow action requires idempotency_key', 'missing_idempotency_key', { adapter: route.adapter });\n}\n\nreturn fail(`Workflow adapter is not configured: ${route.adapter}`, 'provider_not_configured', { adapter: route.adapter, idempotency_key: idempotencyKey || null });"
       },
       "id": "validate-dispatch",
       "name": "Validate and Dispatch",
@@ -41,35 +41,15 @@
   "pinData": {},
   "connections": {
     "Xvond Webhook": {
-      "main": [
-        [
-          {
-            "node": "Validate and Dispatch",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "Validate and Dispatch", "type": "main", "index": 0}]]
     },
     "Validate and Dispatch": {
-      "main": [
-        [
-          {
-            "node": "Return to Xvond",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{"node": "Return to Xvond", "type": "main", "index": 0}]]
     }
   },
   "active": false,
-  "settings": {
-    "executionOrder": "v1"
-  },
+  "settings": {"executionOrder": "v1"},
   "versionId": "11111111-1111-4111-8111-111111111111",
-  "meta": {
-    "templateCredsSetupCompleted": true
-  },
+  "meta": {"templateCredsSetupCompleted": true},
   "tags": []
 }
