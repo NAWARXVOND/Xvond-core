@@ -67,3 +67,24 @@ def test_meta_environment_template_contains_no_real_secrets():
     assert "META_APP_SECRET=" in env
     assert "META_WHATSAPP_CONFIG_ID=" in env
     assert "META_WHATSAPP_VERIFY_TOKEN=" in env
+
+
+def test_embedded_signup_launches_whatsapp_business_app_coexistence_flow():
+    js = source("frontend/admin/meta-whatsapp.js")
+    assert "featureType:'whatsapp_business_app_onboarding'" in js
+    assert "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" in js
+    assert "connection_mode:data.event==='FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING'?'coexistence':'embedded_signup'" in js
+
+
+def test_coexistence_completion_can_resolve_missing_phone_number_id_server_side():
+    api = source("backend/app/api/admin_meta_whatsapp.py")
+    assert "phone_number_id: str | None = None" in api
+    assert "_resolve_signup_phone" in api
+    assert "if len(phones) == 1:" in api
+    assert '"meta_embedded_signup_coexistence"' in api
+    assert '"coexistence": connection_mode == "coexistence"' in api
+
+
+def test_coexistence_does_not_guess_when_waba_has_multiple_phone_numbers():
+    api = source("backend/app/api/admin_meta_whatsapp.py")
+    assert "the selected WhatsApp Business Account has multiple phone numbers" in api

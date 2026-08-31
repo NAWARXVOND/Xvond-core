@@ -31,7 +31,8 @@ window.addEventListener('message',event=>{
   let payload=event.data;
   if(typeof payload==='string'){try{payload=JSON.parse(payload)}catch(_){return}}
   if(!payload||payload.type!=='WA_EMBEDDED_SIGNUP')return;
-  if(payload.event==='FINISH'||payload.event==='FINISH_ONLY_WABA')xvondMetaSignupMessage=payload.data||{};
+  const completedEvents=new Set(['FINISH','FINISH_ONLY_WABA','FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING']);
+  if(completedEvents.has(payload.event))xvondMetaSignupMessage={...(payload.data||{}),event:payload.event};
 });
 
 window.openMetaWhatsAppConnect=async function(agentId){
@@ -48,27 +49,32 @@ window.openMetaWhatsAppConnect=async function(agentId){
       config_id:config.config_id,
       response_type:'code',
       override_default_response_type:true,
-      extras:{setup:{},sessionInfoVersion:config.session_info_version||'3'}
+      extras:{
+        setup:{},
+        featureType:'whatsapp_business_app_onboarding',
+        sessionInfoVersion:config.session_info_version||'3'
+      }
     });
   }catch(e){alert(e.message||String(e))}
 };
 
 async function xvondFinishMetaWhatsAppSignup(code){
   try{
-    for(let attempt=0;attempt<24&&!xvondMetaSignupMessage;attempt+=1)await new Promise(r=>setTimeout(r,250));
+    for(let attempt=0;attempt<40&&!xvondMetaSignupMessage;attempt+=1)await new Promise(r=>setTimeout(r,250));
     const data=xvondMetaSignupMessage||{};
     const wabaId=data.waba_id||data.wabaId;
-    const phoneNumberId=data.phone_number_id||data.phoneNumberId;
+    const phoneNumberId=data.phone_number_id||data.phoneNumberId||null;
     const businessId=data.business_id||data.businessId||null;
-    if(!wabaId||!phoneNumberId){alert('Meta authorization succeeded, but the WhatsApp account details were not returned. Finish the Meta setup window completely and try again.');return}
+    if(!wabaId){alert('Meta authorization succeeded, but the WhatsApp Business Account was not returned. Finish the Meta setup window completely and try again.');return}
     const result=await api('/admin/meta/whatsapp/embedded-signup/complete',{
       method:'POST',
       body:JSON.stringify({
         agent_id:xvondMetaSignupState.agentId,
         code:String(code),
         waba_id:String(wabaId),
-        phone_number_id:String(phoneNumberId),
-        business_id:businessId?String(businessId):null
+        phone_number_id:phoneNumberId?String(phoneNumberId):null,
+        business_id:businessId?String(businessId):null,
+        connection_mode:data.event==='FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING'?'coexistence':'embedded_signup'
       })
     });
     closeModal();

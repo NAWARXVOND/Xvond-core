@@ -141,13 +141,12 @@ def _exchange_code_for_token(code: str, config: dict) -> str:
     return token
 
 
-def _verify_phone_belongs_to_waba(
+def _list_waba_phones(
     *,
     waba_id: str,
-    phone_number_id: str,
     access_token: str,
     graph_api_version: str,
-) -> dict:
+) -> list[dict]:
     payload = _graph_request(
         "GET",
         _graph_url(
@@ -157,12 +156,52 @@ def _verify_phone_belongs_to_waba(
         ),
         access_token=access_token,
     )
-    for item in payload.get("data", []) or []:
-        if str(item.get("id") or "") == phone_number_id:
-            return item
+    return [item for item in (payload.get("data", []) or []) if item.get("id")]
+
+
+def _resolve_signup_phone(
+    *,
+    waba_id: str,
+    phone_number_id: str | None,
+    access_token: str,
+    graph_api_version: str,
+) -> dict:
+    phones = _list_waba_phones(
+        waba_id=waba_id,
+        access_token=access_token,
+        graph_api_version=graph_api_version,
+    )
+    requested = str(phone_number_id or "").strip()
+    if requested:
+        for item in phones:
+            if str(item.get("id") or "") == requested:
+                return item
+        raise HTTPException(
+            status_code=400,
+            detail="The selected phone number does not belong to the selected WhatsApp Business Account",
+        )
+    if len(phones) == 1:
+        return phones[0]
+    if not phones:
+        raise HTTPException(status_code=400, detail="Meta returned no phone numbers for the selected WhatsApp Business Account")
     raise HTTPException(
         status_code=400,
-        detail="The selected phone number does not belong to the selected WhatsApp Business Account",
+        detail="Meta did not return a phone number ID and the selected WhatsApp Business Account has multiple phone numbers",
+    )
+
+
+def _verify_phone_belongs_to_waba(
+    *,
+    waba_id: str,
+    phone_number_id: str,
+    access_token: str,
+    graph_api_version: str,
+) -> dict:
+    return _resolve_signup_phone(
+        waba_id=waba_id,
+        phone_number_id=phone_number_id,
+        access_token=access_token,
+        graph_api_version=graph_api_version,
     )
 
 
@@ -192,8 +231,9 @@ class EmbeddedSignupComplete(BaseModel):
     agent_id: int
     code: str
     waba_id: str
-    phone_number_id: str
+    phone_number_id: str | None = None
     business_id: str | None = None
+    connection_mode: str | None = None
 
 
 @router.get("/embedded-signup/config")
@@ -216,7 +256,7 @@ def embedded_signup_config(
             "app_id": config["app_id"] if ready else None,
             "config_id": config["config_id"] if ready else None,
             "graph_api_version": config["graph_api_version"],
-            "feature": "whatsapp_embedded_signup",
+            "feature": "whatsapp_business_app_onboarding",
             "session_info_version": "3",
             "missing_settings": missing,
         }
@@ -232,17 +272,23 @@ def complete_embedded_signup(
     config = _ensure_meta_configured()
     code = data.code.strip()
     waba_id = data.waba_id.strip()
-    phone_number_id = data.phone_number_id.strip()
-    if not code or not waba_id or not phone_number_id:
-        raise HTTPException(400, "code, waba_id and phone_number_id are required")
+    requested_phone_number_id = str(data.phone_number_id or "").strip() or None
+    connection_mode = str(data.connection_mode or "embedded_signup").strip()
+    if connection_mode not in {"embedded_signup", "coexistence"}:
+        raise HTTPException(status_code=400, detail="Invalid WhatsApp connection mode")
+    if not code or not waba_id:
+        raise HTTPException(400, "code and waba_id are required")
 
     access_token = _exchange_code_for_token(code, config)
-    phone = _verify_phone_belongs_to_waba(
+    phone = _resolve_signup_phone(
         waba_id=waba_id,
-        phone_number_id=phone_number_id,
+        phone_number_id=requested_phone_number_id,
         access_token=access_token,
         graph_api_version=config["graph_api_version"],
     )
+    phone_number_id = str(phone.get("id") or "").strip()
+    if not phone_number_id:
+        raise HTTPException(status_code=502, detail="Meta did not return a usable phone number ID")
     _subscribe_app_to_waba(
         waba_id=waba_id,
         access_token=access_token,
@@ -263,6 +309,7 @@ def complete_embedded_signup(
             )
             .first()
         )
+        method = "meta_embedded_signup_coexistence" if connection_mode == "coexistence" else "meta_embedded_signup"
         incoming = {
             "waba_id": waba_id,
             "meta_business_id": data.business_id,
@@ -273,7 +320,8 @@ def complete_embedded_signup(
             "verify_token": config["verify_token"],
             "app_secret": config["app_secret"],
             "graph_api_version": config["graph_api_version"],
-            "connection_method": "meta_embedded_signup",
+            "connection_method": method,
+            "coexistence": connection_mode == "coexistence",
         }
         if channel is None:
             incoming.update(WHATSAPP_BEHAVIOR_DEFAULTS)
@@ -309,7 +357,8 @@ def complete_embedded_signup(
                 "agent_id": agent.id,
                 "waba_id": waba_id,
                 "phone_number_id": phone_number_id,
-                "connection_method": "meta_embedded_signup",
+                "connection_method": method,
+                "coexistence": connection_mode == "coexistence",
                 "webhook_subscribed": True,
                 "runtime_ready": not blockers,
                 "blockers": blockers,
@@ -326,6 +375,7 @@ def complete_embedded_signup(
             "phone_number_id": phone_number_id,
             "display_phone_number": phone.get("display_phone_number"),
             "verified_name": phone.get("verified_name"),
+            "connection_mode": connection_mode,
             "ready": not blockers,
             "blockers": blockers,
         }
