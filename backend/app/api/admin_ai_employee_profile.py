@@ -12,7 +12,6 @@ from backend.app.models.user import User
 from backend.app.modules.ai_agent.factory_models import AgentConfig
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.ai_agent.profile_models import AIAgentProfile
-from backend.app.modules.billing.limits import limits_service
 from backend.app.modules.channels.models import AgentChannel
 
 router = APIRouter(prefix="/admin/ai-employee-profile", tags=["Xvond Admin - AI Employee Profile"])
@@ -46,7 +45,6 @@ class EmployeeProfileUpdate(BaseModel):
     conversation_style: str = "professional_friendly"
     greeting: str | None = None
     instructions: str | None = None
-    # Backward-compatible inputs. Company Profile remains authoritative.
     business_name: str | None = None
     business_type: str | None = None
 
@@ -133,11 +131,6 @@ def _upsert_profile(db, company: Company, agent: AIAgent, data: EmployeeProfileU
 
 
 def _ensure_agent_config(db, agent: AIAgent) -> AgentConfig:
-    """Keep every admin-created AI employee complete for the customer portal.
-
-    Older employees may predate AgentConfig. Create the missing row on access and
-    fill only missing customer-control keys so an explicit False remains respected.
-    """
     row = db.query(AgentConfig).filter(AgentConfig.agent_id == agent.id).first()
     if row is None:
         row = AgentConfig(
@@ -207,15 +200,12 @@ def _backfill_profile(db, company: Company, agent: AIAgent, channels) -> AIAgent
 
 @router.post("/companies/{company_id}")
 def create_profile_employee(company_id: int, data: EmployeeProfileUpdate, current_admin: User = Depends(require_xvond_admin)):
-    """Create the channel-independent AI employee core."""
+    """Create a channel-independent AI employee in draft mode."""
     db = SessionLocal()
     try:
         company = db.query(Company).filter(Company.id == company_id).first()
         if not company:
             raise HTTPException(404, "Company not found")
-        # The product creates enabled employees, so package capacity must be
-        # enforced at this canonical creation path before any row is inserted.
-        limits_service.check_agent_limit(db, company_id)
         for module_name in ("ai_agent", "knowledge", "tools"):
             _ensure_module(db, company_id, module_name)
         provider, model = _select_model(db, company_id)
@@ -226,7 +216,7 @@ def create_profile_employee(company_id: int, data: EmployeeProfileUpdate, curren
             system_prompt=_profile_prompt(company.name, data),
             provider=provider,
             model=model,
-            enabled=True,
+            enabled=False,
         )
         db.add(agent)
         db.flush()
@@ -243,6 +233,7 @@ def create_profile_employee(company_id: int, data: EmployeeProfileUpdate, curren
         payload["dialect"] = _dialect(data.dialect)
         return {
             "status": "created",
+            "lifecycle": "draft",
             "agent_id": agent.id,
             "profile": payload,
         }
