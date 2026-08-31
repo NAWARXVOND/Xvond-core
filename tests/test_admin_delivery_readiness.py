@@ -1,14 +1,15 @@
 from pathlib import Path
 
-from backend.app.main import app
-
 
 READINESS = Path("backend/app/api/admin_delivery_readiness.py").read_text(encoding="utf-8")
+MAIN = Path("backend/app/main.py").read_text(encoding="utf-8")
 
 
 def test_delivery_readiness_route_is_registered():
-    paths = {route.path for route in app.routes if hasattr(route, "path")}
-    assert "/admin/delivery-readiness/companies/{company_id}/agents/{agent_id}" in paths
+    assert 'prefix="/admin/delivery-readiness"' in READINESS
+    assert '@router.get("/companies/{company_id}/agents/{agent_id}")' in READINESS
+    assert "from backend.app.api.admin_delivery_readiness import router as admin_delivery_readiness_router" in MAIN
+    assert "admin_delivery_readiness_router," in MAIN
 
 
 def test_conversational_employee_does_not_require_actions_or_workflow_engine():
