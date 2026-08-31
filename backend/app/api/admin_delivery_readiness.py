@@ -15,7 +15,7 @@ from backend.app.modules.tools.models import AgentToolAssignment
 
 
 router = APIRouter(
-    prefix="/delivery-readiness",
+    prefix="/admin/delivery-readiness",
     tags=["Xvond Admin - Delivery Readiness"],
 )
 
