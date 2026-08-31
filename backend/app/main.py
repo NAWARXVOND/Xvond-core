@@ -41,6 +41,7 @@ from backend.app.api.admin_automation import router as admin_automation_router
 from backend.app.api.admin_analytics_builder import router as admin_analytics_builder_router
 from backend.app.api.admin_service_billing import router as admin_service_billing_router
 from backend.app.api.admin_service_plan_management import router as admin_service_plan_management_router
+from backend.app.api.internal_workflow_actions import router as internal_workflow_actions_router
 from backend.app.api.public_channels import router as public_channels_router
 from backend.app.api.voice_llm import router as voice_llm_router
 from backend.app.api.website_widget import router as website_widget_router
@@ -214,6 +215,7 @@ for r in [
     admin_analytics_builder_router,
     admin_service_billing_router,
     admin_service_plan_management_router,
+    internal_workflow_actions_router,
     ai_agents_router,
     public_channels_router,
     voice_llm_router,

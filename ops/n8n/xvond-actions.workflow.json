@@ -17,13 +17,70 @@
     },
     {
       "parameters": {
-        "jsCode": "const item = $input.first().json;\nconst headers = item.headers || {};\nconst body = item.body || item;\nconst suppliedSecret = headers['x-xvond-n8n-secret'] || headers['X-Xvond-N8N-Secret'];\nconst expectedSecret = $env.N8N_SHARED_SECRET;\nconst requestId = String(body.request_id || headers['x-xvond-request-id'] || '');\nconst action = String(body.action || '').trim();\nconst data = body.data && typeof body.data === 'object' ? body.data : {};\n\nconst fail = (error, code, extra = {}) => [{ json: { success: false, request_id: requestId, action, data: { code, ...extra }, error } }];\n\nif (!expectedSecret || suppliedSecret !== expectedSecret) {\n  return fail('Unauthorized workflow request', 'unauthorized');\n}\nif (!requestId || !body.company_id || !body.agent_id || !action) {\n  return fail('Invalid workflow request contract', 'invalid_contract');\n}\n\nif (action === 'health_check') {\n  return [{ json: { success: true, request_id: requestId, action, data: { status: 'ok', engine: 'workflow', company_id: body.company_id, agent_id: body.agent_id }, error: null } }];\n}\n\nconst routes = {\n  'booking.check_availability': { adapter: 'booking', mutates: false },\n  'booking.execute': { adapter: 'booking', mutates: true },\n  'booking.cancel': { adapter: 'booking', mutates: true },\n  'send_email.execute': { adapter: 'email', mutates: true },\n  'crm.upsert_contact': { adapter: 'crm', mutates: true },\n  'crm.create_lead': { adapter: 'crm', mutates: true },\n  'pos.create_order': { adapter: 'pos', mutates: true },\n  'custom_api.execute': { adapter: 'custom_api', mutates: true },\n  'notification.send': { adapter: 'notification', mutates: true }\n};\nlet route = routes[action];\nlet actionKey = '';\nlet operation = '';\nif (!route) {\n  const match = action.match(/^([a-z0-9][a-z0-9_\\-]{0,127})\\.(check_availability|execute|cancel)$/i);\n  if (!match) {\n    return fail(`Unsupported workflow action: ${action}`, 'unsupported_action');\n  }\n  actionKey = match[1];\n  operation = match[2];\n  const configuredAction = data.action_config && typeof data.action_config === 'object' ? data.action_config : null;\n  const declaredActionType = String(data.action_type || '').trim();\n  const moduleName = String(configuredAction?.module || '').trim();\n  const destination = configuredAction?.destination && typeof configuredAction.destination === 'object' ? configuredAction.destination : {};\n  const destinationType = String(destination.type || '').trim();\n  if (!configuredAction || !declaredActionType || declaredActionType !== actionKey || !moduleName) {\n    return fail('Invalid generic business action contract', 'invalid_business_action', { action_key: actionKey || null });\n  }\n  route = {\n    adapter: 'business',\n    mutates: operation !== 'check_availability',\n    action_key: actionKey,\n    operation,\n    module: moduleName,\n    destination_type: destinationType || 'unconfigured'\n  };\n}\n\nconst idempotencyKey = String(data.idempotency_key || '');\nif (route.mutates && !idempotencyKey) {\n  return fail('Mutating workflow action requires idempotency_key', 'missing_idempotency_key', { adapter: route.adapter });\n}\n\nreturn fail(`Workflow adapter is not configured: ${route.adapter}`, 'provider_not_configured', { adapter: route.adapter, action_key: route.action_key || null, operation: route.operation || null, module: route.module || null, destination_type: route.destination_type || null, idempotency_key: idempotencyKey || null });"
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers || {};\nconst body = item.body || item;\nconst suppliedSecret = headers['x-xvond-n8n-secret'] || headers['X-Xvond-N8N-Secret'];\nconst expectedSecret = $env.N8N_SHARED_SECRET;\nconst requestId = String(body.request_id || headers['x-xvond-request-id'] || '');\nconst action = String(body.action || '').trim();\nconst data = body.data && typeof body.data === 'object' ? body.data : {};\nconst configuredAction = data.action_config && typeof data.action_config === 'object' ? data.action_config : null;\nconst destination = configuredAction?.destination && typeof configuredAction.destination === 'object' ? configuredAction.destination : {};\nconst destinationType = String(destination.type || '').trim();\n\nconst fail = (error, code, extra = {}) => [{ json: { success: false, request_id: requestId, action, data: { code, ...extra }, error } }];\n\nif (!expectedSecret || suppliedSecret !== expectedSecret) {\n  return fail('Unauthorized workflow request', 'unauthorized');\n}\nif (!requestId || !body.company_id || !body.agent_id || !action) {\n  return fail('Invalid workflow request contract', 'invalid_contract');\n}\n\nif (action === 'health_check') {\n  return [{ json: { success: true, request_id: requestId, action, data: { status: 'ok', engine: 'workflow', company_id: body.company_id, agent_id: body.agent_id }, error: null } }];\n}\n\nconst routes = {\n  'booking.check_availability': { adapter: 'booking', mutates: false, operation: 'check_availability' },\n  'booking.execute': { adapter: 'booking', mutates: true, operation: 'execute' },\n  'booking.cancel': { adapter: 'booking', mutates: true, operation: 'cancel' },\n  'send_email.execute': { adapter: 'email', mutates: true, operation: 'execute' },\n  'crm.upsert_contact': { adapter: 'crm', mutates: true },\n  'crm.create_lead': { adapter: 'crm', mutates: true },\n  'pos.create_order': { adapter: 'pos', mutates: true },\n  'custom_api.execute': { adapter: 'custom_api', mutates: true, operation: 'execute' },\n  'notification.send': { adapter: 'notification', mutates: true }\n};\nlet route = routes[action];\nlet actionKey = '';\nlet operation = route?.operation || '';\nif (!route) {\n  const match = action.match(/^([a-z0-9][a-z0-9_\\-]{0,127})\\.(check_availability|execute|cancel)$/i);\n  if (!match) {\n    return fail(`Unsupported workflow action: ${action}`, 'unsupported_action');\n  }\n  actionKey = match[1];\n  operation = match[2];\n  const declaredActionType = String(data.action_type || '').trim();\n  const moduleName = String(configuredAction?.module || '').trim();\n  if (!configuredAction || !declaredActionType || declaredActionType !== actionKey || !moduleName) {\n    return fail('Invalid generic business action contract', 'invalid_business_action', { action_key: actionKey || null });\n  }\n  route = {\n    adapter: 'business',\n    mutates: operation !== 'check_availability',\n    action_key: actionKey,\n    operation,\n    module: moduleName,\n    destination_type: destinationType || 'unconfigured'\n  };\n}\n\nconst idempotencyKey = String(data.idempotency_key || '');\nif (route.mutates && !idempotencyKey) {\n  return fail('Mutating workflow action requires idempotency_key', 'missing_idempotency_key', { adapter: route.adapter });\n}\n\nif (configuredAction && destinationType === 'xvond_internal' && ['check_availability', 'execute', 'cancel'].includes(operation)) {\n  return [{ json: {\n    _dispatch: 'xvond_internal',\n    company_id: body.company_id,\n    agent_id: body.agent_id,\n    conversation_id: body.conversation_id || null,\n    action,\n    request_id: requestId,\n    data\n  } }];\n}\n\nreturn fail(`Workflow adapter is not configured: ${route.adapter}`, 'provider_not_configured', { adapter: route.adapter, action_key: route.action_key || null, operation: route.operation || null, module: route.module || null, destination_type: destinationType || route.destination_type || null, idempotency_key: idempotencyKey || null });"
       },
       "id": "validate-dispatch",
       "name": "Validate and Dispatch",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "dispatch-xvond-internal",
+              "leftValue": "={{ $json._dispatch }}",
+              "rightValue": "xvond_internal",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "route-xvond-internal",
+      "name": "Xvond Internal?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [740, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.XVOND_INTERNAL_ACTION_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Xvond-N8N-Secret",
+              "value": "={{ $env.N8N_SHARED_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ company_id: $json.company_id, agent_id: $json.agent_id, conversation_id: $json.conversation_id, action: $json.action, request_id: $json.request_id, data: $json.data }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "execute-xvond-internal",
+      "name": "Execute Xvond Internal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [980, 220]
     },
     {
       "parameters": {
@@ -35,7 +92,7 @@
       "name": "Return to Xvond",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.4,
-      "position": [760, 300]
+      "position": [1220, 300]
     }
   ],
   "pinData": {},
@@ -44,12 +101,21 @@
       "main": [[{"node": "Validate and Dispatch", "type": "main", "index": 0}]]
     },
     "Validate and Dispatch": {
+      "main": [[{"node": "Xvond Internal?", "type": "main", "index": 0}]]
+    },
+    "Xvond Internal?": {
+      "main": [
+        [{"node": "Execute Xvond Internal", "type": "main", "index": 0}],
+        [{"node": "Return to Xvond", "type": "main", "index": 0}]
+      ]
+    },
+    "Execute Xvond Internal": {
       "main": [[{"node": "Return to Xvond", "type": "main", "index": 0}]]
     }
   },
   "active": false,
   "settings": {"executionOrder": "v1"},
-  "versionId": "11111111-1111-4111-8111-111111111111",
+  "versionId": "22222222-2222-4222-8222-222222222222",
   "meta": {"templateCredsSetupCompleted": true},
   "tags": []
 }
