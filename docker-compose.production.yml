@@ -152,6 +152,7 @@ services:
     image: postgres:17
     container_name: xvond-workflow-postgres
     restart: unless-stopped
+    profiles: ["workflow"]
     environment:
       POSTGRES_USER: ${WORKFLOW_DB_USER:-xvond_workflow}
       POSTGRES_PASSWORD: ${WORKFLOW_DB_PASSWORD:?WORKFLOW_DB_PASSWORD is required}
@@ -172,6 +173,7 @@ services:
     image: n8nio/n8n:${WORKFLOW_ENGINE_VERSION:?WORKFLOW_ENGINE_VERSION is required}
     container_name: xvond-workflow-engine
     restart: unless-stopped
+    profiles: ["workflow"]
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: workflow-postgres
