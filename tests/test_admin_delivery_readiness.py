@@ -7,7 +7,7 @@ READINESS = Path("backend/app/api/admin_delivery_readiness.py").read_text(encodi
 
 
 def test_delivery_readiness_route_is_registered():
-    paths = {route.path for route in app.routes}
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
     assert "/admin/delivery-readiness/companies/{company_id}/agents/{agent_id}" in paths
 
 
