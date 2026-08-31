@@ -8,12 +8,19 @@ PROFILE_API = Path("backend/app/api/admin_ai_employee_profile.py").read_text(enc
 
 def test_admin_loads_ai_employee_setup_guide():
     assert "/static/admin/ai-employee-setup-guide.js" in INDEX
-    assert "Setup Guide" in GUIDE
+    assert "Check Delivery Readiness" in GUIDE
     assert "Business knowledge" in GUIDE
     assert "Allowed business actions" in GUIDE
     assert "Customer channels" in GUIDE
     assert "Connected apps for execution" in GUIDE
     assert "Workflow Engine" in GUIDE
+
+
+def test_setup_guide_uses_backend_delivery_readiness():
+    assert "/admin/delivery-readiness/companies/${companyId}/agents/${agentId}" in GUIDE
+    assert "Ready for customer" in GUIDE
+    assert "Not ready for customer" in GUIDE
+    assert "actionsOptional=s.enabledActions===0" in GUIDE
 
 
 def test_setup_guide_keeps_execution_authority_in_workflow_engine():
