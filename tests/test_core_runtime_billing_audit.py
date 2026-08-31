@@ -95,10 +95,14 @@ def test_channel_capacity_is_consumed_on_activation_not_disabled_creation():
     assert "limits_service.check_channel_limit" in activation_block
 
 
-def test_canonical_employee_creation_and_customer_reactivation_enforce_capacity():
+def test_ai_employee_capacity_is_consumed_on_go_live_not_draft_creation():
     admin_source = open("backend/app/api/admin_ai_employee_profile.py", encoding="utf-8").read()
+    delivery_source = open("backend/app/api/admin_delivery_readiness.py", encoding="utf-8").read()
     customer_source = open("backend/app/api/customer_agents.py", encoding="utf-8").read()
-    assert "limits_service.check_agent_limit(db, company_id)" in admin_source
+    creation_block = admin_source.split('@router.post("/companies/{company_id}")', 1)[1].split('@router.get("/companies/{company_id}/{agent_id}")', 1)[0]
+    assert "limits_service.check_agent_limit" not in creation_block
+    assert "enabled=False" in creation_block
+    assert "limits_service.check_agent_limit(db, company_id)" in delivery_source
     assert "limits_service.check_agent_limit(db, current_user.company_id)" in customer_source
     assert "Depends(require_customer_user)" in customer_source
 
