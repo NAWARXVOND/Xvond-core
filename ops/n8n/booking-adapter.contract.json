@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "adapter": "booking",
+  "provider_neutral": true,
+  "operations": {
+    "booking.check_availability": {
+      "input": {
+        "required": ["company_id", "agent_id", "request_id", "details"],
+        "details_required": ["date", "time"]
+      },
+      "output": {
+        "success_data": ["available", "available_slots"]
+      },
+      "side_effect": false
+    },
+    "booking.execute": {
+      "input": {
+        "required": ["company_id", "agent_id", "request_id", "details", "idempotency_key"],
+        "details_required": ["date", "time", "customer_name"]
+      },
+      "output": {
+        "success_data": ["booking_id"]
+      },
+      "side_effect": true,
+      "idempotency": {
+        "claim_before_provider_call": true,
+        "completed_returns_stored_result": true,
+        "processing_requires_reconciliation": true,
+        "ambiguous_requires_reconciliation": true
+      }
+    },
+    "booking.cancel": {
+      "input": {
+        "required": ["company_id", "agent_id", "request_id", "details", "idempotency_key"]
+      },
+      "output": {
+        "success_data": ["cancelled"]
+      },
+      "side_effect": true,
+      "idempotency": {
+        "claim_before_provider_call": true,
+        "completed_returns_stored_result": true,
+        "processing_requires_reconciliation": true,
+        "ambiguous_requires_reconciliation": true
+      }
+    }
+  },
+  "provider_rules": {
+    "credentials_live_in_workflow_engine": true,
+    "provider_success_required_for_success_true": true,
+    "provider_reference_should_be_persisted": true,
+    "xvond_database_access_forbidden": true
+  }
+}
