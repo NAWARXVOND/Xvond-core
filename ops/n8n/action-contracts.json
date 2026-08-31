@@ -2,28 +2,49 @@
   "version": 1,
   "actions": {
     "create_booking.check_availability": {
+      "adapter": "booking",
       "required_data": ["details"],
       "required_detail_fields": ["date", "time"],
       "side_effect": false,
-      "idempotent": true
+      "idempotent": true,
+      "success_data": ["available", "available_slots"]
     },
     "create_booking.execute": {
+      "adapter": "booking",
       "required_data": ["request_id", "details", "idempotency_key"],
       "required_detail_fields": ["date", "time", "customer_name"],
       "side_effect": true,
-      "idempotent": true
+      "idempotent": true,
+      "success_data": ["booking_id"]
     },
     "create_booking.cancel": {
+      "adapter": "booking",
       "required_data": ["request_id", "details", "idempotency_key"],
       "required_detail_fields": [],
       "side_effect": true,
-      "idempotent": true
+      "idempotent": true,
+      "success_data": ["cancelled"]
     },
     "send_email.execute": {
+      "adapter": "email",
       "required_data": ["request_id", "details", "idempotency_key"],
       "required_detail_fields": ["to", "subject", "body"],
       "side_effect": true,
-      "idempotent": true
+      "idempotent": true,
+      "success_data": ["message_id"]
     }
+  },
+  "response_contract": {
+    "success": "boolean",
+    "request_id": "string",
+    "action": "string",
+    "data": "object|null",
+    "error": "string|null"
+  },
+  "policy": {
+    "mutating_actions_require_idempotency": true,
+    "provider_success_required_before_success_true": true,
+    "credentials_live_in_workflow_engine": true,
+    "xvond_database_access_from_workflows": false
   }
 }
