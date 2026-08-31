@@ -33,8 +33,13 @@ def test_customer_delivery_flow_requires_knowledge_and_configured_channel_before
 def test_customer_delivery_flow_requires_live_channel_only_after_employee_goes_live():
     assert 'elif not channels["live"]' in READINESS_API
     assert 'blockers.append("Activate at least one customer channel")' in READINESS_API
-    assert 'ready_for_customer = bool(agent.enabled and setup_ready and channels["live"])' in READINESS_API
+    assert 'company.active and agent.enabled and setup_ready and channels["live"]' in READINESS_API
     assert '"live_channels": channels["live"]' in READINESS_API
+
+
+def test_customer_delivery_flow_requires_company_activation_before_employee_go_live():
+    assert '"company_active": bool(company.active)' in READINESS_API
+    assert "Activate the company before the AI employee goes live" in READINESS_API
 
 
 def test_customer_delivery_flow_supports_reply_only_and_operational_employees():
