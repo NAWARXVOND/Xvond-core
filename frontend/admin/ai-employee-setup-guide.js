@@ -29,11 +29,33 @@
   }
 
   function deliverySummary(readiness){
-    const ready=readiness?.ready_for_customer===true;
+    const live=readiness?.ready_for_customer===true;
+    const setupReady=readiness?.setup_ready===true;
     const mode=readiness?.mode==='conversational_and_operational'?'Conversation + Actions':'Conversation';
-    const blockers=Array.isArray(readiness?.blockers)?readiness.blockers:[];
-    return `<div class="source-of-truth-box" style="margin-bottom:14px"><strong>${ready?'Ready for customer':'Not ready for customer'}</strong><div>${f(mode)}${ready?' · This employee passed the delivery checks.':''}</div>${blockers.length?`<div class="meta" style="margin-top:8px">${blockers.map(x=>`• ${f(x)}`).join('<br>')}</div>`:''}</div>`;
+    const blockers=Array.isArray(readiness?.setup_blockers)?readiness.setup_blockers:[];
+    const title=live?'Live for customer':setupReady?'Ready to go live':'Not ready to go live';
+    const detail=live?'This employee passed the delivery checks and is active.':setupReady?'All setup checks passed. Activate only when you are ready for real customer traffic.':'';
+    return `<div class="source-of-truth-box" style="margin-bottom:14px"><strong>${title}</strong><div>${f(mode)}${detail?' · '+f(detail):''}</div>${blockers.length?`<div class="meta" style="margin-top:8px">${blockers.map(x=>`• ${f(x)}`).join('<br>')}</div>`:''}</div>`;
   }
+
+  async function refreshDeliveryGuide(companyId,agentId){
+    await openSimpleCompany(companyId);
+    await openAIEmployeeSetupGuide(agentId);
+  }
+
+  window.goLiveAIEmployee=async function(companyId,agentId){
+    try{
+      await api(`/admin/delivery-readiness/companies/${companyId}/agents/${agentId}/go-live`,{method:'POST',body:'{}'});
+      await refreshDeliveryGuide(companyId,agentId);
+    }catch(error){alert(error.message)}
+  };
+
+  window.deactivateAIEmployee=async function(companyId,agentId){
+    try{
+      await api(`/admin/delivery-readiness/companies/${companyId}/agents/${agentId}/deactivate`,{method:'POST',body:'{}'});
+      await refreshDeliveryGuide(companyId,agentId);
+    }catch(error){alert(error.message)}
+  };
 
   window.openAIEmployeeSetupGuide=async function(agentId){
     const d=xvondWorkspace.data;
@@ -45,12 +67,17 @@
     try{
       readiness=await api(`/admin/delivery-readiness/companies/${companyId}/agents/${agentId}`);
     }catch(error){
-      readiness={ready_for_customer:false,mode:'unknown',blockers:[error.message||'Could not check delivery readiness']};
+      readiness={ready_for_customer:false,setup_ready:false,mode:'unknown',setup_blockers:[error.message||'Could not check delivery readiness']};
     }
     const actionsOptional=s.enabledActions===0;
+    const lifecycleAction=readiness?.ready_for_customer
+      ? `<button class="table-button" onclick="deactivateAIEmployee(${companyId},${agentId})">Deactivate</button>`
+      : readiness?.setup_ready
+        ? `<button class="primary-button" onclick="goLiveAIEmployee(${companyId},${agentId})">Go Live</button>`
+        : '';
     openModal(`Setup ${row.agent.name}`,`
       ${deliverySummary(readiness)}
-      <div class="modal-intro"><strong>Configure this employee for the customer's requested service</strong><p>Xvond keeps one employee brain across every channel. Add only the knowledge, actions, channels and connected apps this customer needs.</p></div>
+      <div class="modal-intro"><strong>Configure this employee for the customer's requested service</strong><p>New employees stay in Draft until all required setup passes and you explicitly choose Go Live.</p></div>
       <div class="readiness-list">
         ${step('1. Employee identity & behavior',Boolean(readiness?.checks?.profile),'Edit',`openEditAIEmployee(${companyId},${agentId})`)}
         ${step('2. Business knowledge',Boolean(readiness?.checks?.knowledge),'Knowledge',`openKnowledgeManager(${companyId},${agentId})`)}
@@ -64,7 +91,7 @@
         <div class="metric-card"><span>Enabled Actions</span><strong>${Number(readiness?.counts?.enabled_actions||0)}</strong></div>
       </div>
       <div class="source-of-truth-box"><strong>Execution rule</strong><div>The AI employee decides what action is allowed. Business side effects are executed only through the Workflow Engine. A customer must never be told an operation succeeded until execution returns success.</div></div>
-      <div class="workspace-inline-actions" style="margin-top:14px"><button class="table-button" onclick="openAgentTestChat(${companyId},${agentId})">Test Employee</button>${readiness?.checks?.workflow_engine===false?`<button class="primary-button" onclick="closeModal();switchWorkspaceTab('workflow')">Workflow Engine</button>`:''}</div>
+      <div class="workspace-inline-actions" style="margin-top:14px"><button class="table-button" onclick="openAgentTestChat(${companyId},${agentId})">Test Employee</button>${readiness?.checks?.workflow_engine===false?`<button class="primary-button" onclick="closeModal();switchWorkspaceTab('workflow')">Workflow Engine</button>`:''}${lifecycleAction}</div>
     `);
   };
 
@@ -75,9 +102,10 @@
     const rows=d.agentMeta.map(row=>{
       const s=setupState(row,d);
       const configured=s.profile&&s.knowledge&&s.channels&&(s.enabledActions===0||s.readyActions===s.enabledActions);
-      return `<div class="integration-card"><div class="integration-card-head"><div><h4>${f(row.agent.name)}</h4><div class="meta">${configured?'Configuration complete':'Setup still needs attention'}</div></div>${wsPill(configured?'Configured':'Setup',configured?'good':'neutral')}</div><div class="meta">${s.readyActions} ready actions · ${s.connectedChannels} connected channels · ${s.connectedApps} connected apps</div><div class="workspace-inline-actions"><button class="primary-button" onclick="openAIEmployeeSetupGuide(${row.agent.id})">Check Delivery Readiness</button></div></div>`;
+      const live=row.agent.enabled===true;
+      return `<div class="integration-card"><div class="integration-card-head"><div><h4>${f(row.agent.name)}</h4><div class="meta">${live?'Live':configured?'Draft · configuration complete':'Draft · setup still needs attention'}</div></div>${wsPill(live?'Live':configured?'Draft Ready':'Draft',live?'good':'neutral')}</div><div class="meta">${s.readyActions} ready actions · ${s.connectedChannels} connected channels · ${s.connectedApps} connected apps</div><div class="workspace-inline-actions"><button class="primary-button" onclick="openAIEmployeeSetupGuide(${row.agent.id})">Check Delivery Readiness</button></div></div>`;
     }).join('');
-    const guide=`<div class="workspace-panel" style="margin-bottom:16px"><div class="workspace-panel-head"><div><h3>AI Employee Delivery</h3><p>Create the employee, configure only what the customer ordered, then run the delivery readiness check before activation.</p></div><button class="primary-button" onclick="openAddAIEmployee(${d.view.company.id})">+ AI Employee</button></div><div class="integration-grid">${rows}</div></div>`;
+    const guide=`<div class="workspace-panel" style="margin-bottom:16px"><div class="workspace-panel-head"><div><h3>AI Employee Delivery</h3><p>Create in Draft, configure what the customer ordered, test it, then Go Live only after delivery readiness passes.</p></div><button class="primary-button" onclick="openAddAIEmployee(${d.view.company.id})">+ AI Employee</button></div><div class="integration-grid">${rows}</div></div>`;
     return guide+html;
   };
 })();
