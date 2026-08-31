@@ -26,6 +26,21 @@ def test_operational_employee_requires_workflow_and_configured_integrations():
     assert "N8N_SHARED_SECRET" in READINESS
 
 
+def test_readiness_separates_setup_ready_from_live_customer_state():
+    assert '"setup_ready": setup_ready' in READINESS
+    assert '"ready_for_customer": bool(agent.enabled and setup_ready)' in READINESS
+    assert '"lifecycle": "live" if agent.enabled else "draft"' in READINESS
+    assert 'blockers.insert(0, "AI employee is in draft mode")' in READINESS
+
+
+def test_go_live_is_guarded_by_setup_and_plan_capacity():
+    assert '@router.post("/companies/{company_id}/agents/{agent_id}/go-live")' in READINESS
+    assert 'if not state["payload"]["setup_ready"]' in READINESS
+    assert "limits_service.check_agent_limit(db, company_id)" in READINESS
+    assert "agent.enabled = True" in READINESS
+    assert '@router.post("/companies/{company_id}/agents/{agent_id}/deactivate")' in READINESS
+
+
 def test_readiness_checks_customer_delivery_basics():
     for value in (
         "employee_enabled",
@@ -36,5 +51,6 @@ def test_readiness_checks_customer_delivery_basics():
         "workflow_engine",
         "connected_apps",
         "ready_for_customer",
+        "setup_ready",
     ):
         assert value in READINESS
