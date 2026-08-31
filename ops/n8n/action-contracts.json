@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "actions": {
+    "create_booking.check_availability": {
+      "required_data": ["details"],
+      "required_detail_fields": ["date", "time"],
+      "side_effect": false,
+      "idempotent": true
+    },
+    "create_booking.execute": {
+      "required_data": ["request_id", "details", "idempotency_key"],
+      "required_detail_fields": ["date", "time", "customer_name"],
+      "side_effect": true,
+      "idempotent": true
+    },
+    "create_booking.cancel": {
+      "required_data": ["request_id", "details", "idempotency_key"],
+      "required_detail_fields": [],
+      "side_effect": true,
+      "idempotent": true
+    },
+    "send_email.execute": {
+      "required_data": ["request_id", "details", "idempotency_key"],
+      "required_detail_fields": ["to", "subject", "body"],
+      "side_effect": true,
+      "idempotent": true
+    }
+  }
+}
