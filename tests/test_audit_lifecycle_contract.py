@@ -42,6 +42,13 @@ def test_only_workflow_backed_action_tool_is_registered():
     assert "action_request_tool" not in BOOTSTRAP.replace("workflow_action_request_tool", "")
 
 
+def test_direct_business_builtins_are_not_registered_into_live_runtime():
+    assert '_CONTROL_PLANE_BUILTINS = {"human_handoff"}' in BOOTSTRAP
+    assert "tool for tool in BUILTIN_TOOLS if tool.name in _CONTROL_PLANE_BUILTINS" in BOOTSTRAP
+    for direct_tool in ("booking", "order", "webhook", "custom_api", "lead"):
+        assert f'"{direct_tool}"' not in BOOTSTRAP.split("_CONTROL_PLANE_BUILTINS =", 1)[1].split("\n\n", 1)[0]
+
+
 def test_unreachable_duplicate_company_admin_module_is_removed():
     assert not Path("backend/app/api/admin_companies.py").exists()
 
