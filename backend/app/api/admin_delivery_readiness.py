@@ -15,7 +15,7 @@ from backend.app.modules.tools.models import AgentToolAssignment
 
 
 router = APIRouter(
-    prefix="/admin/delivery-readiness",
+    prefix="/delivery-readiness",
     tags=["Xvond Admin - Delivery Readiness"],
 )
 
@@ -60,7 +60,7 @@ def _action_state(db, company_id: int, agent_id: int) -> dict:
 
     return {
         "requested": bool(enabled_actions),
-        "ready": bool(enabled_actions) and not issues if enabled_actions else True,
+        "ready": not issues,
         "enabled_count": len(enabled_actions),
         "issues": issues,
         "requires_workflow_engine": bool(enabled_actions),
