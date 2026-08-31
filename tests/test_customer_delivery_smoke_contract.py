@@ -14,16 +14,18 @@ def test_customer_delivery_flow_has_company_creation_entrypoint():
     assert "await openCompany(data.company.id)" in APP
 
 
-def test_customer_delivery_flow_has_canonical_employee_creation():
+def test_customer_delivery_flow_has_canonical_employee_creation_in_draft():
     assert "openAddAIEmployee(companyId)" in APP
     assert 'api(`/admin/ai-employee-profile/companies/${simpleCompanyId}`' in EMPLOYEE
     assert '@router.post("/companies/{company_id}")' in PROFILE_API
     assert 'for module_name in ("ai_agent", "knowledge", "tools")' in PROFILE_API
+    assert "enabled=False" in PROFILE_API
+    assert '"lifecycle": "draft"' in PROFILE_API
 
 
-def test_customer_delivery_flow_requires_knowledge_and_channel_before_ready():
-    assert 'blockers.append("Attach at least one enabled knowledge source")' in READINESS_API
-    assert 'blockers.append("Connect and enable at least one customer channel")' in READINESS_API
+def test_customer_delivery_flow_requires_knowledge_and_channel_before_setup_ready():
+    assert 'setup_blockers.append("Attach at least one enabled knowledge source")' in READINESS_API
+    assert 'setup_blockers.append("Connect and enable at least one customer channel")' in READINESS_API
     assert "openKnowledgeManager" in GUIDE
     assert "switchWorkspaceTab('channels')" in GUIDE
 
@@ -41,10 +43,11 @@ def test_customer_delivery_flow_checks_execution_dependencies_only_when_needed()
     assert "Connected App #" in READINESS_API
 
 
-def test_customer_delivery_flow_has_internal_test_chat_before_handoff():
+def test_customer_delivery_flow_has_internal_test_chat_before_go_live():
     assert "openAgentTestChat(companyId,agentId)" in APP
     assert '/admin/companies/${companyId}/agents/${agentId}/test-chat' in APP
     assert "Test Employee" in GUIDE
+    assert "Go Live" in GUIDE
 
 
 def test_delivery_readiness_is_registered_in_application():
@@ -54,7 +57,10 @@ def test_delivery_readiness_is_registered_in_application():
     assert "/admin/delivery-readiness/companies/${companyId}/agents/${agentId}" in GUIDE
 
 
-def test_delivery_contract_exposes_single_final_customer_verdict():
-    assert '"ready_for_customer": ready' in READINESS_API
-    assert "Ready for customer" in GUIDE
-    assert "Not ready for customer" in GUIDE
+def test_delivery_contract_separates_draft_setup_from_live_customer_verdict():
+    assert '"setup_ready": setup_ready' in READINESS_API
+    assert '"ready_for_customer": bool(agent.enabled and setup_ready)' in READINESS_API
+    assert '@router.post("/companies/{company_id}/agents/{agent_id}/go-live")' in READINESS_API
+    assert "Ready to go live" in GUIDE
+    assert "Live for customer" in GUIDE
+    assert "Deactivate" in GUIDE
