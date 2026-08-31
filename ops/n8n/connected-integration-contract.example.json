@@ -1,0 +1,22 @@
+{
+  "request": {
+    "company_id": 12,
+    "agent_id": 4,
+    "conversation_id": 33,
+    "integration_id": 7,
+    "action": "customer_order.execute",
+    "request_id": "xvond-action-12-91-execute-v1",
+    "data": {
+      "action_type": "customer_order",
+      "details": {"customer_name": "Example", "phone": "+96800000000"},
+      "idempotency_key": "xvond-action-12-91-execute-v1"
+    }
+  },
+  "required_response": {
+    "success": true,
+    "request_id": "xvond-action-12-91-execute-v1",
+    "action": "customer_order.execute",
+    "data": {"provider_reference": "external-id"},
+    "error": null
+  }
+}
