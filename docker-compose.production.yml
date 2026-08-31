@@ -148,8 +148,59 @@ services:
       timeout: 5s
       retries: 10
 
+  workflow-postgres:
+    image: postgres:17
+    container_name: xvond-workflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${WORKFLOW_DB_USER:-xvond_workflow}
+      POSTGRES_PASSWORD: ${WORKFLOW_DB_PASSWORD:?WORKFLOW_DB_PASSWORD is required}
+      POSTGRES_DB: ${WORKFLOW_DB_NAME:-xvond_workflow}
+    volumes:
+      - xvond_workflow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${WORKFLOW_DB_USER:-xvond_workflow} -d ${WORKFLOW_DB_NAME:-xvond_workflow}"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  workflow-engine:
+    image: n8nio/n8n:${WORKFLOW_ENGINE_VERSION:?WORKFLOW_ENGINE_VERSION is required}
+    container_name: xvond-workflow-engine
+    restart: unless-stopped
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: workflow-postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${WORKFLOW_DB_NAME:-xvond_workflow}
+      DB_POSTGRESDB_USER: ${WORKFLOW_DB_USER:-xvond_workflow}
+      DB_POSTGRESDB_PASSWORD: ${WORKFLOW_DB_PASSWORD:?WORKFLOW_DB_PASSWORD is required}
+      N8N_ENCRYPTION_KEY: ${WORKFLOW_ENCRYPTION_KEY:?WORKFLOW_ENCRYPTION_KEY is required}
+      N8N_HOST: ${WORKFLOW_HOST:-workflow.xvond.com}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: ${WORKFLOW_PUBLIC_URL:?WORKFLOW_PUBLIC_URL is required}
+      GENERIC_TIMEZONE: ${WORKFLOW_TIMEZONE:-Asia/Muscat}
+      TZ: ${WORKFLOW_TIMEZONE:-Asia/Muscat}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+    ports:
+      - "127.0.0.1:${WORKFLOW_PORT:-5678}:5678"
+    volumes:
+      - xvond_workflow_data:/home/node/.n8n
+    depends_on:
+      workflow-postgres:
+        condition: service_healthy
+
 volumes:
   xvond_postgres_data:
   xvond_redis_data:
   xvond_backups:
   xvond_restore_verify:
+  xvond_workflow_postgres_data:
+  xvond_workflow_data:
