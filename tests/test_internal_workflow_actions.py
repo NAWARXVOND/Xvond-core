@@ -4,6 +4,7 @@ from pathlib import Path
 INTERNAL = Path("backend/app/api/internal_workflow_actions.py").read_text(encoding="utf-8")
 MAIN = Path("backend/app/main.py").read_text(encoding="utf-8")
 WORKFLOW = Path("ops/n8n/xvond-actions.workflow.json").read_text(encoding="utf-8")
+ENV = Path(".env.example").read_text(encoding="utf-8")
 
 
 def test_internal_workflow_route_is_registered():
@@ -39,6 +40,10 @@ def test_internal_adapter_accepts_only_xvond_internal_destination():
     assert "Action is not routed to Xvond Internal" in INTERNAL
 
 
-def test_master_workflow_still_fail_closed_until_callback_is_wired():
-    # This test is intentionally updated when the master workflow callback is wired.
+def test_master_workflow_routes_xvond_internal_to_private_callback():
+    assert "Execute Xvond Internal" in WORKFLOW
+    assert "XVOND_INTERNAL_ACTION_URL" in WORKFLOW
+    assert "X-Xvond-N8N-Secret" in WORKFLOW
+    assert "destinationType === 'xvond_internal'" in WORKFLOW
     assert "provider_not_configured" in WORKFLOW
+    assert "XVOND_INTERNAL_ACTION_URL=http://app:8000/internal/workflow/xvond-internal" in ENV
