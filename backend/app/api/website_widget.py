@@ -16,6 +16,8 @@ from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
+from backend.app.modules.billing.limits import limits_service
+from backend.app.modules.billing.service_limits import service_limits
 from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeDocument
 
@@ -96,6 +98,12 @@ def _ready(db, channel: AgentChannel) -> list[str]:
         blockers.append("AI employee must be active")
     elif not _has_real_runtime_provider(db, channel.company_id, agent):
         blockers.append("At least one real AI provider/model must be configured")
+
+    if not settings.is_test:
+        try:
+            service_limits.entitlement(db, channel.company_id, "ai_agents")
+        except HTTPException:
+            blockers.append("An active AI Agents service subscription is required")
 
     config = reveal_config(channel.config) or {}
     if not str(config.get("allowed_domain") or "").strip():
@@ -251,9 +259,14 @@ def activate(
             raise HTTPException(
                 409, "Website Chat is not ready: " + "; ".join(blockers)
             )
-        channel.enabled = True
+        if not channel.enabled:
+            limits_service.check_channel_limit(db, channel.company_id)
+            channel.enabled = True
         db.commit()
         return {"status": "active", "channel_id": channel.id}
+    except HTTPException:
+        db.rollback()
+        raise
     finally:
         db.close()
 

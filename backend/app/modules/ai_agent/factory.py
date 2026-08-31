@@ -1,11 +1,7 @@
-from sqlalchemy import func
-
 from backend.app.core.ai.provider_policy import require_provider_model
-from backend.app.core.config.settings import settings
 from backend.app.modules.ai_agent.factory_models import AgentConfig, AgentTemplate
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.billing.limits import limits_service
-from backend.app.modules.billing.service_limits import service_limits
 from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.tools.models import AgentToolAssignment
 
@@ -23,15 +19,8 @@ class AgentFactory:
         require_provider_model(db, provider, model)
 
     def check_capacity(self, db, company_id: int):
+        # One canonical commercial capacity path across dev/staging/production.
         limits_service.check_agent_limit(db, company_id)
-        if settings.is_production:
-            current = db.query(func.count(AIAgent.id)).filter(
-                AIAgent.company_id == company_id,
-                AIAgent.enabled.is_(True),
-            ).scalar() or 0
-            service_limits.check_current(
-                db, company_id, "ai_agents", "agents", current
-            )
 
     def create_custom_agent(
         self,

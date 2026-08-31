@@ -33,6 +33,11 @@ class Settings:
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
     XAI_API_KEY = os.getenv("XAI_API_KEY", "")
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+    N8N_ENABLED = os.getenv("N8N_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "").strip()
+    N8N_SHARED_SECRET = os.getenv("N8N_SHARED_SECRET", "")
+    N8N_TIMEOUT_SECONDS = max(1.0, float(os.getenv("N8N_TIMEOUT_SECONDS", "15")))
+    N8N_MAX_RETRIES = min(3, max(0, int(os.getenv("N8N_MAX_RETRIES", "1"))))
     KNOWLEDGE_SEMANTIC_ENABLED = os.getenv("KNOWLEDGE_SEMANTIC_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
     KNOWLEDGE_EMBEDDING_PROVIDER = os.getenv("KNOWLEDGE_EMBEDDING_PROVIDER", "openai").strip().lower()
     KNOWLEDGE_EMBEDDING_MODEL = os.getenv("KNOWLEDGE_EMBEDDING_MODEL", "text-embedding-3-small").strip()
@@ -49,6 +54,10 @@ class Settings:
     def is_production(self) -> bool:
         return self.APP_ENV in {"production", "prod"}
 
+    @property
+    def is_test(self) -> bool:
+        return self.APP_ENV in {"test", "testing"}
+
     def validate(self):
         errors = []
         if not self.DATABASE_URL:
@@ -57,6 +66,11 @@ class Settings:
             errors.append("JWT_SECRET is required")
         if self.KNOWLEDGE_EMBEDDING_PROVIDER not in {"openai"}:
             errors.append("KNOWLEDGE_EMBEDDING_PROVIDER must be a supported provider")
+        if self.N8N_ENABLED:
+            if not self.N8N_WEBHOOK_URL:
+                errors.append("N8N_WEBHOOK_URL is required when n8n is enabled")
+            if not self.N8N_SHARED_SECRET:
+                errors.append("N8N_SHARED_SECRET is required when n8n is enabled")
         if self.is_production:
             if not self.REDIS_URL:
                 errors.append("REDIS_URL is required in production")

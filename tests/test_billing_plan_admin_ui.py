@@ -15,5 +15,7 @@ def test_billing_package_ui_can_create_assign_and_edit_packages():
     assert "openWorkspaceServiceForm" in script
     assert "openWorkspaceEditServicePlan" in script
     assert "'/admin/service-billing/plans'" in script
+    assert "['agents', 'Active AI Employees']" in script
+    assert "['channels', 'Active Channels']" in script
     assert "['tokens', 'AI tokens / month']" in script
-    assert "['agents', 'AI Employees']" in script
+    assert "['requests', 'AI requests / month']" in script

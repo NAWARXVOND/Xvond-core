@@ -42,6 +42,16 @@ PACKAGE_TIERS = {
     "enterprise": "Enterprise",
 }
 
+# Commercial model-power ceiling used when an AI Agents plan does not provide
+# an explicit max_quality_tier override. Starter still reaches Tier 2 so core
+# business actions such as bookings/orders remain fully usable. Business unlocks
+# advanced reasoning; Enterprise unlocks the strongest premium tier.
+AI_AGENT_PACKAGE_QUALITY_CAPS = {
+    "starter": 2,
+    "business": 3,
+    "enterprise": 4,
+}
+
 
 def public_catalog() -> dict:
     return {
@@ -58,7 +68,11 @@ def public_catalog() -> dict:
             for code, name in AI_EMPLOYEE_CHANNELS.items()
         ],
         "package_tiers": [
-            {"code": code, "name": name}
+            {
+                "code": code,
+                "name": name,
+                "max_quality_tier": AI_AGENT_PACKAGE_QUALITY_CAPS.get(code),
+            }
             for code, name in PACKAGE_TIERS.items()
         ],
     }

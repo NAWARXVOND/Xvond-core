@@ -3,20 +3,23 @@ from __future__ import annotations
 
 def build_voice_behavior_prompt(config: dict | None = None) -> str:
     config = config or {}
-    language = str(config.get("language") or "auto").strip()
-    dialect = str(config.get("dialect") or "auto").strip()
+    legacy_language = str(config.get("language") or "auto").strip()
+    legacy_dialect = str(config.get("dialect") or "auto").strip()
     tone = str(config.get("tone") or "professional_friendly").strip()
     response_length = str(config.get("response_length") or "concise").strip()
     extra = str(config.get("channel_instructions") or "").strip()
 
     parts = [
         "VOICE CHANNEL BEHAVIOR:",
+        "Language and dialect are controlled by the AI Employee profile and must not be overridden by channel settings.",
+        (
+            "Deprecated voice-channel metadata only — NEVER use this to override the AI Employee profile: "
+            f"Language: {legacy_language}. Dialect: {legacy_dialect}."
+        ),
         "Write for speech, not for reading.",
         "Use short natural sentences that are easy to hear.",
         "Do not read long URLs, markdown, tables, or long lists aloud.",
         "If details are too long for a call, offer to send or provide them through another configured channel.",
-        f"Language: {language}.",
-        f"Dialect: {dialect}.",
         f"Tone: {tone}.",
         f"Response length: {response_length}.",
     ]
@@ -33,6 +36,8 @@ def build_vapi_assistant_payload(
     credential_id: str | None = None,
 ) -> dict:
     config = channel_config or {}
+    # This is transport/speech-recognition metadata only. Runtime response language
+    # remains authoritative in the AI Employee profile.
     language = str(config.get("language") or "auto").strip()
     voice_id = str(config.get("voice_id") or "").strip() or None
     greeting = str(config.get("greeting_message") or "").strip() or None

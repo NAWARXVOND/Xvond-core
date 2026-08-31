@@ -5,6 +5,10 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.database.base import Base
 from backend.app.core.ai import provider_policy
+from backend.app.core.ai.routing_quality import (
+    model_quality_tier,
+    required_quality_tier,
+)
 from backend.app.modules.providers.models import (
     AIModelRecord,
     AIProviderRecord,
@@ -112,7 +116,7 @@ def test_disabled_fallback_is_not_selected(monkeypatch):
         close_db(engine, db)
 
 
-def test_runtime_selections_include_all_loaded_enabled_providers(monkeypatch):
+def test_runtime_selections_prefers_cheapest_reliable_candidates(monkeypatch):
     engine, db = make_db()
     try:
         add_provider(db, "groq", "groq-model", priority=40, input_price="0.2", output_price="0.4")
@@ -126,12 +130,12 @@ def test_runtime_selections_include_all_loaded_enabled_providers(monkeypatch):
         )
         selections = provider_policy.runtime_selections(db, 99, None, None)
         assert [(item.provider, item.model) for item in selections] == [
-            ("openai", "openai-model"),
-            ("anthropic", "claude-model"),
             ("google", "gemini-model"),
             ("groq", "groq-model"),
+            ("openai", "openai-model"),
+            ("anthropic", "claude-model"),
         ]
-        assert all(item.reason == "automatic" for item in selections)
+        assert all(item.reason.startswith("automatic:tier") for item in selections)
     finally:
         close_db(engine, db)
 
@@ -157,5 +161,48 @@ def test_company_default_precedes_automatic_route(monkeypatch):
             ("openai", "openai-model"),
         ]
         assert selections[0].reason == "company_default"
+    finally:
+        close_db(engine, db)
+
+
+def test_quality_tiers_match_commercial_model_bands():
+    assert model_quality_tier("groq", "openai/gpt-oss-20b") == 1
+    assert model_quality_tier("groq", "openai/gpt-oss-120b") == 2
+    assert model_quality_tier("openai", "gpt-5.6-luna") == 2
+    assert model_quality_tier("openai", "gpt-5.6-terra") == 3
+    assert model_quality_tier("openai", "gpt-5.6-sol") == 4
+
+
+def test_message_complexity_promotes_only_when_needed():
+    assert required_quality_tier("مرحبا") == 1
+    assert required_quality_tier("بدي احجز موعد بكرا الساعة خمسة") == 2
+    assert required_quality_tier("حلل الخيارات وقارن بينها حسب عدة شروط للعميل") == 3
+    assert required_quality_tier("أريد تحليل عميق للمشكلة مع استراتيجية تفصيلية") == 4
+
+
+def test_runtime_message_classifier_ignores_grounding_policy_keywords():
+    runtime_message = (
+        "Never claim a booking or order succeeded.\n\n"
+        "CURRENT CUSTOMER MESSAGE (answer this intent directly):\nمرحبا"
+    )
+    assert required_quality_tier(runtime_message) == 1
+
+
+def test_advanced_request_filters_out_weak_models(monkeypatch):
+    engine, db = make_db()
+    try:
+        add_provider(db, "groq", "openai/gpt-oss-20b", priority=5, input_price="0.075", output_price="0.30")
+        add_provider(db, "openai", "gpt-5.6-terra", priority=10, input_price="2", output_price="12")
+        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["groq", "openai"])
+        selections = provider_policy.runtime_selections(
+            db,
+            77,
+            None,
+            None,
+            message="حلل الخيارات وقارن بينها حسب عدة شروط للعميل",
+        )
+        assert [(item.provider, item.model) for item in selections] == [
+            ("openai", "gpt-5.6-terra"),
+        ]
     finally:
         close_db(engine, db)

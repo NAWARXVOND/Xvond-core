@@ -6,12 +6,13 @@ from fastapi import (
 from pydantic import BaseModel
 
 from backend.app.core.database.connection import SessionLocal
-from backend.app.core.dependencies import get_current_user
+from backend.app.core.dependencies import require_customer_user
 
 from backend.app.models.user import User
 
 from backend.app.modules.ai_agent.factory_models import AgentConfig
 from backend.app.modules.ai_agent.models import AIAgent
+from backend.app.modules.billing.limits import limits_service
 
 
 router = APIRouter(
@@ -56,7 +57,7 @@ def get_customer_agent(
 @router.get("/{agent_id}")
 def agent_details(
     agent_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_customer_user),
 ):
     db = SessionLocal()
 
@@ -97,7 +98,7 @@ def agent_details(
 def update_agent(
     agent_id: int,
     data: AgentCustomerUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_customer_user),
 ):
     if current_user.role not in {
         "owner",
@@ -145,7 +146,8 @@ def update_agent(
                         "or disable this agent"
                     ),
                 )
-
+            if data.enabled is True and agent.enabled is False:
+                limits_service.check_agent_limit(db, current_user.company_id)
             agent.enabled = data.enabled
 
         db.commit()
@@ -157,5 +159,11 @@ def update_agent(
             "status": "updated",
         }
 
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

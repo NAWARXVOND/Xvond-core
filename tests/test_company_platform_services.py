@@ -42,7 +42,7 @@ def test_analytics_summary_handles_numeric_and_categorical_values():
 
 def test_service_plan_limits_are_validated_and_normalized():
     limits = _validated_limits({"tokens": 10000, "agents": "3", "runs": Decimal("12.50")})
-    assert limits == {"tokens": "1E+4", "agents": "3", "runs": "12.5"}
+    assert limits == {"tokens": "10000", "agents": "3", "runs": "12.5"}
 
     with pytest.raises(HTTPException):
         _validated_limits({"tokens": -1})

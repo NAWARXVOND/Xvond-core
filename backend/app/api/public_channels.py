@@ -14,6 +14,8 @@ from backend.app.core.visitor_tokens import (
     verify_website_visitor_token,
 )
 from backend.app.modules.ai_agent.models import AIConversation, AIMessage
+from backend.app.modules.ai_agent.profile_models import AIAgentProfile
+from backend.app.modules.audit.service import audit_service
 from backend.app.modules.channels.conversation_source import bind_conversation_source
 from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.channels.vapi import build_voice_behavior_prompt
@@ -132,6 +134,150 @@ def _conversation(db, channel: AgentChannel, conversation_id: int):
     return conversation
 
 
+def _dominant_message_language(message: str) -> str:
+    text = str(message or "")
+    arabic = sum(1 for char in text if "\u0600" <= char <= "\u06ff")
+    latin = sum(1 for char in text if char.isascii() and char.isalpha())
+    if latin > arabic:
+        return "en"
+    if arabic > latin:
+        return "ar"
+    return "auto"
+
+
+def _website_language_policy(db, channel: AgentChannel, message: str) -> str:
+    profile = (
+        db.query(AIAgentProfile)
+        .filter(
+            AIAgentProfile.company_id == channel.company_id,
+            AIAgentProfile.agent_id == channel.agent_id,
+        )
+        .first()
+    )
+    configured = str(profile.reply_language if profile else "auto").strip().lower()
+    aliases = {
+        "english": "en",
+        "arabic": "ar",
+        "en-us": "en",
+        "en-gb": "en",
+    }
+    configured = aliases.get(configured, configured)
+    selected = _dominant_message_language(message) if configured == "auto" else configured
+    if selected == "en":
+        return (
+            "CURRENT RESPONSE LANGUAGE (highest priority for this turn): English. "
+            "Reply entirely in natural English because the customer's current message is English. "
+            "Do not answer in Arabic merely because company knowledge or earlier messages are Arabic."
+        )
+    if selected == "ar":
+        return (
+            "CURRENT RESPONSE LANGUAGE (highest priority for this turn): Arabic. "
+            "Reply in Arabic and follow the configured Arabic dialect policy."
+        )
+    return (
+        "CURRENT RESPONSE LANGUAGE: follow the customer's current message language. "
+        "If the customer changes language, change the reply language on the same turn."
+    )
+
+
+def _is_service_access_error(exc: HTTPException) -> bool:
+    detail = exc.detail
+    if isinstance(detail, dict):
+        message = str(detail.get("message") or "").lower()
+        return bool(detail.get("service")) and (
+            "limit" in message or "capacity" in message
+        )
+    text = str(detail or "").lower()
+    return "service subscription" in text or "service plan" in text
+
+
+def _safe_unavailable_message(message: str) -> str:
+    if _dominant_message_language(message) == "en":
+        return "Sorry, the service is temporarily unavailable. I've forwarded your conversation to the team for assistance."
+    return "عذرًا، الخدمة غير متاحة مؤقتًا. تم تحويل محادثتك للفريق لمساعدتك."
+
+
+def _website_service_fallback(
+    db,
+    *,
+    channel: AgentChannel,
+    message: str,
+    conversation_id: int | None,
+    internal_error: HTTPException,
+):
+    db.rollback()
+    conversation = agent_runtime.get_or_create_conversation(
+        db=db,
+        company_id=channel.company_id,
+        agent_id=channel.agent_id,
+        conversation_id=conversation_id,
+        message=message,
+    )
+    bind_conversation_source(
+        db,
+        conversation_id=conversation.id,
+        company_id=channel.company_id,
+        agent_id=channel.agent_id,
+        channel_type="website",
+        channel_id=channel.id,
+    )
+    user_message = AIMessage(
+        conversation_id=conversation.id,
+        role="user",
+        content=message.strip(),
+    )
+    safe_text = _safe_unavailable_message(message)
+    assistant_message = AIMessage(
+        conversation_id=conversation.id,
+        role="assistant",
+        content=safe_text,
+    )
+    db.add(user_message)
+    db.add(assistant_message)
+    if not _human_active(db, channel.company_id, conversation.id):
+        db.add(
+            HumanHandoff(
+                company_id=channel.company_id,
+                agent_id=channel.agent_id,
+                conversation_id=conversation.id,
+                reason="service_limit_or_entitlement",
+                priority="high",
+                department="customer_service",
+                status="pending",
+            )
+        )
+    audit_service.log(
+        db=db,
+        company_id=channel.company_id,
+        action="website.customer_service_fallback",
+        resource_type="channel",
+        resource_id=channel.id,
+        details={
+            "conversation_id": conversation.id,
+            "internal_status": internal_error.status_code,
+            "internal_detail": internal_error.detail,
+        },
+    )
+    db.commit()
+    db.refresh(user_message)
+    db.refresh(assistant_message)
+    return {
+        "conversation_id": conversation.id,
+        "visitor_token": issue_website_visitor_token(channel.id, conversation.id),
+        "mode": "human",
+        "message": {
+            "id": user_message.id,
+            "role": "user",
+            "content": user_message.content,
+        },
+        "response": {
+            "id": assistant_message.id,
+            "role": "assistant",
+            "content": assistant_message.content,
+        },
+    }
+
+
 @router.post("/website/{channel_id}/chat")
 def website_chat(
     channel_id: int,
@@ -192,16 +338,32 @@ def website_chat(
         )
         original_prompt = agent.system_prompt
         try:
+            language_policy = _website_language_policy(db, channel, data.message)
             agent.system_prompt = (
-                original_prompt + "\n\n" + website_behavior(config)
+                original_prompt
+                + "\n\n"
+                + website_behavior(config)
+                + "\n\n"
+                + language_policy
             ).strip()
-            result = agent_runtime.chat(
-                db=db,
-                company_id=channel.company_id,
-                agent_id=channel.agent_id,
-                message=data.message,
-                conversation_id=data.conversation_id,
-            )
+            try:
+                result = agent_runtime.chat(
+                    db=db,
+                    company_id=channel.company_id,
+                    agent_id=channel.agent_id,
+                    message=data.message,
+                    conversation_id=data.conversation_id,
+                )
+            except HTTPException as exc:
+                if _is_service_access_error(exc):
+                    return _website_service_fallback(
+                        db,
+                        channel=channel,
+                        message=data.message,
+                        conversation_id=data.conversation_id,
+                        internal_error=exc,
+                    )
+                raise
             bind_conversation_source(
                 db,
                 conversation_id=result["conversation_id"],

@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func
@@ -24,12 +25,28 @@ from backend.app.modules.solutions.portal import (
 router = APIRouter(prefix="/customer", tags=["Customer Portal"])
 
 
+def _plain_limit(value):
+    if value in (None, 0, "0"):
+        return 0
+    try:
+        text = format(Decimal(str(value)), "f")
+    except (InvalidOperation, ValueError, TypeError):
+        return value
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _plan_limits(plan: ServicePlan) -> dict:
+    return {key: _plain_limit(value) for key, value in (plan.limits or {}).items()}
+
+
 def _service_data(db, subscription: ServiceSubscription, plan: ServicePlan) -> dict:
     usage = {}
     for metric, limit in (plan.limits or {}).items():
         usage[metric] = {
             "used": service_limits.used(db, subscription, metric),
-            "limit": limit,
+            "limit": _plain_limit(limit),
         }
     now = datetime.utcnow()
     effective_status = subscription.status
@@ -52,7 +69,7 @@ def _service_data(db, subscription: ServiceSubscription, plan: ServicePlan) -> d
             "tier": plan.tier,
             "monthly_price": plan.monthly_price,
             "currency": plan.currency,
-            "limits": plan.limits or {},
+            "limits": _plan_limits(plan),
         },
         "usage": usage,
     }
@@ -140,6 +157,7 @@ def overview(current_user: User = Depends(require_customer_user)):
                     KnowledgeDocument.enabled.is_(True),
                 ).count(),
                 "channels": len(channels),
+                "active_channels": sum(1 for item in channels if item.enabled),
                 "integrations": len(integrations),
             },
             "channels": [

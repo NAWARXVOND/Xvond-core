@@ -12,12 +12,14 @@ from sqlalchemy import text
 from backend.app.api.auth import router as auth_router
 from backend.app.api.users import router as users_router
 from backend.app.api.admin import router as admin_router
+from backend.app.api.admin_customer_operations import router as admin_customer_operations_router
 from backend.app.api.admin_ai import router as admin_ai_router
 from backend.app.api.admin_ai_employee import router as admin_ai_employee_router
 from backend.app.api.admin_ai_employee_profile import router as admin_ai_employee_profile_router
 from backend.app.api.admin_ai_employee_files import router as admin_ai_employee_files_router
 from backend.app.api.admin_ai_employee_knowledge import router as admin_ai_employee_knowledge_router
 from backend.app.api.admin_agent_actions import router as admin_agent_actions_router
+from backend.app.api.admin_delivery_readiness import router as admin_delivery_readiness_router
 from backend.app.api.admin_audit import router as admin_audit_router
 from backend.app.api.admin_channels import router as admin_channels_router
 from backend.app.api.admin_voice import router as admin_voice_router
@@ -39,6 +41,7 @@ from backend.app.api.admin_automation import router as admin_automation_router
 from backend.app.api.admin_analytics_builder import router as admin_analytics_builder_router
 from backend.app.api.admin_service_billing import router as admin_service_billing_router
 from backend.app.api.admin_service_plan_management import router as admin_service_plan_management_router
+from backend.app.api.internal_workflow_actions import router as internal_workflow_actions_router
 from backend.app.api.public_channels import router as public_channels_router
 from backend.app.api.voice_llm import router as voice_llm_router
 from backend.app.api.website_widget import router as website_widget_router
@@ -183,12 +186,14 @@ for r in [
     auth_router,
     users_router,
     admin_router,
+    admin_customer_operations_router,
     admin_ai_router,
     admin_ai_employee_router,
     admin_ai_employee_profile_router,
     admin_ai_employee_files_router,
     admin_ai_employee_knowledge_router,
     admin_agent_actions_router,
+    admin_delivery_readiness_router,
     admin_audit_router,
     admin_channels_router,
     admin_voice_router,
@@ -210,6 +215,7 @@ for r in [
     admin_analytics_builder_router,
     admin_service_billing_router,
     admin_service_plan_management_router,
+    internal_workflow_actions_router,
     ai_agents_router,
     public_channels_router,
     voice_llm_router,

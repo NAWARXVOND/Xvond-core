@@ -5,6 +5,13 @@ from decimal import Decimal
 from sqlalchemy import inspect
 
 from backend.app.core.ai.engine import ai_engine
+from backend.app.core.ai.routing_quality import (
+    current_quality_tier_cap,
+    effective_required_quality_tier,
+    model_allowed_by_quality_cap,
+    model_quality_tier,
+    set_quality_tier_cap,
+)
 from backend.app.modules.ai_agent.models import AIUsage
 from backend.app.modules.providers.models import (
     AIModelRecord,
@@ -41,13 +48,23 @@ def provider_model_available(db, provider: str, model: str) -> bool:
 def require_provider_model(db, provider: str, model: str) -> ProviderSelection:
     if not provider_model_available(db, provider, model):
         raise ValueError("AI provider/model is not loaded and enabled")
+    if not model_allowed_by_quality_cap(provider, model):
+        raise ValueError("AI provider/model exceeds the active package quality tier")
     return ProviderSelection(provider=provider.strip(), model=model.strip(), reason="requested")
 
 
-def _append_if_available(db, selections: list[ProviderSelection], provider: str | None, model: str | None, reason: str):
+def _append_if_available(
+    db,
+    selections: list[ProviderSelection],
+    provider: str | None,
+    model: str | None,
+    reason: str,
+):
     provider = (provider or "").strip()
     model = (model or "").strip()
     if not provider or not model or not provider_model_available(db, provider, model):
+        return
+    if not model_allowed_by_quality_cap(provider, model):
         return
     candidate = ProviderSelection(provider=provider, model=model, reason=reason)
     if all((item.provider, item.model) != (candidate.provider, candidate.model) for item in selections):
@@ -89,14 +106,14 @@ def _candidate_score(model: AIModelRecord, provider: AIProviderRecord, stats: di
     return (
         1 if provider.name == "mock" else 0,
         round(failure_rate, 4),
-        int(provider.priority or 100),
-        round(average_latency, 2),
         price,
+        round(average_latency, 2),
+        int(provider.priority or 100),
         int(model.id or 0),
     )
 
 
-def _automatic_candidates(db, company_id: int) -> list[ProviderSelection]:
+def _automatic_candidates(db, company_id: int, required_tier: int = 1) -> list[ProviderSelection]:
     loaded = set(ai_engine.list_providers())
     rows = (
         db.query(AIModelRecord, AIProviderRecord)
@@ -109,11 +126,94 @@ def _automatic_candidates(db, company_id: int) -> list[ProviderSelection]:
     )
     stats = _recent_runtime_stats(db, company_id)
     rows = [row for row in rows if row[1].name in loaded]
-    rows.sort(key=lambda row: _candidate_score(row[0], row[1], stats))
+
+    cap = current_quality_tier_cap()
+    if cap is not None:
+        required_tier = min(required_tier, cap)
+
+    def allowed(row) -> bool:
+        tier = model_quality_tier(row[0].provider_name, row[0].model_name)
+        return tier >= required_tier and (cap is None or tier <= cap)
+
+    eligible = [row for row in rows if allowed(row)]
+    if not eligible and rows:
+        allowed_rows = [
+            row for row in rows
+            if cap is None
+            or model_quality_tier(row[0].provider_name, row[0].model_name) <= cap
+        ]
+        if allowed_rows:
+            strongest = max(
+                model_quality_tier(row[0].provider_name, row[0].model_name)
+                for row in allowed_rows
+            )
+            eligible = [
+                row for row in allowed_rows
+                if model_quality_tier(row[0].provider_name, row[0].model_name) == strongest
+            ]
+
+    eligible.sort(key=lambda row: _candidate_score(row[0], row[1], stats))
+    reason_suffix = f":cap{cap}" if cap is not None else ""
     return [
-        ProviderSelection(provider=model.provider_name, model=model.model_name, reason="automatic")
-        for model, _provider in rows
+        ProviderSelection(
+            provider=model.provider_name,
+            model=model.model_name,
+            reason=f"automatic:tier{required_tier}{reason_suffix}",
+        )
+        for model, _provider in eligible
     ]
+
+
+def _runtime_selections_with_active_cap(
+    db,
+    company_id: int,
+    provider: str | None,
+    model: str | None,
+    message: str | None = None,
+) -> list[ProviderSelection]:
+    selections: list[ProviderSelection] = []
+    profile = db.query(CompanyAIProfile).filter(CompanyAIProfile.company_id == company_id).first()
+    required_tier = effective_required_quality_tier(message)
+
+    if profile and profile.default_provider and profile.default_model:
+        _append_if_available(
+            db,
+            selections,
+            profile.default_provider,
+            profile.default_model,
+            "company_default",
+        )
+        if profile.allow_fallback:
+            _append_if_available(
+                db,
+                selections,
+                profile.fallback_provider,
+                profile.fallback_model,
+                "company_fallback",
+            )
+            for candidate in _automatic_candidates(db, company_id, required_tier):
+                if all(
+                    (item.provider, item.model) != (candidate.provider, candidate.model)
+                    for item in selections
+                ):
+                    selections.append(candidate)
+    else:
+        for candidate in _automatic_candidates(db, company_id, required_tier):
+            if all(
+                (item.provider, item.model) != (candidate.provider, candidate.model)
+                for item in selections
+            ):
+                selections.append(candidate)
+        _append_if_available(db, selections, provider, model, "agent_preference")
+
+    if not selections:
+        cap = current_quality_tier_cap()
+        if cap is not None:
+            raise ValueError(
+                f"No enabled AI provider/model is available within package quality tier {cap}"
+            )
+        raise ValueError("No enabled AI provider/model is available")
+    return selections
 
 
 def runtime_selections(
@@ -121,31 +221,23 @@ def runtime_selections(
     company_id: int,
     provider: str | None,
     model: str | None,
+    message: str | None = None,
 ) -> list[ProviderSelection]:
-    """Build the full provider/model route for one company request.
+    """Build a package-safe provider/model route and consume the request-local cap.
 
-    If the company explicitly pins a default model, that policy is respected first.
-    Otherwise Xvond automatically ranks every loaded/enabled model using recent
-    reliability, admin priority, latency and configured token price. Remaining
-    providers form the failover chain so one vendor is never a single point of failure.
+    Company-pinned models remain first when they fit the active package ceiling.
+    In automatic mode Xvond ranks eligible models by reliability, cost, latency
+    and admin priority. The package cap is needed only while this route is built;
+    clearing it here prevents one company/request from leaking commercial routing
+    state into a later request that reuses the same execution context.
     """
-    selections: list[ProviderSelection] = []
-    profile = db.query(CompanyAIProfile).filter(CompanyAIProfile.company_id == company_id).first()
-
-    if profile and profile.default_provider and profile.default_model:
-        _append_if_available(db, selections, profile.default_provider, profile.default_model, "company_default")
-        if profile.allow_fallback:
-            _append_if_available(db, selections, profile.fallback_provider, profile.fallback_model, "company_fallback")
-            for candidate in _automatic_candidates(db, company_id):
-                if all((item.provider, item.model) != (candidate.provider, candidate.model) for item in selections):
-                    selections.append(candidate)
-    else:
-        for candidate in _automatic_candidates(db, company_id):
-            if all((item.provider, item.model) != (candidate.provider, candidate.model) for item in selections):
-                selections.append(candidate)
-        # A legacy agent choice is only used if it was not already part of the automatic pool.
-        _append_if_available(db, selections, provider, model, "agent_preference")
-
-    if not selections:
-        raise ValueError("No enabled AI provider/model is available")
-    return selections
+    try:
+        return _runtime_selections_with_active_cap(
+            db,
+            company_id,
+            provider,
+            model,
+            message,
+        )
+    finally:
+        set_quality_tier_cap(None)

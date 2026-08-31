@@ -26,20 +26,38 @@ DEFAULT_CUSTOMER_CONTROLS = {
     "can_change_model": False,
 }
 
+DIALECTS = {
+    "auto": "Automatically mirror the customer's natural dialect/register. If the customer writes colloquial Arabic, reply in the closest matching colloquial dialect and do not switch to Modern Standard Arabic unless the customer uses it.",
+    "msa": "Always use natural Modern Standard Arabic (فصحى), regardless of the customer's Arabic dialect.",
+    "omani": "Use natural Omani Arabic while remaining clear and professional.",
+    "gulf": "Use natural Gulf Arabic while remaining clear and professional.",
+    "saudi": "Use natural Saudi Arabic while remaining clear and professional.",
+    "emirati": "Use natural Emirati Arabic while remaining clear and professional.",
+    "levantine": "Use natural Levantine/Shami Arabic while remaining clear and professional.",
+    "egyptian": "Use natural Egyptian Arabic while remaining clear and professional.",
+}
+
 
 class EmployeeProfileUpdate(BaseModel):
     name: str
     reply_language: str = "auto"
+    dialect: str = "auto"
     conversation_style: str = "professional_friendly"
     greeting: str | None = None
     instructions: str | None = None
-    # Backward-compatible inputs. Company Profile remains authoritative.
     business_name: str | None = None
     business_type: str | None = None
 
 
 def _clean(value):
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _dialect(value: str | None) -> str:
+    value = str(value or "auto").strip().lower()
+    if value not in DIALECTS:
+        raise HTTPException(400, "Unsupported dialect")
+    return value
 
 
 def _company_profile(db, company_id: int) -> CompanyProfile | None:
@@ -60,6 +78,7 @@ def _profile_prompt(company_name: str, data: EmployeeProfileUpdate) -> str:
         "warm": "Use a warm, conversational style while remaining professional.",
         "concise": "Be concise and direct while remaining helpful.",
     }
+    dialect = _dialect(data.dialect)
     greeting_rule = (
         f"Preferred opening greeting: {data.greeting.strip()}"
         if _clean(data.greeting)
@@ -71,7 +90,9 @@ Answer customer questions naturally and use only the business operations current
 Current configured business operations and their destinations are authoritative. Do not follow obsolete booking/order mode instructions from older configuration.
 Never invent business facts or claim an operation succeeded unless the connected operation returned success.
 {styles.get(data.conversation_style, styles['professional_friendly'])}
-Reply language policy: {data.reply_language}. When automatic, match the customer's language and normal register.
+Reply language policy: {data.reply_language}. When automatic, match the customer's language.
+Dialect policy: {dialect}. {DIALECTS[dialect]}
+When a fixed Arabic dialect is selected, keep that dialect consistently even if the customer uses another Arabic dialect. When dialect is automatic, mirror the customer's normal register naturally rather than defaulting to formal Arabic.
 {greeting_rule}
 Additional behavior instructions: {_clean(data.instructions) or 'None.'}""".strip()
 
@@ -110,17 +131,12 @@ def _upsert_profile(db, company: Company, agent: AIAgent, data: EmployeeProfileU
 
 
 def _ensure_agent_config(db, agent: AIAgent) -> AgentConfig:
-    """Keep every admin-created AI employee complete for the customer portal.
-
-    Older employees may predate AgentConfig. Create the missing row on access and
-    fill only missing customer-control keys so an explicit False remains respected.
-    """
     row = db.query(AgentConfig).filter(AgentConfig.agent_id == agent.id).first()
     if row is None:
         row = AgentConfig(
             agent_id=agent.id,
             agent_type="custom",
-            settings={},
+            settings={"dialect": "auto"},
             capabilities={},
             customer_controls=dict(DEFAULT_CUSTOMER_CONTROLS),
         )
@@ -128,11 +144,34 @@ def _ensure_agent_config(db, agent: AIAgent) -> AgentConfig:
         db.flush()
         return row
 
+    settings = dict(row.settings or {})
+    if "dialect" not in settings:
+        settings["dialect"] = "auto"
+        row.settings = settings
+
     controls = dict(DEFAULT_CUSTOMER_CONTROLS)
     controls.update(row.customer_controls or {})
     if controls != (row.customer_controls or {}):
         row.customer_controls = controls
     return row
+
+
+def _set_agent_dialect(db, agent: AIAgent, dialect: str) -> AgentConfig:
+    row = _ensure_agent_config(db, agent)
+    settings = dict(row.settings or {})
+    settings["dialect"] = _dialect(dialect)
+    row.settings = settings
+    return row
+
+
+def _agent_dialect(db, agent: AIAgent, channels=None) -> str:
+    row = _ensure_agent_config(db, agent)
+    value = str((row.settings or {}).get("dialect") or "").strip().lower()
+    if value in DIALECTS:
+        return value
+    setup = _setup_from_channels(channels or [])
+    legacy = str(setup.get("dialect") or "auto").strip().lower()
+    return legacy if legacy in DIALECTS else "auto"
 
 
 def _backfill_profile(db, company: Company, agent: AIAgent, channels) -> AIAgentProfile:
@@ -161,7 +200,7 @@ def _backfill_profile(db, company: Company, agent: AIAgent, channels) -> AIAgent
 
 @router.post("/companies/{company_id}")
 def create_profile_employee(company_id: int, data: EmployeeProfileUpdate, current_admin: User = Depends(require_xvond_admin)):
-    """Create the channel-independent AI employee core."""
+    """Create a channel-independent AI employee in draft mode."""
     db = SessionLocal()
     try:
         company = db.query(Company).filter(Company.id == company_id).first()
@@ -177,12 +216,12 @@ def create_profile_employee(company_id: int, data: EmployeeProfileUpdate, curren
             system_prompt=_profile_prompt(company.name, data),
             provider=provider,
             model=model,
-            enabled=True,
+            enabled=False,
         )
         db.add(agent)
         db.flush()
         _upsert_profile(db, company, agent, data)
-        _ensure_agent_config(db, agent)
+        _set_agent_dialect(db, agent, data.dialect)
 
         company_profile = _company_profile(db, company_id)
         if company_profile is not None:
@@ -190,10 +229,13 @@ def create_profile_employee(company_id: int, data: EmployeeProfileUpdate, curren
 
         db.commit()
         db.refresh(agent)
+        payload = _profile_payload(db, company, data)
+        payload["dialect"] = _dialect(data.dialect)
         return {
             "status": "created",
+            "lifecycle": "draft",
             "agent_id": agent.id,
-            "profile": _profile_payload(db, company, data),
+            "profile": payload,
         }
     except HTTPException:
         db.rollback()
@@ -220,7 +262,7 @@ def get_profile(company_id: int, agent_id: int, current_admin: User = Depends(re
             .all()
         )
         profile = _backfill_profile(db, company, agent, channels)
-        _ensure_agent_config(db, agent)
+        dialect = _agent_dialect(db, agent, channels)
         db.commit()
         return {
             "agent_id": agent.id,
@@ -228,6 +270,7 @@ def get_profile(company_id: int, agent_id: int, current_admin: User = Depends(re
             "business_name": company.name,
             "business_type": _company_business_type(db, company) or profile.business_type or "",
             "reply_language": profile.reply_language or "auto",
+            "dialect": dialect,
             "conversation_style": profile.conversation_style or "professional_friendly",
             "greeting": profile.greeting or "",
             "instructions": profile.instructions or "",
@@ -247,11 +290,12 @@ def update_profile(company_id: int, agent_id: int, data: EmployeeProfileUpdate, 
         agent.name = _clean(data.name) or agent.name
         agent.system_prompt = _profile_prompt(company.name, data)
         profile = _upsert_profile(db, company, agent, data)
-        _ensure_agent_config(db, agent)
+        _set_agent_dialect(db, agent, data.dialect)
         setup = {
             "business_name": company.name,
             "business_type": profile.business_type,
             "reply_language": profile.reply_language,
+            "dialect": _dialect(data.dialect),
             "conversation_style": profile.conversation_style,
             "greeting": profile.greeting,
             "instructions": profile.instructions,
