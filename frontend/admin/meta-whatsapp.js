@@ -23,7 +23,7 @@ function xvondLoadMetaSdk(appId,graphVersion){
     script.onerror=()=>reject(new Error('Could not load Meta SDK'));
     document.head.appendChild(script);
   });
-  return xvondMetaSdkPromise;
+  return xvondMetaSdkPromise
 }
 
 window.addEventListener('message',event=>{
@@ -41,10 +41,10 @@ window.openMetaWhatsAppConnect=async function(agentId){
     if(!config.ready){alert('Meta Embedded Signup is not configured on the Xvond server yet.');return}
     xvondMetaSignupState={agentId:Number(agentId)};xvondMetaSignupMessage=null;
     await xvondLoadMetaSdk(config.app_id,config.graph_api_version);
-    FB.login(async response=>{
+    FB.login(response=>{
       const code=response?.authResponse?.code;
       if(!code){if(response?.status!=='unknown')alert('Meta did not return an authorization code.');return}
-      await xvondFinishMetaWhatsAppSignup(code);
+      xvondFinishMetaWhatsAppSignup(code);
     },{
       config_id:config.config_id,
       response_type:'code',
