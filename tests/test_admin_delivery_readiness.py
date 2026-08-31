@@ -29,9 +29,10 @@ def test_operational_employee_requires_workflow_and_configured_integrations():
 def test_readiness_separates_setup_ready_from_live_customer_state():
     assert '"setup_ready": setup_ready' in READINESS
     assert '"ready_for_customer": ready_for_customer' in READINESS
-    assert 'ready_for_customer = bool(agent.enabled and setup_ready and channels["live"])' in READINESS
+    assert 'company.active and agent.enabled and setup_ready and channels["live"]' in READINESS
     assert '"lifecycle": "live" if agent.enabled else "draft"' in READINESS
     assert 'blockers.insert(0, "AI employee is in draft mode")' in READINESS
+    assert '"company_active": bool(company.active)' in READINESS
 
 
 def test_draft_can_be_setup_with_configured_channel_before_channel_activation():
@@ -44,9 +45,10 @@ def test_draft_can_be_setup_with_configured_channel_before_channel_activation():
     assert 'blockers.append("Activate at least one customer channel")' in READINESS
 
 
-def test_go_live_is_guarded_by_setup_and_plan_capacity():
+def test_go_live_is_guarded_by_setup_company_state_and_plan_capacity():
     assert '@router.post("/companies/{company_id}/agents/{agent_id}/go-live")' in READINESS
     assert 'if not state["payload"]["setup_ready"]' in READINESS
+    assert "Activate the company before the AI employee goes live" in READINESS
     assert "limits_service.check_agent_limit(db, company_id)" in READINESS
     assert "agent.enabled = True" in READINESS
     assert '@router.post("/companies/{company_id}/agents/{agent_id}/deactivate")' in READINESS
@@ -54,6 +56,7 @@ def test_go_live_is_guarded_by_setup_and_plan_capacity():
 
 def test_readiness_checks_customer_delivery_basics():
     for value in (
+        "company_active",
         "employee_enabled",
         "profile",
         "knowledge",

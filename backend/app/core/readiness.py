@@ -110,6 +110,14 @@ def _provider_runtime(
 
 
 def company_readiness(db, company_id: int):
+    """Return company setup readiness without conflating setup with live traffic.
+
+    A company may be activated once at least one AI employee is fully configured in
+    draft with a configured channel. Employee Go Live and channel activation are
+    separate gates. This prevents the old circular dependency where a channel had
+    to be live before the company could be activated while channel activation itself
+    required an active company.
+    """
     company = db.query(Company).filter(Company.id == company_id).first()
     if company is None:
         return None
@@ -220,12 +228,12 @@ def company_readiness(db, company_id: int):
         runtime_tools = tool_executor.get_agent_tools(db=db, agent_id=agent.id)
         ready_action = any(item.get("name") == "action_request" for item in runtime_tools)
 
+        # Setup readiness is based on configured channels, not live channels.
+        # Live state is reported separately and is owned by channel activation.
         channels = (
             db.query(AgentChannel)
-            .filter(
-                AgentChannel.agent_id == agent.id,
-                AgentChannel.enabled.is_(True),
-            )
+            .filter(AgentChannel.agent_id == agent.id)
+            .order_by(AgentChannel.id.asc())
             .all()
         )
         channel_results = []
@@ -242,13 +250,12 @@ def company_readiness(db, company_id: int):
                     "enabled": channel.enabled,
                     "configured": configured,
                     "config": public_config(channel.config),
-                    "configured_secret_fields": configured_secret_fields(
-                        channel.config
-                    ),
+                    "configured_secret_fields": configured_secret_fields(channel.config),
                     "issue": error,
                 }
             )
-        ready_channels = [item for item in channel_results if item["configured"]]
+        configured_channels = [item for item in channel_results if item["configured"]]
+        live_channels = [item for item in configured_channels if item["enabled"]]
 
         provider_selections, provider_error = _provider_runtime(
             db,
@@ -274,25 +281,25 @@ def company_readiness(db, company_id: int):
         if knowledge_count == 0:
             issues.append("No enabled knowledge connected")
         if not channels:
-            issues.append("No enabled channel assigned")
-        elif not ready_channels:
+            issues.append("No channel configured")
+        elif not configured_channels:
             issues.append("Channel configuration is incomplete")
         if not agent.enabled:
-            warnings.append(
-                "AI employee is currently disabled and must be enabled before launch"
-            )
+            warnings.append("AI employee is in draft mode; activate the company, then use Go Live")
+        elif not live_channels:
+            warnings.append("AI employee is live but no customer channel is active")
         if tools and not ready_action:
-            warnings.append(
-                "Tools are assigned, but no configured customer action is runtime-ready"
-            )
+            warnings.append("Tools are assigned, but no configured customer action is runtime-ready")
 
-        agent_ready = bool(
+        setup_ready = bool(
             provider_ready
             and prompt_ready
             and employee_profile_ready
             and knowledge_count > 0
-            and ready_channels
-            and agent.enabled
+            and configured_channels
+        )
+        ready_for_customer = bool(
+            company.active and agent.enabled and setup_ready and live_channels
         )
         agent_results.append(
             {
@@ -319,13 +326,18 @@ def company_readiness(db, company_id: int):
                 "tool_count": len(tools),
                 "ready_action": ready_action,
                 "channels": channel_results,
-                "ready": agent_ready,
+                "configured_channel_count": len(configured_channels),
+                "live_channel_count": len(live_channels),
+                "setup_ready": setup_ready,
+                "ready": setup_ready,
+                "ready_for_customer": ready_for_customer,
                 "issues": issues,
                 "warnings": warnings,
             }
         )
 
-    ready_agents = [item for item in agent_results if item["ready"]]
+    setup_ready_agents = [item for item in agent_results if item["setup_ready"]]
+    live_agents = [item for item in agent_results if item["ready_for_customer"]]
     company_issues = []
     company_warnings = []
 
@@ -339,16 +351,18 @@ def company_readiness(db, company_id: int):
         company_issues.append("No active modules")
     if not agents:
         company_issues.append("No AI employees")
-    elif not ready_agents:
-        company_issues.append("No production-ready AI employee")
+    elif not setup_ready_agents:
+        company_issues.append("No setup-ready AI employee")
     if not company.active:
         company_warnings.append("Company is currently inactive")
+    elif not live_agents:
+        company_warnings.append("Company is active but no AI employee/channel is live for customers")
 
     setup_ready = bool(
         company_profile_ready
         and subscription_ready
         and modules
-        and ready_agents
+        and setup_ready_agents
     )
     if setup_ready and company.active:
         status = "ACTIVE"
@@ -384,12 +398,11 @@ def company_readiness(db, company_id: int):
             "active": company.active,
         },
         "company_profile_ready": company_profile_ready,
-        # Backward-compatible UI alias. The canonical field remains
-        # company_profile_ready, but older admin workspaces read profile_ready.
         "profile_ready": company_profile_ready,
         "company_profile_missing": profile_missing,
         "ready": setup_ready,
         "setup_ready": setup_ready,
+        "ready_for_customer": bool(live_agents),
         "status": status,
         "subscription_ready": subscription_ready,
         "subscription": subscription_data,

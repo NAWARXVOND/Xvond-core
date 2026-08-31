@@ -63,3 +63,19 @@ async function renewWorkspaceService(service){
     await loadCompanyControlCenter(xvondWorkspace.companyId,'billing');
   }catch(e){alert(e.message)}
 }
+
+// The bundled Admin uses an HttpOnly same-origin session cookie. Override the
+// legacy PDF uploader so it never tries to recover browser-readable bearer tokens.
+uploadPDFKnowledge=async function(a){
+  const input=document.getElementById('simple-pdf-file'),file=input?.files?.[0];
+  if(!file){alert('Choose a PDF file first.');return;}
+  const fd=new FormData();fd.append('file',file);
+  try{
+    const res=await fetch(`/admin/ai-employees/companies/${simpleCompanyId}/${a}/knowledge/pdf`,{
+      method:'POST',credentials:'same-origin',body:fd
+    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok)throw new Error(typeof data.detail==='string'?data.detail:(data.detail?.message||'PDF upload failed'));
+    await openKnowledgeManager(simpleCompanyId,a);
+  }catch(e){alert(e.message)}
+};

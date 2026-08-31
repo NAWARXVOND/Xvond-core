@@ -5,6 +5,7 @@ from backend.app.core.config.settings import settings
 from backend.app.core.config_secrets import reveal_config
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
+from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.ai_agent.profile_models import AIAgentProfile
@@ -97,6 +98,10 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
     if agent is None:
         raise HTTPException(404, "AI employee not found")
 
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if company is None:
+        raise HTTPException(404, "Company not found")
+
     profile = (
         db.query(AIAgentProfile)
         .filter(
@@ -163,18 +168,24 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
 
     setup_ready = not setup_blockers
     blockers = list(setup_blockers)
+    if not company.active:
+        blockers.insert(0, "Company must be active before this employee can go live")
     if not agent.enabled:
         blockers.insert(0, "AI employee is in draft mode")
     elif not channels["live"]:
         blockers.append("Activate at least one customer channel")
 
-    ready_for_customer = bool(agent.enabled and setup_ready and channels["live"])
+    ready_for_customer = bool(
+        company.active and agent.enabled and setup_ready and channels["live"]
+    )
 
     return {
         "agent": agent,
+        "company": company,
         "payload": {
             "company_id": company_id,
             "agent_id": agent_id,
+            "company_active": bool(company.active),
             "ready_for_customer": ready_for_customer,
             "setup_ready": setup_ready,
             "lifecycle": "live" if agent.enabled else "draft",
@@ -182,6 +193,7 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
             "blockers": blockers,
             "setup_blockers": setup_blockers,
             "checks": {
+                "company_active": bool(company.active),
                 "employee_enabled": bool(agent.enabled),
                 "profile": profile_ready,
                 "knowledge": knowledge_ready,
@@ -225,6 +237,7 @@ def go_live(
     try:
         state = _delivery_state(db, company_id, agent_id)
         agent = state["agent"]
+        company = state["company"]
         if agent.enabled:
             return {**state["payload"], "status": "already_live"}
         if not state["payload"]["setup_ready"]:
@@ -233,6 +246,14 @@ def go_live(
                 detail={
                     "message": "AI employee is not ready to go live",
                     "blockers": state["payload"]["setup_blockers"],
+                },
+            )
+        if not company.active:
+            raise HTTPException(
+                409,
+                detail={
+                    "message": "Activate the company before the AI employee goes live",
+                    "blockers": ["Company is inactive"],
                 },
             )
         limits_service.check_agent_limit(db, company_id)
