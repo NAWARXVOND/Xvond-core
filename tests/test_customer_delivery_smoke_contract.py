@@ -23,11 +23,18 @@ def test_customer_delivery_flow_has_canonical_employee_creation_in_draft():
     assert '"lifecycle": "draft"' in PROFILE_API
 
 
-def test_customer_delivery_flow_requires_knowledge_and_channel_before_setup_ready():
+def test_customer_delivery_flow_requires_knowledge_and_configured_channel_before_setup_ready():
     assert 'setup_blockers.append("Attach at least one enabled knowledge source")' in READINESS_API
-    assert 'setup_blockers.append("Connect and enable at least one customer channel")' in READINESS_API
+    assert 'setup_blockers.append("Connect and configure at least one customer channel")' in READINESS_API
     assert "openKnowledgeManager" in GUIDE
     assert "switchWorkspaceTab('channels')" in GUIDE
+
+
+def test_customer_delivery_flow_requires_live_channel_only_after_employee_goes_live():
+    assert 'elif not channels["live"]' in READINESS_API
+    assert 'blockers.append("Activate at least one customer channel")' in READINESS_API
+    assert 'ready_for_customer = bool(agent.enabled and setup_ready and channels["live"])' in READINESS_API
+    assert '"live_channels": channels["live"]' in READINESS_API
 
 
 def test_customer_delivery_flow_supports_reply_only_and_operational_employees():
@@ -59,7 +66,7 @@ def test_delivery_readiness_is_registered_in_application():
 
 def test_delivery_contract_separates_draft_setup_from_live_customer_verdict():
     assert '"setup_ready": setup_ready' in READINESS_API
-    assert '"ready_for_customer": bool(agent.enabled and setup_ready)' in READINESS_API
+    assert '"ready_for_customer": ready_for_customer' in READINESS_API
     assert '@router.post("/companies/{company_id}/agents/{agent_id}/go-live")' in READINESS_API
     assert "Ready to go live" in GUIDE
     assert "Live for customer" in GUIDE

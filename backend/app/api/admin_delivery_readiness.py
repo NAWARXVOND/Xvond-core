@@ -69,6 +69,25 @@ def _action_state(db, company_id: int, agent_id: int) -> dict:
     }
 
 
+def _channel_state(db, company_id: int, agent_id: int) -> dict:
+    rows = (
+        db.query(AgentChannel)
+        .filter(
+            AgentChannel.company_id == company_id,
+            AgentChannel.agent_id == agent_id,
+        )
+        .all()
+    )
+    configured = [row for row in rows if bool(reveal_config(row.config) or {})]
+    live = [row for row in configured if row.enabled]
+    return {
+        "configured_count": len(configured),
+        "live_count": len(live),
+        "configured": bool(configured),
+        "live": bool(live),
+    }
+
+
 def _delivery_state(db, company_id: int, agent_id: int) -> dict:
     agent = (
         db.query(AIAgent)
@@ -101,17 +120,7 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
     )
     knowledge_ready = knowledge_count > 0
 
-    channel_count = (
-        db.query(AgentChannel)
-        .filter(
-            AgentChannel.company_id == company_id,
-            AgentChannel.agent_id == agent_id,
-            AgentChannel.enabled.is_(True),
-        )
-        .count()
-    )
-    channels_ready = channel_count > 0
-
+    channels = _channel_state(db, company_id, agent_id)
     actions = _action_state(db, company_id, agent_id)
 
     integration_issues = []
@@ -145,8 +154,8 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
         setup_blockers.append("Complete employee identity and behavior")
     if not knowledge_ready:
         setup_blockers.append("Attach at least one enabled knowledge source")
-    if not channels_ready:
-        setup_blockers.append("Connect and enable at least one customer channel")
+    if not channels["configured"]:
+        setup_blockers.append("Connect and configure at least one customer channel")
     setup_blockers.extend(actions["issues"])
     setup_blockers.extend(integration_issues)
     if workflow_required and not workflow_ready:
@@ -156,13 +165,17 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
     blockers = list(setup_blockers)
     if not agent.enabled:
         blockers.insert(0, "AI employee is in draft mode")
+    elif not channels["live"]:
+        blockers.append("Activate at least one customer channel")
+
+    ready_for_customer = bool(agent.enabled and setup_ready and channels["live"])
 
     return {
         "agent": agent,
         "payload": {
             "company_id": company_id,
             "agent_id": agent_id,
-            "ready_for_customer": bool(agent.enabled and setup_ready),
+            "ready_for_customer": ready_for_customer,
             "setup_ready": setup_ready,
             "lifecycle": "live" if agent.enabled else "draft",
             "mode": "conversational_and_operational" if actions["requested"] else "conversational",
@@ -172,14 +185,16 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
                 "employee_enabled": bool(agent.enabled),
                 "profile": profile_ready,
                 "knowledge": knowledge_ready,
-                "channels": channels_ready,
+                "channels": channels["configured"],
+                "live_channels": channels["live"],
                 "actions": actions["ready"],
                 "workflow_engine": workflow_ready,
                 "connected_apps": not integration_issues,
             },
             "counts": {
                 "knowledge_sources": knowledge_count,
-                "channels": channel_count,
+                "channels": channels["configured_count"],
+                "live_channels": channels["live_count"],
                 "enabled_actions": actions["enabled_count"],
                 "required_connected_apps": len(actions["required_integration_ids"]),
             },
