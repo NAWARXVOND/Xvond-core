@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "actions": {
+    "create_booking.check_availability": {
+      "adapter": "booking",
+      "mutates": false,
+      "required_data": ["details"],
+      "success_data": ["available", "available_slots"]
+    },
+    "create_booking.execute": {
+      "adapter": "booking",
+      "mutates": true,
+      "required_data": ["details", "idempotency_key"],
+      "success_data": ["booking_id"]
+    },
+    "create_booking.cancel": {
+      "adapter": "booking",
+      "mutates": true,
+      "required_data": ["idempotency_key"],
+      "success_data": ["cancelled"]
+    },
+    "send_email.execute": {
+      "adapter": "email",
+      "mutates": true,
+      "required_data": ["details", "idempotency_key"],
+      "success_data": ["message_id"]
+    }
+  },
+  "response_contract": {
+    "success": "boolean",
+    "request_id": "string",
+    "action": "string",
+    "data": "object|null",
+    "error": "string|null"
+  },
+  "policy": {
+    "mutating_actions_require_idempotency": true,
+    "provider_success_required_before_success_true": true,
+    "credentials_live_in_workflow_engine": true,
+    "xvond_database_access_from_workflows": false
+  }
+}
