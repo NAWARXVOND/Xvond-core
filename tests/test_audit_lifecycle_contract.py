@@ -6,6 +6,7 @@ DELIVERY = Path("backend/app/api/admin_delivery_readiness.py").read_text(encodin
 READINESS = Path("backend/app/core/readiness.py").read_text(encoding="utf-8")
 MAIN = Path("backend/app/main.py").read_text(encoding="utf-8")
 BOOTSTRAP = Path("backend/app/modules/tools/bootstrap.py").read_text(encoding="utf-8")
+AUDIT_FIXES = Path("frontend/admin/core-audit-fixes.js").read_text(encoding="utf-8")
 
 
 def test_company_activation_is_readiness_gated_and_deactivation_is_emergency_stop():
@@ -43,3 +44,11 @@ def test_only_workflow_backed_action_tool_is_registered():
 
 def test_unreachable_duplicate_company_admin_module_is_removed():
     assert not Path("backend/app/api/admin_companies.py").exists()
+
+
+def test_admin_pdf_upload_uses_http_only_cookie_session_not_browser_token_storage():
+    assert "uploadPDFKnowledge=async function" in AUDIT_FIXES
+    assert "credentials:'same-origin'" in AUDIT_FIXES
+    override = AUDIT_FIXES.split("uploadPDFKnowledge=async function", 1)[1]
+    assert "localStorage" not in override
+    assert "Authorization" not in override
