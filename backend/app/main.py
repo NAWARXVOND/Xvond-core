@@ -19,6 +19,7 @@ from backend.app.api.admin_ai_employee_profile import router as admin_ai_employe
 from backend.app.api.admin_ai_employee_files import router as admin_ai_employee_files_router
 from backend.app.api.admin_ai_employee_knowledge import router as admin_ai_employee_knowledge_router
 from backend.app.api.admin_agent_actions import router as admin_agent_actions_router
+from backend.app.api.admin_delivery_readiness import router as admin_delivery_readiness_router
 from backend.app.api.admin_audit import router as admin_audit_router
 from backend.app.api.admin_channels import router as admin_channels_router
 from backend.app.api.admin_voice import router as admin_voice_router
@@ -191,6 +192,7 @@ for r in [
     admin_ai_employee_files_router,
     admin_ai_employee_knowledge_router,
     admin_agent_actions_router,
+    admin_delivery_readiness_router,
     admin_audit_router,
     admin_channels_router,
     admin_voice_router,
