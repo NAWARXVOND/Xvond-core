@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from backend.app.api.admin_delivery_readiness import router as delivery_readiness_router
 from backend.app.core.config.settings import settings
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
@@ -13,6 +14,7 @@ from backend.app.models.user import User
 from backend.app.modules.billing.models import Plan, Subscription
 
 router = APIRouter(prefix="/admin", tags=["Xvond Admin"])
+router.include_router(delivery_readiness_router)
 
 
 class CompanyCreate(BaseModel):
