@@ -8,6 +8,7 @@ from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.ai_agent.profile_models import AIAgentProfile
+from backend.app.modules.billing.limits import limits_service
 from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.integrations.models import CompanyIntegration
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeDocument
@@ -68,105 +69,105 @@ def _action_state(db, company_id: int, agent_id: int) -> dict:
     }
 
 
-@router.get("/companies/{company_id}/agents/{agent_id}")
-def get_delivery_readiness(
-    company_id: int,
-    agent_id: int,
-    current_admin: User = Depends(require_xvond_admin),
-):
-    db = SessionLocal()
-    try:
-        agent = (
-            db.query(AIAgent)
-            .filter(AIAgent.id == agent_id, AIAgent.company_id == company_id)
+def _delivery_state(db, company_id: int, agent_id: int) -> dict:
+    agent = (
+        db.query(AIAgent)
+        .filter(AIAgent.id == agent_id, AIAgent.company_id == company_id)
+        .first()
+    )
+    if agent is None:
+        raise HTTPException(404, "AI employee not found")
+
+    profile = (
+        db.query(AIAgentProfile)
+        .filter(
+            AIAgentProfile.agent_id == agent_id,
+            AIAgentProfile.company_id == company_id,
+        )
+        .first()
+    )
+    profile_ready = profile is not None and bool(str(agent.name or "").strip())
+
+    knowledge_count = (
+        db.query(AgentKnowledge)
+        .join(KnowledgeDocument, KnowledgeDocument.id == AgentKnowledge.document_id)
+        .filter(
+            AgentKnowledge.agent_id == agent_id,
+            AgentKnowledge.enabled.is_(True),
+            KnowledgeDocument.company_id == company_id,
+            KnowledgeDocument.enabled.is_(True),
+        )
+        .count()
+    )
+    knowledge_ready = knowledge_count > 0
+
+    channel_count = (
+        db.query(AgentChannel)
+        .filter(
+            AgentChannel.company_id == company_id,
+            AgentChannel.agent_id == agent_id,
+            AgentChannel.enabled.is_(True),
+        )
+        .count()
+    )
+    channels_ready = channel_count > 0
+
+    actions = _action_state(db, company_id, agent_id)
+
+    integration_issues = []
+    for integration_id in actions["required_integration_ids"]:
+        integration = (
+            db.query(CompanyIntegration)
+            .filter(
+                CompanyIntegration.id == integration_id,
+                CompanyIntegration.company_id == company_id,
+                CompanyIntegration.enabled.is_(True),
+            )
             .first()
         )
-        if agent is None:
-            raise HTTPException(404, "AI employee not found")
-
-        profile = (
-            db.query(AIAgentProfile)
-            .filter(
-                AIAgentProfile.agent_id == agent_id,
-                AIAgentProfile.company_id == company_id,
+        if integration is None or not (reveal_config(integration.config) or {}):
+            integration_issues.append(
+                f"Connected App #{integration_id} is missing or not configured"
             )
-            .first()
+
+    workflow_required = actions["requires_workflow_engine"]
+    workflow_ready = (
+        not workflow_required
+        or (
+            bool(settings.N8N_ENABLED)
+            and bool(str(settings.N8N_WEBHOOK_URL or "").strip())
+            and bool(str(settings.N8N_SHARED_SECRET or "").strip())
         )
-        profile_ready = profile is not None and bool(str(agent.name or "").strip())
+    )
 
-        knowledge_count = (
-            db.query(AgentKnowledge)
-            .join(KnowledgeDocument, KnowledgeDocument.id == AgentKnowledge.document_id)
-            .filter(
-                AgentKnowledge.agent_id == agent_id,
-                AgentKnowledge.enabled.is_(True),
-                KnowledgeDocument.company_id == company_id,
-                KnowledgeDocument.enabled.is_(True),
-            )
-            .count()
-        )
-        knowledge_ready = knowledge_count > 0
+    setup_blockers = []
+    if not profile_ready:
+        setup_blockers.append("Complete employee identity and behavior")
+    if not knowledge_ready:
+        setup_blockers.append("Attach at least one enabled knowledge source")
+    if not channels_ready:
+        setup_blockers.append("Connect and enable at least one customer channel")
+    setup_blockers.extend(actions["issues"])
+    setup_blockers.extend(integration_issues)
+    if workflow_required and not workflow_ready:
+        setup_blockers.append("Workflow Engine is not ready for enabled business actions")
 
-        channel_count = (
-            db.query(AgentChannel)
-            .filter(
-                AgentChannel.company_id == company_id,
-                AgentChannel.agent_id == agent_id,
-                AgentChannel.enabled.is_(True),
-            )
-            .count()
-        )
-        channels_ready = channel_count > 0
+    setup_ready = not setup_blockers
+    blockers = list(setup_blockers)
+    if not agent.enabled:
+        blockers.insert(0, "AI employee is in draft mode")
 
-        actions = _action_state(db, company_id, agent_id)
-
-        integration_issues = []
-        for integration_id in actions["required_integration_ids"]:
-            integration = (
-                db.query(CompanyIntegration)
-                .filter(
-                    CompanyIntegration.id == integration_id,
-                    CompanyIntegration.company_id == company_id,
-                    CompanyIntegration.enabled.is_(True),
-                )
-                .first()
-            )
-            if integration is None or not (reveal_config(integration.config) or {}):
-                integration_issues.append(
-                    f"Connected App #{integration_id} is missing or not configured"
-                )
-
-        workflow_required = actions["requires_workflow_engine"]
-        workflow_ready = (
-            not workflow_required
-            or (
-                bool(settings.N8N_ENABLED)
-                and bool(str(settings.N8N_WEBHOOK_URL or "").strip())
-                and bool(str(settings.N8N_SHARED_SECRET or "").strip())
-            )
-        )
-
-        blockers = []
-        if not agent.enabled:
-            blockers.append("AI employee is disabled")
-        if not profile_ready:
-            blockers.append("Complete employee identity and behavior")
-        if not knowledge_ready:
-            blockers.append("Attach at least one enabled knowledge source")
-        if not channels_ready:
-            blockers.append("Connect and enable at least one customer channel")
-        blockers.extend(actions["issues"])
-        blockers.extend(integration_issues)
-        if workflow_required and not workflow_ready:
-            blockers.append("Workflow Engine is not ready for enabled business actions")
-
-        ready = not blockers
-        return {
+    return {
+        "agent": agent,
+        "payload": {
             "company_id": company_id,
             "agent_id": agent_id,
-            "ready_for_customer": ready,
+            "ready_for_customer": bool(agent.enabled and setup_ready),
+            "setup_ready": setup_ready,
+            "lifecycle": "live" if agent.enabled else "draft",
             "mode": "conversational_and_operational" if actions["requested"] else "conversational",
             "blockers": blockers,
+            "setup_blockers": setup_blockers,
             "checks": {
                 "employee_enabled": bool(agent.enabled),
                 "profile": profile_ready,
@@ -182,6 +183,71 @@ def get_delivery_readiness(
                 "enabled_actions": actions["enabled_count"],
                 "required_connected_apps": len(actions["required_integration_ids"]),
             },
-        }
+        },
+    }
+
+
+@router.get("/companies/{company_id}/agents/{agent_id}")
+def get_delivery_readiness(
+    company_id: int,
+    agent_id: int,
+    current_admin: User = Depends(require_xvond_admin),
+):
+    db = SessionLocal()
+    try:
+        return _delivery_state(db, company_id, agent_id)["payload"]
+    finally:
+        db.close()
+
+
+@router.post("/companies/{company_id}/agents/{agent_id}/go-live")
+def go_live(
+    company_id: int,
+    agent_id: int,
+    current_admin: User = Depends(require_xvond_admin),
+):
+    db = SessionLocal()
+    try:
+        state = _delivery_state(db, company_id, agent_id)
+        agent = state["agent"]
+        if agent.enabled:
+            return {**state["payload"], "status": "already_live"}
+        if not state["payload"]["setup_ready"]:
+            raise HTTPException(
+                409,
+                detail={
+                    "message": "AI employee is not ready to go live",
+                    "blockers": state["payload"]["setup_blockers"],
+                },
+            )
+        limits_service.check_agent_limit(db, company_id)
+        agent.enabled = True
+        db.commit()
+        live = _delivery_state(db, company_id, agent_id)["payload"]
+        return {**live, "status": "live"}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@router.post("/companies/{company_id}/agents/{agent_id}/deactivate")
+def deactivate(
+    company_id: int,
+    agent_id: int,
+    current_admin: User = Depends(require_xvond_admin),
+):
+    db = SessionLocal()
+    try:
+        state = _delivery_state(db, company_id, agent_id)
+        agent = state["agent"]
+        agent.enabled = False
+        db.commit()
+        draft = _delivery_state(db, company_id, agent_id)["payload"]
+        return {**draft, "status": "draft"}
     finally:
         db.close()
