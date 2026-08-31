@@ -18,6 +18,59 @@ from backend.app.modules.tools.base import ToolResult
 from backend.app.modules.tools.business_models import ActionRequest
 
 
+_SENSITIVE_CONFIG_PARTS = (
+    "secret",
+    "password",
+    "passwd",
+    "token",
+    "api_key",
+    "apikey",
+    "authorization",
+    "credential",
+    "cookie",
+    "private_key",
+    "client_secret",
+)
+
+
+def _workflow_safe_config(value):
+    """Return workflow-routing metadata without Xvond-side credentials.
+
+    Action configuration may contain legacy integration credentials or arbitrary
+    provider settings. The execution plane must receive routing metadata only;
+    provider credentials belong to the workflow engine itself.
+    """
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, item in value.items():
+            normalized = str(key).strip().lower().replace("-", "_")
+            if normalized in {"headers", "auth", "authentication"}:
+                continue
+            if any(part in normalized for part in _SENSITIVE_CONFIG_PARTS):
+                continue
+            cleaned[key] = _workflow_safe_config(item)
+        return cleaned
+    if isinstance(value, list):
+        return [_workflow_safe_config(item) for item in value]
+    if isinstance(value, tuple):
+        return [_workflow_safe_config(item) for item in value]
+    return deepcopy(value)
+
+
+def _workflow_payload(result: dict) -> dict:
+    """Keep provider data backward-compatible while preserving workflow identity."""
+    inner = result.get("data")
+    workflow_meta = {
+        "request_id": result.get("request_id"),
+        "action": result.get("action"),
+    }
+    if isinstance(inner, dict):
+        payload = dict(inner)
+        payload["_workflow"] = workflow_meta
+        return payload
+    return {"result": inner, "_workflow": workflow_meta}
+
+
 class WorkflowActionRequestTool(ActionRequestTool):
     """Authoritative business-action tool backed by the workflow engine.
 
@@ -58,7 +111,7 @@ class WorkflowActionRequestTool(ActionRequestTool):
         success = bool(result.get("success"))
         return ToolResult(
             success=success,
-            data=result.get("data") if "data" in result else result,
+            data=_workflow_payload(result),
             error=None if success else str(result.get("error") or result.get("message") or "Workflow execution failed"),
         )
 
@@ -85,7 +138,7 @@ class WorkflowActionRequestTool(ActionRequestTool):
                     "operation": "check_availability",
                     "action_type": action_type,
                     "details": details,
-                    "action_config": deepcopy(action),
+                    "action_config": _workflow_safe_config(action),
                 },
             )
 
@@ -236,7 +289,7 @@ class WorkflowActionRequestTool(ActionRequestTool):
                 "action_type": request.action_type,
                 "details": _customer_details(request.details or {}),
                 "summary": request.summary,
-                "action_config": deepcopy(action),
+                "action_config": _workflow_safe_config(action),
                 "idempotency_key": idempotency_key,
             },
         )
@@ -332,7 +385,7 @@ class WorkflowActionRequestTool(ActionRequestTool):
                 "action_type": request.action_type,
                 "details": _customer_details(request.details or {}),
                 "summary": request.summary,
-                "action_config": deepcopy(action),
+                "action_config": _workflow_safe_config(action),
                 "idempotency_key": idempotency_key,
             },
         )
