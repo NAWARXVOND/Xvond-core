@@ -46,7 +46,7 @@ Equivalent command:
 docker compose -f docker-compose.production.yml --profile workflow up -d workflow-postgres workflow-engine
 ```
 
-## First workflow
+## Master workflow
 
 Import:
 
@@ -87,6 +87,39 @@ Expected response contract:
   "error": null
 }
 ```
+
+## Canonical business-action contracts
+
+The authoritative action contract catalog is:
+
+`ops/n8n/action-contracts.json`
+
+Initial contracts:
+
+- `create_booking.check_availability`
+- `create_booking.execute`
+- `create_booking.cancel`
+- `send_email.execute`
+
+Every side-effecting action must carry a stable `idempotency_key`. Xvond generates and persists that identity before dispatch. The workflow must reuse it when calling the third-party provider and must not invent a new request identity on retry.
+
+Provider credentials are intentionally not stored in Git. Attach real credentials only inside the workflow engine when configuring the target provider. Examples include Google Calendar / Microsoft Calendar for booking and SMTP / transactional-email provider credentials for email. Switching providers must not require a Xvond Core code change as long as the workflow preserves the canonical request/response contract.
+
+A successful side-effect response must only be returned after the external provider confirms success. The canonical response shape remains:
+
+```json
+{
+  "success": true,
+  "request_id": "same-stable-request-id",
+  "action": "create_booking.execute",
+  "data": {
+    "provider_reference": "external-id"
+  },
+  "error": null
+}
+```
+
+Failures must return `success: false` and an error message without pretending the business operation succeeded.
 
 ## Production promotion checklist
 
