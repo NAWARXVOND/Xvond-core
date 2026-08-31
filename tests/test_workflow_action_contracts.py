@@ -7,7 +7,7 @@ CONTRACT_PATH = Path("ops/n8n/action-contracts.json")
 
 def test_workflow_action_contracts_are_valid():
     payload = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
-    assert payload["version"] == 1
+    assert payload["version"] == 2
     actions = payload["actions"]
     assert "booking.execute" in actions
     assert "send_email.execute" in actions
@@ -15,6 +15,15 @@ def test_workflow_action_contracts_are_valid():
     assert "pos.create_order" in actions
     assert "custom_api.execute" in actions
     assert "notification.send" in actions
+
+    generic = payload["generic_business_action"]
+    assert generic["pattern"] == "<action_key>.(check_availability|execute|cancel)"
+    assert generic["adapter"] == "business"
+    assert generic["required_data"] == ["action_type", "action_config", "details"]
+    assert generic["required_action_config"] == ["module", "destination"]
+    assert generic["mutating_operations"] == ["execute", "cancel"]
+    assert generic["mutating_operations_require_idempotency"] is True
+    assert payload["policy"]["generic_employee_actions_are_config_driven"] is True
 
     for name, contract in actions.items():
         assert "." in name
@@ -29,3 +38,6 @@ def test_side_effect_contracts_require_idempotency_key():
     for name, contract in payload["actions"].items():
         if contract["side_effect"]:
             assert "idempotency_key" in contract["required_data"], name
+
+    generic = payload["generic_business_action"]
+    assert generic["mutating_operations_require_idempotency"] is True

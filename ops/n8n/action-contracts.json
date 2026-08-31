@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "actions": {
     "booking.check_availability": {
       "adapter": "booking",
@@ -74,6 +74,15 @@
       "success_data": ["notification_id"]
     }
   },
+  "generic_business_action": {
+    "pattern": "<action_key>.(check_availability|execute|cancel)",
+    "adapter": "business",
+    "required_data": ["action_type", "action_config", "details"],
+    "required_action_config": ["module", "destination"],
+    "mutating_operations": ["execute", "cancel"],
+    "mutating_operations_require_idempotency": true,
+    "purpose": "Allow any enabled AI Employee operation key to use the same execution gateway without adding code for each new operation name."
+  },
   "response_contract": {
     "success": "boolean",
     "request_id": "string",
@@ -85,6 +94,7 @@
     "mutating_actions_require_idempotency": true,
     "provider_success_required_before_success_true": true,
     "credentials_live_in_workflow_engine": true,
-    "xvond_database_access_from_workflows": false
+    "xvond_database_access_from_workflows": false,
+    "generic_employee_actions_are_config_driven": true
   }
 }
