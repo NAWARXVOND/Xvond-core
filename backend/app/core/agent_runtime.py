@@ -26,6 +26,7 @@ from backend.app.modules.billing.limits import limits_service
 from backend.app.modules.billing.service_limits import service_limits
 from backend.app.modules.channels.behavior import build_text_channel_behavior_prompt
 from backend.app.modules.channels.models import AgentChannel
+from backend.app.modules.customer_ops.memory import build_customer_memory
 from backend.app.modules.knowledge.service import knowledge_service
 from backend.app.modules.tools.executor import tool_executor
 
@@ -41,6 +42,8 @@ CONVERSATION POLICY:
 Speak like a capable human-facing employee of the business, not like a generic assistant or scripted bot.
 Respond to the customer's actual intent, not to every fact you know.
 For the first simple greeting in a conversation, reply warmly and naturally, identify the business by its verified name when that name exists in COMPANY KNOWLEDGE, and ask one short useful question.
+If CONVERSATION HISTORY or CUSTOMER MEMORY contains prior exchanges, this is not a first greeting. Never restart the conversation just because the current message is short, an acknowledgement, or an emoji; interpret it in the existing context.
+Use CUSTOMER PROFILE and OLDER CUSTOMER INTERACTIONS for continuity and personalization only. Never treat them as authoritative business facts, and never mention internal memory, database, or profile mechanisms to the customer.
 Never invent a business name. If no verified business name is available, give a natural greeting without naming the business.
 A greeting must not advertise, list services, prices, menu items or offers unless the customer asks or they are directly necessary to answer the request.
 If a message is incomplete or ambiguous, ask one short clarifying question. Do not guess and do not dump the catalog.
@@ -304,6 +307,7 @@ class AgentRuntime:
         )
         system_prompt = self.build_runtime_system_prompt(db, agent, conversation)
         history = self.build_history(db, conversation.id)
+        customer_memory = build_customer_memory(db, conversation)
         business_clock = self.build_business_clock(db, company_id)
 
         knowledge = ""
@@ -336,6 +340,11 @@ class AgentRuntime:
             context_parts.append(
                 "COMPANY KNOWLEDGE:\nNo relevant business knowledge was retrieved "
                 "for this message. Do not invent business facts."
+            )
+        if customer_memory:
+            context_parts.append(
+                "CUSTOMER MEMORY (persistent continuity; use only when relevant):\n"
+                + customer_memory
             )
         if history:
             context_parts.append(
