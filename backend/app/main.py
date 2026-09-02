@@ -280,6 +280,8 @@ def admin_ui():
 
 
 @app.get("/customer-ui")
+@app.get("/login")
+@app.get("/dashboard")
 def customer_ui():
     return RedirectResponse(url="/static/customer/index.html")
 
