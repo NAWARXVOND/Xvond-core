@@ -36,6 +36,8 @@ services:
     image: xvond-core:latest
     container_name: xvond-whatsapp-worker
     restart: unless-stopped
+    healthcheck:
+      disable: true
     entrypoint: []
     command: ["python", "-m", "scripts.whatsapp_worker"]
     env_file:
