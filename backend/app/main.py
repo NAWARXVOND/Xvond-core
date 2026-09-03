@@ -69,6 +69,7 @@ from backend.app.core.rate_limit import rate_limiter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
+CUSTOMER_PORTAL_VERSION = "20260903-2"
 
 
 @asynccontextmanager
@@ -283,7 +284,9 @@ def admin_ui():
 @app.get("/login")
 @app.get("/dashboard")
 def customer_ui():
-    return RedirectResponse(url="/static/customer/index.html")
+    return RedirectResponse(
+        url=f"/static/customer/index.html?v={CUSTOMER_PORTAL_VERSION}"
+    )
 
 
 @app.get("/privacy")
