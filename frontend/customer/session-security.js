@@ -29,6 +29,28 @@ api = async function(path, options = {}) {
     return data;
 };
 
+// Customer eligibility and company attachment are enforced server-side by
+// /customer/overview. The browser only renders the authenticated server state.
+startPortal = async function() {
+    try {
+        [currentUser, portalOverview] = await Promise.all([
+            api("/users/me"),
+            api("/customer/overview")
+        ]);
+        portalNavigation = portalOverview?.portal?.navigation || fallbackPortalNavigation();
+        document.getElementById("login-screen").classList.add("hidden");
+        document.getElementById("portal").classList.remove("hidden");
+        document.getElementById("user-email").textContent = currentUser.email;
+        renderPortalNavigation();
+        renderAccountInfo();
+        renderDashboard();
+    } catch (err) {
+        clearSession();
+        const error = document.getElementById("login-error");
+        if (error) error.textContent = err.message;
+    }
+};
+
 login = async function() {
     const email = document.getElementById("login-email").value.trim();
     const password = document.getElementById("login-password").value;
