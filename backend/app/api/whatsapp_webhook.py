@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import text
@@ -120,48 +121,144 @@ def _ensure_handoff_record(db, *, channel: AgentChannel, conversation_id: int, r
     return row
 
 
+def _business_app_echo_content(echo: dict) -> str:
+    message_type = str(echo.get("type") or "unknown").strip().lower()
+    payload = echo.get(message_type) or {}
+
+    if message_type == "text":
+        body = str((echo.get("text") or {}).get("body") or "").strip()
+        return body or "[Empty WhatsApp Business message]"
+
+    if isinstance(payload, dict):
+        caption = str(payload.get("caption") or "").strip()
+        if caption:
+            return caption
+
+    labels = {
+        "image": "[Image sent from WhatsApp Business]",
+        "video": "[Video sent from WhatsApp Business]",
+        "audio": "[Audio sent from WhatsApp Business]",
+        "voice": "[Voice message sent from WhatsApp Business]",
+        "document": "[Document sent from WhatsApp Business]",
+        "sticker": "[Sticker sent from WhatsApp Business]",
+        "location": "[Location sent from WhatsApp Business]",
+        "contacts": "[Contact shared from WhatsApp Business]",
+        "contact": "[Contact shared from WhatsApp Business]",
+        "reaction": "[Reaction sent from WhatsApp Business]",
+        "edit": "[Message edited in WhatsApp Business]",
+        "revoke": "[Message deleted in WhatsApp Business]",
+    }
+    return labels.get(message_type, f"[{message_type or 'Message'} sent from WhatsApp Business]")
+
+
+def _business_app_echo_created_at(echo: dict) -> datetime | None:
+    timestamp = str(echo.get("timestamp") or "").strip()
+    if not timestamp:
+        return None
+    try:
+        return datetime.utcfromtimestamp(int(timestamp))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def process_business_app_echo(db, channel: AgentChannel, value: dict) -> list[dict]:
+    """Mirror WhatsApp Business App replies into the Xvond conversation inbox.
+
+    smb_message_echoes are emitted by Meta Coexistence when a staff member
+    sends from the WhatsApp Business app or a linked device. Every echo is
+    deduplicated by its WhatsApp message id, recorded in the same conversation,
+    and places that conversation under explicit human control.
+    """
     processed = []
+    phone_number_id = str((value.get("metadata") or {}).get("phone_number_id") or "")
+
     for echo in value.get("message_echoes", []) or []:
         wa_id = echo_recipient(echo)
-        message_id = str(echo.get("id") or "")
-        if not wa_id:
+        message_id = str(echo.get("id") or "").strip()
+        if not wa_id or not message_id:
+            processed.append({"message_id": message_id, "status": "ignored_invalid_echo"})
             continue
-        session = (
-            db.query(WhatsAppSession)
-            .filter(
-                WhatsAppSession.company_id == channel.company_id,
-                WhatsAppSession.agent_id == channel.agent_id,
-                WhatsAppSession.phone_number_id == str(value.get("metadata", {}).get("phone_number_id", "")),
-                WhatsAppSession.wa_id == wa_id,
-            )
-            .first()
-        )
-        if session is None:
-            processed.append({"message_id": message_id, "status": "human_echo_without_session"})
-            continue
-        activate_human_handoff(session, reason="business_app_reply", human_message=True)
-        _ensure_handoff_record(
-            db,
-            channel=channel,
-            conversation_id=session.conversation_id,
-            reason="business_app_reply",
-            status="in_progress",
-        )
-        audit_service.log(
+
+        claimed = claim_message(
             db=db,
+            message_id=message_id,
             company_id=channel.company_id,
-            action="whatsapp.human_reply_detected",
-            resource_type="channel",
-            resource_id=channel.id,
-            details={
+            agent_id=channel.agent_id,
+            wa_id=wa_id,
+        )
+        if not claimed:
+            processed.append({"message_id": message_id, "status": "duplicate"})
+            continue
+
+        content = _business_app_echo_content(echo)
+
+        try:
+            lock_contact(db, channel.agent_id, wa_id)
+            session = (
+                db.query(WhatsAppSession)
+                .filter(
+                    WhatsAppSession.company_id == channel.company_id,
+                    WhatsAppSession.agent_id == channel.agent_id,
+                    WhatsAppSession.phone_number_id == phone_number_id,
+                    WhatsAppSession.wa_id == wa_id,
+                )
+                .first()
+            )
+            if session is None:
+                session = _get_or_create_whatsapp_session(
+                    db=db,
+                    channel=channel,
+                    wa_id=wa_id,
+                    phone_number_id=phone_number_id,
+                    incoming_text=content,
+                )
+
+            activate_human_handoff(session, reason="business_app_reply", human_message=True)
+            _ensure_handoff_record(
+                db,
+                channel=channel,
+                conversation_id=session.conversation_id,
+                reason="business_app_reply",
+                status="in_progress",
+            )
+
+            message_kwargs = {
+                "conversation_id": session.conversation_id,
+                "role": "human",
+                "content": content,
+            }
+            created_at = _business_app_echo_created_at(echo)
+            if created_at is not None:
+                message_kwargs["created_at"] = created_at
+            db.add(AIMessage(**message_kwargs))
+
+            audit_service.log(
+                db=db,
+                company_id=channel.company_id,
+                action="whatsapp.human_reply_detected",
+                resource_type="channel",
+                resource_id=channel.id,
+                details={
+                    "message_id": message_id,
+                    "conversation_id": session.conversation_id,
+                    "wa_id": wa_id,
+                    "source": "whatsapp_business_app",
+                    "message_type": str(echo.get("type") or "unknown"),
+                    "mirrored_to_inbox": True,
+                },
+            )
+            db.commit()
+            processed.append({
                 "message_id": message_id,
                 "conversation_id": session.conversation_id,
-                "wa_id": wa_id,
-                "source": "whatsapp_business_app",
-            },
-        )
-        processed.append({"message_id": message_id, "conversation_id": session.conversation_id, "status": "human_active"})
+                "status": "human_active",
+                "mirrored": True,
+            })
+        except Exception:
+            db.rollback()
+            release_message_claim(db, message_id)
+            raise
+
     return processed
 
 
@@ -323,7 +420,6 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                 field = change.get("field")
                 if field == "smb_message_echoes":
                     processed.extend(process_business_app_echo(db=db, channel=channel, value=value))
-                    db.commit()
                     continue
                 if field not in (None, "messages"):
                     continue
