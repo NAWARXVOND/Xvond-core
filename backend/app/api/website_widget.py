@@ -1,5 +1,6 @@
 import json
 import secrets
+from typing import Literal
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -32,6 +33,11 @@ class WebsiteSetup(BaseModel):
     custom_instructions: str | None = None
     accent_color: str = "#111827"
     launcher_label: str = "Chat"
+    human_assistance_mode: Literal["direct_handoff", "contact_only", "ai_only"] = "direct_handoff"
+    contact_phone: str | None = None
+    contact_whatsapp: str | None = None
+    contact_email: str | None = None
+    contact_url: str | None = None
 
 
 DEFAULT_BEHAVIOR = """WEBSITE CHANNEL CONTEXT:
@@ -64,6 +70,23 @@ def _normalized_domain(value: str) -> str:
     if host in {"localhost", "127.0.0.1", "::1"} and settings.is_production:
         raise HTTPException(400, "Localhost cannot be used as a production website domain")
     return host
+
+
+def _assistance_mode(config: dict) -> str:
+    value = str(config.get("human_assistance_mode") or "direct_handoff").strip().lower()
+    if value not in {"direct_handoff", "contact_only", "ai_only"}:
+        return "direct_handoff"
+    return value
+
+
+def website_contact_methods(config: dict) -> list[str]:
+    values = [
+        ("Phone", config.get("contact_phone")),
+        ("WhatsApp", config.get("contact_whatsapp")),
+        ("Email", config.get("contact_email")),
+        ("Contact URL", config.get("contact_url")),
+    ]
+    return [f"{label}: {str(value).strip()}" for label, value in values if str(value or "").strip()]
 
 
 def _useful_business_knowledge(document: KnowledgeDocument) -> bool:
@@ -110,6 +133,8 @@ def _ready(db, channel: AgentChannel) -> list[str]:
         blockers.append("Allowed website domain is required")
     if not str(config.get("widget_key") or "").strip():
         blockers.append("Widget key is missing")
+    if _assistance_mode(config) == "contact_only" and not website_contact_methods(config):
+        blockers.append("Add at least one contact method when Human Assistance is Contact Only")
     if settings.is_production and not settings.PUBLIC_BASE_URL:
         blockers.append("Xvond public API URL is not configured")
 
@@ -131,7 +156,26 @@ def _ready(db, channel: AgentChannel) -> list[str]:
 
 def _behavior(config: dict) -> str:
     custom = str(config.get("custom_instructions") or "").strip()
+    mode = _assistance_mode(config)
+    contacts = website_contact_methods(config)
     parts = [DEFAULT_BEHAVIOR]
+    if mode == "direct_handoff":
+        parts.append(
+            "HUMAN ASSISTANCE POLICY: Direct handoff is enabled for this website channel. "
+            "If the visitor explicitly asks for a human and the human_handoff action is available, use it. "
+            "Never claim a transfer happened unless the action succeeds."
+        )
+    elif mode == "contact_only":
+        parts.append(
+            "HUMAN ASSISTANCE POLICY: Contact Only. Never create or claim a live human handoff in this website chat. "
+            "If the visitor asks to speak with a human, give only the configured contact methods below and keep the AI conversation available."
+        )
+        parts.append("CONFIGURED HUMAN CONTACT METHODS (authoritative for this channel):\n" + "\n".join(contacts))
+    else:
+        parts.append(
+            "HUMAN ASSISTANCE POLICY: AI Only. Do not offer, create or claim a human handoff and do not invent contact details. "
+            "If the visitor asks for a human, explain briefly that direct human assistance is not available in this chat and continue helping within your configured capabilities."
+        )
     if custom:
         parts.append("Website-specific instructions: " + custom)
     return "\n".join(parts)
@@ -204,6 +248,11 @@ def configure(
                 else "#111827"
             ),
             "launcher_label": (data.launcher_label or "Chat").strip()[:30],
+            "human_assistance_mode": data.human_assistance_mode,
+            "contact_phone": (data.contact_phone or "").strip()[:120],
+            "contact_whatsapp": (data.contact_whatsapp or "").strip()[:120],
+            "contact_email": (data.contact_email or "").strip()[:254],
+            "contact_url": (data.contact_url or "").strip()[:1000],
         }
         if channel:
             old = reveal_config(channel.config) or {}

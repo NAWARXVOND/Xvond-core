@@ -25,6 +25,11 @@ CHANNEL_CATALOG = {
         "config_fields": [
             {"name": "allowed_domain", "label": "Allowed Domain", "required": True, "secret": False},
             {"name": "widget_name", "label": "Widget Name", "required": False, "secret": False},
+            {"name": "human_assistance_mode", "label": "Human Assistance", "required": False, "secret": False, "default": "direct_handoff"},
+            {"name": "contact_phone", "label": "Contact Phone", "required": False, "secret": False},
+            {"name": "contact_whatsapp", "label": "Contact WhatsApp", "required": False, "secret": False},
+            {"name": "contact_email", "label": "Contact Email", "required": False, "secret": False},
+            {"name": "contact_url", "label": "Contact / Booking URL", "required": False, "secret": False},
         ],
     },
 
