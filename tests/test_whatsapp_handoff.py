@@ -7,6 +7,7 @@ from backend.app.modules.channels.handoff import (
     echo_recipient,
     human_handoff_active,
     requests_human,
+    resume_ai,
 )
 
 
@@ -26,7 +27,7 @@ def test_customer_can_request_human_in_arabic_or_english():
     assert requests_human("شو أوقات الدوام؟") is False
 
 
-def test_business_app_reply_activates_and_extends_handoff():
+def test_business_app_reply_activates_explicit_handoff():
     now = datetime(2026, 8, 24, 12, 0, 0)
     session = make_session()
 
@@ -41,21 +42,26 @@ def test_business_app_reply_activates_and_extends_handoff():
     assert session.automation_state == "human"
     assert session.handoff_reason == "business_app_reply"
     assert session.last_human_message_at == now
-    assert session.human_takeover_until == now + timedelta(minutes=45)
+    assert session.human_takeover_until is None
     assert human_handoff_active(
         session,
-        now=now + timedelta(minutes=44),
+        now=now + timedelta(days=7),
     ) is True
 
 
-def test_expired_handoff_resumes_ai_automatically():
+def test_handoff_only_resumes_ai_explicitly():
     now = datetime(2026, 8, 24, 12, 0, 0)
     session = make_session()
     session.automation_state = "human"
     session.handoff_reason = "customer_request"
     session.human_takeover_until = now - timedelta(seconds=1)
 
-    assert human_handoff_active(session, now=now) is False
+    assert human_handoff_active(session, now=now) is True
+    assert session.automation_state == "human"
+    assert session.handoff_reason == "customer_request"
+
+    resume_ai(session, now=now)
+
     assert session.automation_state == "ai"
     assert session.handoff_reason is None
     assert session.human_takeover_until is None
