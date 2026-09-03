@@ -61,5 +61,9 @@ logout = async function() {
 };
 
 // app.js no longer resumes from localStorage because the legacy token is
-// removed before it loads. Resume from the HttpOnly cookie instead.
-startPortal();
+// removed before it loads. Resume from the HttpOnly cookie instead. A missing
+// cookie on the initial public login screen is expected and should stay silent.
+startPortal().finally(() => {
+    const error = document.getElementById("login-error");
+    if (error?.textContent === "Unauthorized") error.textContent = "";
+});
