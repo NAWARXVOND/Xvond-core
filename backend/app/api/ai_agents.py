@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from backend.app.core.agent_runtime import agent_runtime
 from backend.app.core.database.connection import SessionLocal
-from backend.app.core.dependencies import get_current_user
+from backend.app.core.dependencies import require_customer_manager
 
 from backend.app.models.user import User
 
@@ -40,26 +40,11 @@ def require_conversation_access(
     current_user: User,
     agent_id: int,
 ):
-
-    if current_user.role not in {
-        "owner",
-        "admin",
-        "manager",
-    }:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Conversation access is not permitted"
-            ),
-        )
-
     agent = (
         db.query(AIAgent)
         .filter(
-            AIAgent.id
-            == agent_id,
-            AIAgent.company_id
-            == current_user.company_id,
+            AIAgent.id == agent_id,
+            AIAgent.company_id == current_user.company_id,
         )
         .first()
     )
@@ -72,20 +57,14 @@ def require_conversation_access(
 
     config = (
         db.query(AgentConfig)
-        .filter(
-            AgentConfig.agent_id
-            == agent.id
-        )
+        .filter(AgentConfig.agent_id == agent.id)
         .first()
     )
 
     if not can_view_conversations(config):
         raise HTTPException(
             status_code=403,
-            detail=(
-                "Conversation viewing is disabled "
-                "for this agent"
-            ),
+            detail="Conversation viewing is disabled for this agent",
         )
 
     return agent
@@ -93,31 +72,16 @@ def require_conversation_access(
 
 @router.get("/")
 def list_agents(
-    current_user: User = Depends(
-        get_current_user
-    ),
+    current_user: User = Depends(require_customer_manager),
 ):
-    if current_user.company_id is None:
-        raise HTTPException(
-            status_code=403,
-            detail="Customer company required",
-        )
-
     db = SessionLocal()
-
     try:
         agents = (
             db.query(AIAgent)
-            .filter(
-                AIAgent.company_id
-                == current_user.company_id
-            )
-            .order_by(
-                AIAgent.id.asc()
-            )
+            .filter(AIAgent.company_id == current_user.company_id)
+            .order_by(AIAgent.id.asc())
             .all()
         )
-
         return {
             "company_id": current_user.company_id,
             "agents": [
@@ -125,14 +89,11 @@ def list_agents(
                     "id": item.id,
                     "name": item.name,
                     "description": item.description,
-                    "provider": item.provider,
-                    "model": item.model,
                     "enabled": item.enabled,
                 }
                 for item in agents
             ],
         }
-
     finally:
         db.close()
 
@@ -141,27 +102,16 @@ def list_agents(
 def chat(
     agent_id: int,
     data: ChatRequest,
-    current_user: User = Depends(
-        get_current_user
-    ),
+    current_user: User = Depends(require_customer_manager),
 ):
-    if current_user.company_id is None:
-        raise HTTPException(
-            status_code=403,
-            detail="Customer company required",
-        )
-
     db = SessionLocal()
-
     try:
         result = agent_runtime.chat(
             db=db,
             company_id=current_user.company_id,
             agent_id=agent_id,
             message=data.message,
-            conversation_id=(
-                data.conversation_id
-            ),
+            conversation_id=data.conversation_id,
         )
         bind_conversation_source(
             db,
@@ -172,15 +122,12 @@ def chat(
         )
         db.commit()
         return result
-
     except HTTPException:
         db.rollback()
         raise
-
     except Exception:
         db.rollback()
         raise
-
     finally:
         db.close()
 
@@ -188,40 +135,20 @@ def chat(
 @router.get("/{agent_id}/conversations")
 def conversations(
     agent_id: int,
-    current_user: User = Depends(
-        get_current_user
-    ),
+    current_user: User = Depends(require_customer_manager),
 ):
-    if current_user.company_id is None:
-        raise HTTPException(
-            status_code=403,
-            detail="Customer company required",
-        )
-
     db = SessionLocal()
-
     try:
-
-        require_conversation_access(
-            db,
-            current_user,
-            agent_id,
-        )
-
+        require_conversation_access(db, current_user, agent_id)
         items = (
             db.query(AIConversation)
             .filter(
-                AIConversation.agent_id
-                == agent_id,
-                AIConversation.company_id
-                == current_user.company_id,
+                AIConversation.agent_id == agent_id,
+                AIConversation.company_id == current_user.company_id,
             )
-            .order_by(
-                AIConversation.id.desc()
-            )
+            .order_by(AIConversation.id.desc())
             .all()
         )
-
         return {
             "conversations": [
                 {
@@ -232,68 +159,36 @@ def conversations(
                 for item in items
             ]
         }
-
     finally:
         db.close()
 
 
-@router.get(
-    "/{agent_id}/conversations/{conversation_id}"
-)
+@router.get("/{agent_id}/conversations/{conversation_id}")
 def conversation_messages(
     agent_id: int,
     conversation_id: int,
-    current_user: User = Depends(
-        get_current_user
-    ),
+    current_user: User = Depends(require_customer_manager),
 ):
-    if current_user.company_id is None:
-        raise HTTPException(
-            status_code=403,
-            detail="Customer company required",
-        )
-
     db = SessionLocal()
-
     try:
-
-        require_conversation_access(
-            db,
-            current_user,
-            agent_id,
-        )
-
+        require_conversation_access(db, current_user, agent_id)
         conversation = (
             db.query(AIConversation)
             .filter(
-                AIConversation.id
-                == conversation_id,
-                AIConversation.agent_id
-                == agent_id,
-                AIConversation.company_id
-                == current_user.company_id,
+                AIConversation.id == conversation_id,
+                AIConversation.agent_id == agent_id,
+                AIConversation.company_id == current_user.company_id,
             )
             .first()
         )
-
         if conversation is None:
-            raise HTTPException(
-                status_code=404,
-                detail="Conversation not found",
-            )
-
+            raise HTTPException(status_code=404, detail="Conversation not found")
         messages = (
             db.query(AIMessage)
-            .filter(
-                AIMessage.conversation_id
-                == conversation.id
-            )
-            .order_by(
-                AIMessage.id.asc()
-            )
+            .filter(AIMessage.conversation_id == conversation.id)
+            .order_by(AIMessage.id.asc())
             .all()
         )
-
         return {
             "conversation_id": conversation.id,
             "messages": [
@@ -306,6 +201,5 @@ def conversation_messages(
                 for item in messages
             ],
         }
-
     finally:
         db.close()

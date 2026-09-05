@@ -104,7 +104,7 @@ def test_ai_employee_capacity_is_consumed_on_go_live_not_draft_creation():
     assert "enabled=False" in creation_block
     assert "limits_service.check_agent_limit(db, company_id)" in delivery_source
     assert "limits_service.check_agent_limit(db, current_user.company_id)" in customer_source
-    assert "Depends(require_customer_user)" in customer_source
+    assert "Depends(require_customer_manager)" in customer_source
 
 
 def test_whatsapp_and_voice_have_customer_safe_service_limit_fallbacks():
