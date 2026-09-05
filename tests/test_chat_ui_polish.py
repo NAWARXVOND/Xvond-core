@@ -35,3 +35,13 @@ def test_website_widget_contains_page_language_and_bidi_guards():
     assert "__WELCOME_AR__" in source
     assert "__WELCOME_EN__" in source
     assert "cleanText(value)" in source
+
+
+def test_website_widget_shows_and_clears_typing_indicator():
+    source = open("backend/app/api/website_widget.py", encoding="utf-8").read()
+    assert "function showTyping()" in source
+    assert "function hideTyping()" in source
+    assert "xvond-dot" in source
+    assert "showTyping();send.disabled=true" in source
+    assert "hideTyping();add(failureMessage" in source
+    assert "finally{send.disabled=false;input.disabled=false" in source
