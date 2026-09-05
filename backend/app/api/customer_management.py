@@ -21,7 +21,7 @@ from backend.app.api.admin_company_profile import (
 from backend.app.core.dependencies import require_customer_manager
 from backend.app.models.user import User
 
-router = APIRouter(prefix="/customer/manage", tags=["Customer Manager Controls"])
+router = APIRouter(prefix="/manage", tags=["Customer Manager Controls"])
 
 
 def _company_id(user: User) -> int:
@@ -52,7 +52,7 @@ def update_customer_business_information(
     )
 
 
-@router.get("/agents/{agent_id}/knowledge")
+@router.get("/{agent_id}/knowledge")
 def customer_knowledge_list(
     agent_id: int,
     current_user: User = Depends(require_customer_manager),
@@ -64,7 +64,7 @@ def customer_knowledge_list(
     )
 
 
-@router.get("/agents/{agent_id}/knowledge/{document_id}")
+@router.get("/{agent_id}/knowledge/{document_id}")
 def customer_knowledge_item(
     agent_id: int,
     document_id: int,
@@ -78,7 +78,7 @@ def customer_knowledge_item(
     )
 
 
-@router.post("/agents/{agent_id}/knowledge")
+@router.post("/{agent_id}/knowledge")
 def customer_knowledge_create(
     agent_id: int,
     payload: KnowledgeCreate,
@@ -92,7 +92,7 @@ def customer_knowledge_create(
     )
 
 
-@router.post("/agents/{agent_id}/knowledge/url")
+@router.post("/{agent_id}/knowledge/url")
 def customer_knowledge_url(
     agent_id: int,
     payload: WebsiteKnowledgeCreate,
@@ -106,7 +106,7 @@ def customer_knowledge_url(
     )
 
 
-@router.post("/agents/{agent_id}/knowledge/pdf")
+@router.post("/{agent_id}/knowledge/pdf")
 async def customer_knowledge_pdf(
     agent_id: int,
     file: UploadFile = File(...),
@@ -120,7 +120,7 @@ async def customer_knowledge_pdf(
     )
 
 
-@router.put("/agents/{agent_id}/knowledge/{document_id}")
+@router.put("/{agent_id}/knowledge/{document_id}")
 def customer_knowledge_update(
     agent_id: int,
     document_id: int,
@@ -136,7 +136,7 @@ def customer_knowledge_update(
     )
 
 
-@router.patch("/agents/{agent_id}/knowledge/{document_id}/toggle")
+@router.patch("/{agent_id}/knowledge/{document_id}/toggle")
 def customer_knowledge_toggle(
     agent_id: int,
     document_id: int,
@@ -150,7 +150,7 @@ def customer_knowledge_toggle(
     )
 
 
-@router.delete("/agents/{agent_id}/knowledge/{document_id}")
+@router.delete("/{agent_id}/knowledge/{document_id}")
 def customer_knowledge_delete(
     agent_id: int,
     document_id: int,
