@@ -35,14 +35,16 @@ def close_db(engine, db):
 
 
 def add_provider(db, provider, model, enabled=True, priority=10, input_price="0", output_price="0"):
-    db.add(
-        AIProviderRecord(
-            name=provider,
-            display_name=provider,
-            enabled=enabled,
-            priority=priority,
+    existing = db.query(AIProviderRecord).filter(AIProviderRecord.name == provider).first()
+    if existing is None:
+        db.add(
+            AIProviderRecord(
+                name=provider,
+                display_name=provider,
+                enabled=enabled,
+                priority=priority,
+            )
         )
-    )
     db.add(
         AIModelRecord(
             provider_name=provider,
