@@ -24,6 +24,8 @@ from backend.app.modules.solutions.portal import (
 
 router = APIRouter(prefix="/customer", tags=["Customer Portal"])
 
+MANAGER_ROLES = {"owner", "admin", "manager"}
+
 
 def _plain_limit(value):
     if value in (None, 0, "0"):
@@ -75,12 +77,51 @@ def _service_data(db, subscription: ServiceSubscription, plan: ServicePlan) -> d
     }
 
 
+def _staff_overview(db, current_user: User, company: Company) -> dict:
+    agents = db.query(AIAgent).filter(AIAgent.company_id == company.id).all()
+    channels = db.query(AgentChannel).filter(AgentChannel.company_id == company.id).all()
+    return {
+        "company": {
+            "id": company.id,
+            "name": company.name,
+            "active": company.active,
+        },
+        "services": [],
+        "subscription": None,
+        "portal": {
+            "access_level": "staff",
+            "navigation": [
+                {
+                    "id": "dashboard",
+                    "label": "Overview",
+                    "loader": "dashboard",
+                    "group": "Workspace",
+                }
+            ],
+            "active_services": [],
+            "capabilities": [],
+        },
+        "billing": {},
+        "summary": {
+            "agents": len(agents),
+            "active_agents": sum(1 for item in agents if item.enabled),
+            "channels": len(channels),
+            "active_channels": sum(1 for item in channels if item.enabled),
+        },
+        "channels": [],
+        "integrations": [],
+    }
+
+
 @router.get("/overview")
 def overview(current_user: User = Depends(require_customer_user)):
     db = SessionLocal()
     try:
         company_id = current_user.company_id
         company = db.query(Company).filter(Company.id == company_id).first()
+
+        if current_user.role not in MANAGER_ROLES:
+            return _staff_overview(db, current_user, company)
 
         service_rows = (
             db.query(ServiceSubscription, ServicePlan)
@@ -108,6 +149,15 @@ def overview(current_user: User = Depends(require_customer_user)):
             active_service_codes,
             enabled_modules,
         )
+        navigation.insert(
+            max(len(navigation) - 1, 1),
+            {
+                "id": "users",
+                "label": "Users",
+                "loader": "users",
+                "group": "Account",
+            },
+        )
 
         agents = db.query(AIAgent).filter(AIAgent.company_id == company_id).all()
         channels = db.query(AgentChannel).filter(AgentChannel.company_id == company_id).all()
@@ -126,10 +176,9 @@ def overview(current_user: User = Depends(require_customer_user)):
                 "active": company.active,
             },
             "services": services,
-            # Compatibility for older customer UI consumers while the service
-            # list is the canonical billing representation.
             "subscription": ai_service,
             "portal": {
+                "access_level": "manager",
                 "navigation": navigation,
                 "active_services": active_service_codes,
                 "capabilities": sorted(
@@ -137,9 +186,6 @@ def overview(current_user: User = Depends(require_customer_user)):
                 ),
             },
             "billing": {
-                # Stable contract for a future card-payment gateway. The portal
-                # already has a Billing surface; a provider can populate these
-                # fields later without redesigning navigation.
                 "online_payments_enabled": False,
                 "payment_provider": None,
                 "payment_method": None,
