@@ -37,12 +37,32 @@ DIALECTS = {
     "egyptian": "Use natural Egyptian Arabic while remaining clear and professional.",
 }
 
+RESPONSE_LENGTHS = {
+    "concise": "Keep normal replies concise: usually 1-3 short sentences. Expand only when the customer asks for detail or the task genuinely requires it.",
+    "balanced": "Use a balanced response length: answer fully without unnecessary lists or repetition.",
+    "detailed": "Give more detail when useful, but remain organized and avoid dumping unrelated information.",
+}
+
+CLARIFICATION_STYLES = {
+    "smart": "If the customer's intent is clear, answer directly. If a necessary detail is genuinely unclear, ask one short clarifying question. Never interrogate the customer with multiple questions at once.",
+    "ask_when_unclear": "When an unclear request could lead to the wrong recommendation, ask one short clarifying question before proposing a solution.",
+    "direct_first": "Prefer a concise useful answer first when it can be given safely, then ask at most one follow-up question if needed.",
+}
+
+OFF_TOPIC_BEHAVIORS = {
+    "business_redirect": "Stay focused on the employee's business role. For personal, emotional or unrelated messages, acknowledge briefly and politely without analyzing the customer's feelings, acting as a therapist, or starting a personal support conversation. Then redirect naturally to how you can help within the business role.",
+    "brief_friendly": "Allow brief natural small talk, but do not analyze emotions or become a general companion. Keep off-topic exchanges short and return naturally to the business role.",
+}
+
 
 class EmployeeProfileUpdate(BaseModel):
     name: str
     reply_language: str = "auto"
     dialect: str = "auto"
     conversation_style: str = "professional_friendly"
+    response_length: str = "concise"
+    clarification_style: str = "smart"
+    off_topic_behavior: str = "business_redirect"
     greeting: str | None = None
     instructions: str | None = None
     business_name: str | None = None
@@ -58,6 +78,33 @@ def _dialect(value: str | None) -> str:
     if value not in DIALECTS:
         raise HTTPException(400, "Unsupported dialect")
     return value
+
+
+def _choice(value: str | None, options: dict[str, str], default: str, label: str) -> str:
+    selected = str(value or default).strip().lower()
+    if selected not in options:
+        raise HTTPException(400, f"Unsupported {label}")
+    return selected
+
+
+def _behavior_values(data: EmployeeProfileUpdate) -> dict[str, str]:
+    return {
+        "response_length": _choice(
+            data.response_length, RESPONSE_LENGTHS, "concise", "response length"
+        ),
+        "clarification_style": _choice(
+            data.clarification_style,
+            CLARIFICATION_STYLES,
+            "smart",
+            "clarification style",
+        ),
+        "off_topic_behavior": _choice(
+            data.off_topic_behavior,
+            OFF_TOPIC_BEHAVIORS,
+            "business_redirect",
+            "off-topic behavior",
+        ),
+    }
 
 
 def _company_profile(db, company_id: int) -> CompanyProfile | None:
@@ -79,6 +126,7 @@ def _profile_prompt(company_name: str, data: EmployeeProfileUpdate) -> str:
         "concise": "Be concise and direct while remaining helpful.",
     }
     dialect = _dialect(data.dialect)
+    behavior = _behavior_values(data)
     greeting_rule = (
         f"Preferred opening greeting: {data.greeting.strip()}"
         if _clean(data.greeting)
@@ -115,6 +163,9 @@ Prefer a direct useful answer over unnecessary questions. Never make the custome
 Keep the conversation coherent: do not repeat the company introduction, greeting, service list or contact details unless they are relevant to the current message.
 When the customer asks a broad question, summarize the relevant answer first and offer one useful next step rather than overwhelming them with every fact you know.
 {styles.get(data.conversation_style, styles['professional_friendly'])}
+Response length policy: {RESPONSE_LENGTHS[behavior['response_length']]}
+Clarification policy: {CLARIFICATION_STYLES[behavior['clarification_style']]}
+Role boundary policy: {OFF_TOPIC_BEHAVIORS[behavior['off_topic_behavior']]}
 Reply language policy: {data.reply_language}. When automatic, match the customer's language.
 Dialect policy: {dialect}. {DIALECTS[dialect]}
 When a fixed Arabic dialect is selected, keep that dialect consistently even if the customer uses another Arabic dialect. When dialect is automatic, mirror the customer's normal register naturally rather than defaulting to formal Arabic.
@@ -161,7 +212,12 @@ def _ensure_agent_config(db, agent: AIAgent) -> AgentConfig:
         row = AgentConfig(
             agent_id=agent.id,
             agent_type="custom",
-            settings={"dialect": "auto"},
+            settings={
+                "dialect": "auto",
+                "response_length": "concise",
+                "clarification_style": "smart",
+                "off_topic_behavior": "business_redirect",
+            },
             capabilities={},
             customer_controls=dict(DEFAULT_CUSTOMER_CONTROLS),
         )
@@ -170,8 +226,18 @@ def _ensure_agent_config(db, agent: AIAgent) -> AgentConfig:
         return row
 
     settings = dict(row.settings or {})
-    if "dialect" not in settings:
-        settings["dialect"] = "auto"
+    defaults = {
+        "dialect": "auto",
+        "response_length": "concise",
+        "clarification_style": "smart",
+        "off_topic_behavior": "business_redirect",
+    }
+    changed = False
+    for key, value in defaults.items():
+        if key not in settings:
+            settings[key] = value
+            changed = True
+    if changed:
         row.settings = settings
 
     controls = dict(DEFAULT_CUSTOMER_CONTROLS)
@@ -181,22 +247,41 @@ def _ensure_agent_config(db, agent: AIAgent) -> AgentConfig:
     return row
 
 
-def _set_agent_dialect(db, agent: AIAgent, dialect: str) -> AgentConfig:
+def _set_agent_behavior(db, agent: AIAgent, data: EmployeeProfileUpdate) -> AgentConfig:
     row = _ensure_agent_config(db, agent)
     settings = dict(row.settings or {})
-    settings["dialect"] = _dialect(dialect)
+    settings["dialect"] = _dialect(data.dialect)
+    settings.update(_behavior_values(data))
     row.settings = settings
     return row
 
 
-def _agent_dialect(db, agent: AIAgent, channels=None) -> str:
+def _agent_behavior(db, agent: AIAgent, channels=None) -> dict[str, str]:
     row = _ensure_agent_config(db, agent)
-    value = str((row.settings or {}).get("dialect") or "").strip().lower()
-    if value in DIALECTS:
-        return value
+    settings = dict(row.settings or {})
     setup = _setup_from_channels(channels or [])
-    legacy = str(setup.get("dialect") or "auto").strip().lower()
-    return legacy if legacy in DIALECTS else "auto"
+    return {
+        "dialect": (
+            settings.get("dialect")
+            if str(settings.get("dialect") or "") in DIALECTS
+            else str(setup.get("dialect") or "auto")
+        ),
+        "response_length": (
+            settings.get("response_length")
+            if str(settings.get("response_length") or "") in RESPONSE_LENGTHS
+            else str(setup.get("response_length") or "concise")
+        ),
+        "clarification_style": (
+            settings.get("clarification_style")
+            if str(settings.get("clarification_style") or "") in CLARIFICATION_STYLES
+            else str(setup.get("clarification_style") or "smart")
+        ),
+        "off_topic_behavior": (
+            settings.get("off_topic_behavior")
+            if str(settings.get("off_topic_behavior") or "") in OFF_TOPIC_BEHAVIORS
+            else str(setup.get("off_topic_behavior") or "business_redirect")
+        ),
+    }
 
 
 def _backfill_profile(db, company: Company, agent: AIAgent, channels) -> AIAgentProfile:
@@ -246,7 +331,7 @@ def create_profile_employee(company_id: int, data: EmployeeProfileUpdate, curren
         db.add(agent)
         db.flush()
         _upsert_profile(db, company, agent, data)
-        _set_agent_dialect(db, agent, data.dialect)
+        behavior = _set_agent_behavior(db, agent, data)
 
         company_profile = _company_profile(db, company_id)
         if company_profile is not None:
@@ -255,7 +340,7 @@ def create_profile_employee(company_id: int, data: EmployeeProfileUpdate, curren
         db.commit()
         db.refresh(agent)
         payload = _profile_payload(db, company, data)
-        payload["dialect"] = _dialect(data.dialect)
+        payload.update(behavior.settings or {})
         return {
             "status": "created",
             "lifecycle": "draft",
@@ -287,7 +372,7 @@ def get_profile(company_id: int, agent_id: int, current_admin: User = Depends(re
             .all()
         )
         profile = _backfill_profile(db, company, agent, channels)
-        dialect = _agent_dialect(db, agent, channels)
+        behavior = _agent_behavior(db, agent, channels)
         db.commit()
         return {
             "agent_id": agent.id,
@@ -295,8 +380,11 @@ def get_profile(company_id: int, agent_id: int, current_admin: User = Depends(re
             "business_name": company.name,
             "business_type": _company_business_type(db, company) or profile.business_type or "",
             "reply_language": profile.reply_language or "auto",
-            "dialect": dialect,
+            "dialect": behavior["dialect"],
             "conversation_style": profile.conversation_style or "professional_friendly",
+            "response_length": behavior["response_length"],
+            "clarification_style": behavior["clarification_style"],
+            "off_topic_behavior": behavior["off_topic_behavior"],
             "greeting": profile.greeting or "",
             "instructions": profile.instructions or "",
         }
@@ -315,13 +403,16 @@ def update_profile(company_id: int, agent_id: int, data: EmployeeProfileUpdate, 
         agent.name = _clean(data.name) or agent.name
         agent.system_prompt = _profile_prompt(company.name, data)
         profile = _upsert_profile(db, company, agent, data)
-        _set_agent_dialect(db, agent, data.dialect)
+        behavior = _set_agent_behavior(db, agent, data)
         setup = {
             "business_name": company.name,
             "business_type": profile.business_type,
             "reply_language": profile.reply_language,
-            "dialect": _dialect(data.dialect),
+            "dialect": (behavior.settings or {}).get("dialect", "auto"),
             "conversation_style": profile.conversation_style,
+            "response_length": (behavior.settings or {}).get("response_length", "concise"),
+            "clarification_style": (behavior.settings or {}).get("clarification_style", "smart"),
+            "off_topic_behavior": (behavior.settings or {}).get("off_topic_behavior", "business_redirect"),
             "greeting": profile.greeting,
             "instructions": profile.instructions,
         }
