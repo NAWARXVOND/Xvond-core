@@ -33,8 +33,14 @@ class KnowledgeService:
     ARABIC_EQUIVALENTS = {
         "اسعار": {"السعر", "سعر", "الاسعار", "أسعار", "الأسعار", "بكم", "تكلفة", "تكلفه", "ثمن"},
         "خدمات": {
-            "خدمة", "الخدمات", "خدمات", "بتعملو", "بتعملوا", "تقدمون", "تقدموا", "بتقدموا", "نقدم",
+            "خدمة", "الخدمات", "خدمات", "بتعملو", "بتعملوا", "تعملون", "تعملوا", "تقدمون", "تقدموا",
+            "بتقدموا", "بتقدمو", "بتقدمون", "نقدم", "خدماتكم", "خدماتكن", "خدمتكم", "خدمتكن",
             "service", "services", "offer", "offers", "offering", "provide", "provides",
+        },
+        "تواصل": {
+            "تواصل", "التواصل", "اتواصل", "أتواصل", "اكلم", "أكلم", "احكي", "أحكي", "اتصل", "أتصل",
+            "هاتف", "الهاتف", "تلفون", "تليفون", "رقم", "واتساب", "ايميل", "إيميل", "بريد", "البريد",
+            "contact", "phone", "telephone", "whatsapp", "email", "mail",
         },
         "حجز": {"موعد", "مواعيد", "احجز", "الحجز", "حجز", "احجزلي", "موعدي"},
         "دوام": {"ساعات", "الدوام", "دوام", "مفتوح", "تفتحون", "تسكرون", "اغلاق", "إغلاق"},
@@ -45,14 +51,15 @@ class KnowledgeService:
     }
 
     INTENT_CATEGORY_HINTS = {
-        "price": {"services_prices", "menu", "products"},
-        "services": {"services_prices", "menu", "products", "general", "business_profile"},
-        "hours": {"hours", "branches", "general", "business_profile"},
-        "location": {"branches", "general", "business_profile"},
-        "booking": {"booking_rules", "services_prices", "hours", "general"},
-        "order": {"order_rules", "menu", "products", "delivery_payment"},
-        "delivery_payment": {"delivery_payment", "policies", "order_rules"},
-        "policy": {"policies", "booking_rules", "order_rules"},
+        "price": {"services_prices", "menu", "products", "pdf", "website", "general", "business_profile"},
+        "services": {"services_prices", "menu", "products", "general", "business_profile", "pdf", "website"},
+        "contact": {"general", "business_profile", "pdf", "website"},
+        "hours": {"hours", "branches", "general", "business_profile", "pdf", "website"},
+        "location": {"branches", "general", "business_profile", "pdf", "website"},
+        "booking": {"booking_rules", "services_prices", "hours", "general", "pdf", "website"},
+        "order": {"order_rules", "menu", "products", "delivery_payment", "pdf", "website"},
+        "delivery_payment": {"delivery_payment", "policies", "order_rules", "pdf", "website"},
+        "policy": {"policies", "booking_rules", "order_rules", "pdf", "website"},
     }
 
     def normalize(self, text):
@@ -69,12 +76,34 @@ class KnowledgeService:
 
     def _token_forms(self, token):
         forms = {token}
-        if re.search(r"[\u0600-\u06FF]", token):
-            if token.startswith("ال") and len(token) > 4:
-                forms.add(token[2:])
+        if not re.search(r"[\u0600-\u06FF]", token):
+            return forms
+
+        queue = [token]
+        seen = {token}
+        while queue:
+            current = queue.pop()
+            derived = set()
+
+            # Arabic definite article and common attached conjunction/preposition forms.
+            for prefix in ("وال", "بال", "فال", "كال", "لل", "ال"):
+                if current.startswith(prefix) and len(current) - len(prefix) >= 3:
+                    derived.add(current[len(prefix):])
+            for prefix in ("و", "ف", "ب", "ك", "ل"):
+                if current.startswith(prefix) and len(current) - 1 >= 3:
+                    derived.add(current[1:])
+
+            # Common possessive/plural suffixes used heavily in Gulf/Levantine chat.
             for suffix in ("كم", "كن", "نا", "هم", "هن"):
-                if token.endswith(suffix) and len(token) - len(suffix) >= 3:
-                    forms.add(token[: -len(suffix)])
+                if current.endswith(suffix) and len(current) - len(suffix) >= 3:
+                    derived.add(current[: -len(suffix)])
+
+            for item in derived:
+                if item not in seen:
+                    seen.add(item)
+                    queue.append(item)
+
+        forms |= seen
         return forms
 
     def _base_tokens(self, text):
@@ -119,8 +148,13 @@ class KnowledgeService:
         if has({"سعر", "اسعار", "بكم", "تكلفة", "price", "prices", "cost"}): intents.add("price")
         if has({
             "خدمات", "خدمة", "service", "services", "menu", "منيو", "offer", "offers", "offering",
-            "provide", "provides", "تقدمون", "تقدموا", "بتقدموا", "بتعملوا", "بتعملو", "نقدم",
+            "provide", "provides", "تقدمون", "تقدموا", "بتقدموا", "بتقدمو", "بتعملوا", "بتعملو",
+            "تعملون", "تعملوا", "نقدم",
         }): intents.add("services")
+        if has({
+            "تواصل", "اتواصل", "اكلم", "احكي", "اتصل", "هاتف", "تلفون", "تليفون", "رقم", "واتساب",
+            "ايميل", "بريد", "contact", "phone", "telephone", "whatsapp", "email", "mail",
+        }): intents.add("contact")
         if has({"دوام", "ساعات", "مفتوح", "اغلاق", "hours", "open", "close"}): intents.add("hours")
         if has({"وين", "عنوان", "موقع", "فرع", "location", "address", "branch"}): intents.add("location")
         if has({"حجز", "موعد", "احجز", "booking", "appointment", "reserve"}): intents.add("booking")
