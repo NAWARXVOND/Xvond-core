@@ -21,8 +21,24 @@ class KnowledgeService:
     DEFAULT_CHUNK_SIZE = 1400
     DEFAULT_OVERLAP = 180
     DEFAULT_MAX_CHUNKS = 7
-    DEFAULT_MAX_CONTEXT_CHARS = 8500
+    DEFAULT_MAX_CONTEXT_CHARS = 12000
+    CORE_MAX_CONTEXT_CHARS = 5500
     MAX_CHUNKS_PER_DOCUMENT = 3
+
+    MANUAL_SOURCE_TYPES = {
+        "general",
+        "services_prices",
+        "menu",
+        "products",
+        "faq",
+        "policies",
+        "branches",
+        "hours",
+        "delivery_payment",
+        "booking_rules",
+        "order_rules",
+        "custom",
+    }
 
     STOP_WORDS = {
         "the", "a", "an", "is", "are", "do", "does", "what", "how", "can", "i", "we", "you",
@@ -40,7 +56,8 @@ class KnowledgeService:
         "تواصل": {
             "تواصل", "التواصل", "اتواصل", "أتواصل", "اكلم", "أكلم", "احكي", "أحكي", "اتصل", "أتصل",
             "هاتف", "الهاتف", "تلفون", "تليفون", "رقم", "واتساب", "ايميل", "إيميل", "بريد", "البريد",
-            "contact", "phone", "telephone", "whatsapp", "email", "mail",
+            "مسؤول", "المسؤول", "موظف", "موظفة", "بشري", "انسان", "فريق", "الدعم", "المبيعات",
+            "contact", "phone", "telephone", "whatsapp", "email", "mail", "human", "person", "representative", "team", "support", "sales",
         },
         "حجز": {"موعد", "مواعيد", "احجز", "الحجز", "حجز", "احجزلي", "موعدي"},
         "دوام": {"ساعات", "الدوام", "دوام", "مفتوح", "تفتحون", "تسكرون", "اغلاق", "إغلاق"},
@@ -65,7 +82,10 @@ class KnowledgeService:
     INTENT_CONTENT_TERMS = {
         "price": {"اسعار", "سعر", "تكلفه", "ثمن", "price", "prices", "cost"},
         "services": {"خدمات", "خدمه", "نقدم", "تقدم", "service", "services", "offer", "offers", "offering", "provide", "provides"},
-        "contact": {"تواصل", "هاتف", "تلفون", "رقم", "واتساب", "ايميل", "بريد", "contact", "phone", "telephone", "whatsapp", "email", "mail"},
+        "contact": {
+            "تواصل", "هاتف", "تلفون", "رقم", "واتساب", "ايميل", "بريد", "مسؤول", "موظف", "بشري", "فريق", "دعم", "مبيعات",
+            "contact", "phone", "telephone", "whatsapp", "email", "mail", "human", "representative", "team", "support", "sales",
+        },
         "hours": {"دوام", "ساعات", "مفتوح", "اغلاق", "hours", "open", "close"},
         "location": {"عنوان", "موقع", "فرع", "location", "address", "branch"},
         "booking": {"حجز", "موعد", "booking", "appointment", "reserve"},
@@ -90,29 +110,24 @@ class KnowledgeService:
         forms = {token}
         if not re.search(r"[\u0600-\u06FF]", token):
             return forms
-
         queue = [token]
         seen = {token}
         while queue:
             current = queue.pop()
             derived = set()
-
             for prefix in ("وال", "بال", "فال", "كال", "لل", "ال"):
                 if current.startswith(prefix) and len(current) - len(prefix) >= 3:
                     derived.add(current[len(prefix):])
             for prefix in ("و", "ف", "ب", "ك", "ل"):
                 if current.startswith(prefix) and len(current) - 1 >= 3:
                     derived.add(current[1:])
-
             for suffix in ("كم", "كن", "نا", "هم", "هن"):
                 if current.endswith(suffix) and len(current) - len(suffix) >= 3:
                     derived.add(current[: -len(suffix)])
-
             for item in derived:
                 if item not in seen:
                     seen.add(item)
                     queue.append(item)
-
         forms |= seen
         return forms
 
@@ -150,21 +165,31 @@ class KnowledgeService:
             normalized_words = {self.normalize(x) for x in words}
             return bool(t & normalized_words) or any(word in q for word in normalized_words)
 
-        if has({"سعر", "اسعار", "بكم", "تكلفة", "price", "prices", "cost"}): intents.add("price")
+        if has({"سعر", "اسعار", "بكم", "تكلفة", "price", "prices", "cost"}):
+            intents.add("price")
         if has({
             "خدمات", "خدمة", "service", "services", "menu", "منيو", "offer", "offers", "offering",
             "provide", "provides", "تقدمون", "تقدموا", "بتقدموا", "بتقدمو", "بتعملوا", "بتعملو", "تعملون", "تعملوا", "نقدم",
-        }): intents.add("services")
+        }):
+            intents.add("services")
         if has({
-            "تواصل", "اتواصل", "اكلم", "احكي", "اتصل", "هاتف", "تلفون", "تليفون", "رقم", "واتساب",
-            "ايميل", "بريد", "contact", "phone", "telephone", "whatsapp", "email", "mail",
-        }): intents.add("contact")
-        if has({"دوام", "ساعات", "مفتوح", "اغلاق", "hours", "open", "close"}): intents.add("hours")
-        if has({"وين", "عنوان", "موقع", "فرع", "location", "address", "branch"}): intents.add("location")
-        if has({"حجز", "موعد", "احجز", "booking", "appointment", "reserve"}): intents.add("booking")
-        if has({"طلب", "اطلب", "توصيل", "order", "delivery"}): intents.add("order")
-        if has({"دفع", "بطاقة", "كاش", "payment", "pay", "cash", "card"}): intents.add("delivery_payment")
-        if has({"سياسة", "الغاء", "استرجاع", "تبديل", "policy", "cancel", "refund", "return"}): intents.add("policy")
+            "تواصل", "اتواصل", "اكلم", "احكي", "اتصل", "هاتف", "تلفون", "تليفون", "رقم", "واتساب", "ايميل", "بريد",
+            "مسؤول", "المسؤول", "موظف", "موظفة", "بشري", "انسان", "فريق", "دعم", "الدعم", "مبيعات", "المبيعات",
+            "contact", "phone", "telephone", "whatsapp", "email", "mail", "human", "person", "representative", "team", "support", "sales",
+        }):
+            intents.add("contact")
+        if has({"دوام", "ساعات", "مفتوح", "اغلاق", "hours", "open", "close"}):
+            intents.add("hours")
+        if has({"وين", "عنوان", "موقع", "فرع", "location", "address", "branch"}):
+            intents.add("location")
+        if has({"حجز", "موعد", "احجز", "booking", "appointment", "reserve"}):
+            intents.add("booking")
+        if has({"طلب", "اطلب", "توصيل", "order", "delivery"}):
+            intents.add("order")
+        if has({"دفع", "بطاقة", "كاش", "payment", "pay", "cash", "card"}):
+            intents.add("delivery_payment")
+        if has({"سياسة", "الغاء", "استرجاع", "تبديل", "policy", "cancel", "refund", "return"}):
+            intents.add("policy")
         return intents
 
     def split_content(self, content, chunk_size=None, overlap=None):
@@ -237,7 +262,6 @@ class KnowledgeService:
             if db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == doc.id).first() is None:
                 self.rebuild_document_index(db, doc)
                 indexed += 1
-
         if knowledge_embedding_client.available:
             documents_by_id = {doc.id: doc for doc in docs}
             chunks = db.query(KnowledgeChunk).filter(KnowledgeChunk.company_id == company_id).all()
@@ -255,12 +279,22 @@ class KnowledgeService:
                 return True
         return False
 
+    def _source_priority_boost(self, source_type: str) -> float:
+        if source_type == "business_profile":
+            return 12.0
+        if source_type in self.MANUAL_SOURCE_TYPES:
+            return 5.0
+        if source_type == "pdf":
+            return 2.0
+        if source_type == "website":
+            return 1.0
+        return 0.0
+
     def _score_match(self, query, chunk, document):
         qnorm = self.normalize(query)
         qtokens = self.tokenize(query)
         if not qtokens:
             return None
-
         chunk_norm = self.normalize(chunk.normalized_text or chunk.content)
         title_norm = self.normalize(document.title or "")
         ctokens = self.tokenize(chunk_norm)
@@ -290,13 +324,13 @@ class KnowledgeService:
             + (14 if exact_query else 0)
             + category_boost
             + (4 if intent_content_evidence else 0)
+            + self._source_priority_boost(document.source_type)
         )
 
     def search_agent_knowledge(self, db, company_id, agent_id, query, max_chunks=None):
         max_chunks = max_chunks or self.DEFAULT_MAX_CHUNKS
         if not self.tokenize(query):
             return []
-
         rows = (
             db.query(KnowledgeChunk, KnowledgeDocument)
             .join(KnowledgeDocument, KnowledgeDocument.id == KnowledgeChunk.document_id)
@@ -310,7 +344,6 @@ class KnowledgeService:
             )
             .all()
         )
-
         query_embedding = knowledge_embedding_client.embed_one(query) if knowledge_embedding_client.available else None
         matches = []
         for chunk, doc in rows:
@@ -327,10 +360,7 @@ class KnowledgeService:
             score = float(lexical_score or 0)
             if semantic_match:
                 score += max(0.0, semantic_similarity) * settings.KNOWLEDGE_SEMANTIC_WEIGHT
-            matches.append(
-                KnowledgeMatch(doc.id, doc.title, doc.source_type, chunk.chunk_index, chunk.content, score)
-            )
-
+            matches.append(KnowledgeMatch(doc.id, doc.title, doc.source_type, chunk.chunk_index, chunk.content, score))
         matches.sort(key=lambda item: (item.score, -item.chunk_index), reverse=True)
         selected = []
         per_document = {}
@@ -343,17 +373,65 @@ class KnowledgeService:
                 break
         return selected
 
+    def _core_business_information(self, db, company_id, agent_id):
+        document = (
+            db.query(KnowledgeDocument)
+            .join(AgentKnowledge, AgentKnowledge.document_id == KnowledgeDocument.id)
+            .filter(
+                KnowledgeDocument.company_id == company_id,
+                KnowledgeDocument.source_type == "business_profile",
+                KnowledgeDocument.enabled.is_(True),
+                AgentKnowledge.agent_id == agent_id,
+                AgentKnowledge.enabled.is_(True),
+            )
+            .order_by(KnowledgeDocument.id.asc())
+            .first()
+        )
+        if document is None:
+            return "", None
+        content = (document.content or "").strip()
+        if len(content) > self.CORE_MAX_CONTEXT_CHARS:
+            content = content[: self.CORE_MAX_CONTEXT_CHARS].rstrip() + "\n[Core company information truncated for context size]"
+        return content, document.id
+
+    def _source_label(self, source_type):
+        if source_type in self.MANUAL_SOURCE_TYPES:
+            return "curated manual knowledge"
+        if source_type == "pdf":
+            return "imported PDF"
+        if source_type == "website":
+            return "imported website"
+        return source_type
+
     def get_agent_context(self, db, company_id, agent_id, query):
         self.backfill_company_index(db, company_id)
+        core, core_document_id = self._core_business_information(db, company_id, agent_id)
         matches = self.search_agent_knowledge(db, company_id, agent_id, query)
-        if not matches:
+        supplementary = [match for match in matches if match.document_id != core_document_id]
+
+        if not core and not supplementary:
             return ""
-        parts = []
-        used = 0
-        for match in matches:
+
+        policy = (
+            "KNOWLEDGE HIERARCHY AND SYNTHESIS POLICY:\n"
+            "1. CORE COMPANY INFORMATION is always the canonical source for company identity, official contact details, website, languages, locations, working hours and other structured company fields.\n"
+            "2. Curated manual knowledge supplies detailed business facts and takes precedence over imported PDF/website text when they conflict on a secondary detail.\n"
+            "3. Imported PDFs and website pages are supporting knowledge. Use them together with the core and manual knowledge; do not ignore one source merely because another source also matched.\n"
+            "4. If two supporting sources conflict and the core/manual sources do not resolve the conflict, do not guess. State that the detail needs confirmation.\n"
+            "5. Conversation history and customer memory never override current company facts.\n"
+        )
+
+        parts = [policy]
+        used = len(policy)
+        if core:
+            block = "[CORE COMPANY INFORMATION | highest factual priority]\n" + core
+            parts.append(block)
+            used += len(block)
+
+        for match in supplementary:
             block = (
-                f"[Knowledge: {match.title} | category: {match.source_type} | "
-                f"chunk {match.chunk_index + 1}]\n{match.content}"
+                f"[SUPPLEMENTARY KNOWLEDGE: {match.title} | source: {self._source_label(match.source_type)} | "
+                f"category: {match.source_type} | chunk {match.chunk_index + 1}]\n{match.content}"
             )
             if used + len(block) > self.DEFAULT_MAX_CONTEXT_CHARS:
                 remain = self.DEFAULT_MAX_CONTEXT_CHARS - used
