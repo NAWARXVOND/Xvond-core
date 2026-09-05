@@ -3,6 +3,11 @@ let customerManagedAgent = null;
 let customerBusinessProfileCache = null;
 let customerKnowledgeEditingId = null;
 
+const CUSTOMER_BUSINESS_DAYS = [
+    ["mon", "Monday"], ["tue", "Tuesday"], ["wed", "Wednesday"],
+    ["thu", "Thursday"], ["fri", "Friday"], ["sat", "Saturday"], ["sun", "Sunday"]
+];
+
 function managerTabButton(label, tab) {
     return `<button type="button" onclick="openCustomerManagerTab('${tab}')" style="margin-right:8px;margin-bottom:8px">${safe(label)}</button>`;
 }
@@ -59,12 +64,62 @@ function renderCustomerBehaviorTab(target) {
     `;
 }
 
-function linesToList(value) {
-    return String(value || "").split("\n").map(item => item.trim()).filter(Boolean);
+function listToLines(value) {
+    return Array.isArray(value)
+        ? value.map(item => typeof item === "string" ? item : JSON.stringify(item)).join("\n")
+        : "";
 }
 
-function listToLines(value) {
-    return Array.isArray(value) ? value.map(item => typeof item === "string" ? item : JSON.stringify(item)).join("\n") : "";
+function linesToStructuredList(value) {
+    return String(value || "")
+        .split("\n")
+        .map(item => item.trim())
+        .filter(Boolean)
+        .map(item => {
+            if (!(item.startsWith("{") || item.startsWith("["))) return item;
+            try { return JSON.parse(item); } catch (_) { return item; }
+        });
+}
+
+function businessTypeOptions(profile) {
+    const values = profile?.catalog?.business_types || [];
+    const current = profile?.business_type || "";
+    const options = [["", "Select business type"], ...values.map(value => [value, value])];
+    if (current && !values.includes(current)) options.push([current, current]);
+    return options.map(([value, label]) => `<option value="${safe(value)}" ${value === current ? "selected" : ""}>${safe(label)}</option>`).join("");
+}
+
+function workingHoursMarkup(hours) {
+    const data = hours || {};
+    return CUSTOMER_BUSINESS_DAYS.map(([key, label]) => {
+        const row = data[key] || {};
+        const enabled = row.enabled !== false && !!(row.start || row.end);
+        return `
+            <div class="form-group" style="display:grid;grid-template-columns:minmax(120px,1fr) auto minmax(110px,1fr) minmax(110px,1fr);gap:8px;align-items:center">
+                <label style="margin:0">${safe(label)}</label>
+                <input id="cb-hours-${key}-enabled" type="checkbox" ${enabled ? "checked" : ""}>
+                <input id="cb-hours-${key}-start" type="time" value="${safe(row.start || "09:00")}">
+                <input id="cb-hours-${key}-end" type="time" value="${safe(row.end || "17:00")}">
+            </div>
+        `;
+    }).join("");
+}
+
+function collectWorkingHours() {
+    const result = {};
+    for (const [key] of CUSTOMER_BUSINESS_DAYS) {
+        const enabled = !!document.getElementById(`cb-hours-${key}-enabled`)?.checked;
+        if (!enabled) {
+            result[key] = {enabled: false};
+            continue;
+        }
+        result[key] = {
+            enabled: true,
+            start: document.getElementById(`cb-hours-${key}-start`)?.value || "",
+            end: document.getElementById(`cb-hours-${key}-end`)?.value || ""
+        };
+    }
+    return result;
 }
 
 async function renderCustomerBusinessTab(target) {
@@ -74,11 +129,14 @@ async function renderCustomerBusinessTab(target) {
         target.innerHTML = `
             <p class="muted">These facts are shared with all AI employees in your company and become protected Business Information knowledge.</p>
             <div class="form-group"><label>Business Name</label><input id="cb-name" value="${safe(d.company_name || "")}"></div>
-            <div class="form-group"><label>Business Type</label><input id="cb-type" value="${safe(d.business_type || "")}" placeholder="Restaurant, clinic, store..."></div>
+            <div class="form-group"><label>Business Type</label><select id="cb-type">${businessTypeOptions(d)}</select></div>
             <div class="form-group"><label>Description</label><textarea id="cb-description">${safe(d.description || "")}</textarea></div>
             <div class="form-group"><label>Phone</label><input id="cb-phone" value="${safe(d.phone || "")}"></div>
             <div class="form-group"><label>Email</label><input id="cb-email" type="email" value="${safe(d.email || "")}"></div>
             <div class="form-group"><label>Website</label><input id="cb-website" value="${safe(d.website || "")}"></div>
+            <h3>Working Hours</h3>
+            <p class="muted">Enable the days the business is open, then set opening and closing time.</p>
+            ${workingHoursMarkup(d.working_hours)}
             <div class="form-group"><label>Services / Products</label><textarea id="cb-services" placeholder="One item per line">${safe(listToLines(d.services))}</textarea></div>
             <div class="form-group"><label>Locations / Branches</label><textarea id="cb-locations" placeholder="One item per line">${safe(listToLines(d.locations))}</textarea></div>
             <div class="form-group"><label>Service Areas</label><textarea id="cb-areas" placeholder="One item per line">${safe(listToLines(d.service_areas))}</textarea></div>
@@ -107,14 +165,15 @@ async function saveCustomerBusinessInformation() {
         phone: value("cb-phone") || null,
         email: value("cb-email") || null,
         website: value("cb-website") || null,
-        working_hours: d.working_hours || {},
-        locations: linesToList(value("cb-locations")),
-        services: linesToList(value("cb-services")),
-        service_areas: linesToList(value("cb-areas")),
-        policies: linesToList(value("cb-policies")),
-        business_rules: linesToList(value("cb-rules"))
+        working_hours: collectWorkingHours(),
+        locations: linesToStructuredList(value("cb-locations")),
+        services: linesToStructuredList(value("cb-services")),
+        service_areas: linesToStructuredList(value("cb-areas")),
+        policies: linesToStructuredList(value("cb-policies")),
+        business_rules: linesToStructuredList(value("cb-rules"))
     };
     const message = document.getElementById("cb-message");
+    if (message) message.textContent = "";
     try {
         customerBusinessProfileCache = await api("/customer/agents/manage/business-information", {method: "PUT", body: JSON.stringify(payload)});
         if (message) message.textContent = "Saved. AI knowledge was updated automatically.";
@@ -236,10 +295,12 @@ async function uploadCustomerKnowledgePdf() {
     if (!file) return alert("Choose a PDF first.");
     const form = new FormData();
     form.append("file", file);
-    const headers = {};
-    if (token) headers.Authorization = `Bearer ${token}`;
     try {
-        const response = await fetch(`/customer/agents/manage/${customerManagedAgentId}/knowledge/pdf`, {method: "POST", headers, body: form});
+        const response = await fetch(`/customer/agents/manage/${customerManagedAgentId}/knowledge/pdf`, {
+            method: "POST",
+            credentials: "same-origin",
+            body: form
+        });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "PDF upload failed");
         await openCustomerManagerTab("knowledge");
