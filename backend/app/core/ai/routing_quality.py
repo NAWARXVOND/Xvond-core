@@ -2,8 +2,6 @@ from contextvars import ContextVar
 
 
 MODEL_QUALITY_TIERS = {
-    ("groq", "openai/gpt-oss-20b"): 1,
-    ("groq", "openai/gpt-oss-120b"): 2,
     ("openai", "gpt-5-mini"): 2,
     ("openai", "gpt-5.6-luna"): 2,
     ("openai", "gpt-5.6-terra"): 3,
