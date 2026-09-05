@@ -64,9 +64,9 @@ def test_customer_manager_ui_exposes_simple_behavior_and_user_controls():
     assert "Staff — Overview only" in source
     assert "Manager — Management access" in source
     assert "/customer/agents/${agentId}" in source
-    assert 'id="ca-length"' in source
-    assert 'id="ca-clarification"' in source
-    assert 'id="ca-off-topic"' in source
+    assert 'customerSelect("ca-length"' in source
+    assert 'customerSelect("ca-clarification"' in source
+    assert 'customerSelect("ca-off-topic"' in source
     assert "controls.can_edit_prompt" in source
     assert 'api("/users/")' in source
     assert "loadCompanyUsers" in source
