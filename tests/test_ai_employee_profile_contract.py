@@ -37,9 +37,12 @@ def test_profile_api_ensures_agent_config_and_behavior_settings():
 def test_employee_behavior_defaults_are_business_focused_and_simple():
     assert "concise" in RESPONSE_LENGTHS
     assert "smart" in CLARIFICATION_STYLES
-    rule = OFF_TOPIC_BEHAVIORS["business_redirect"]
-    assert "do not analyze the customer’s feelings" in rule or "do not analyze the customer's feelings" in rule
+    rule = OFF_TOPIC_BEHAVIORS["business_redirect"].lower()
+    assert "personal, emotional or unrelated messages" in rule
     assert "therapist" in rule
+    assert "personal support conversation" in rule
+    assert "redirect naturally" in rule
+    assert "business role" in rule
 
 
 def test_employee_information_ui_exposes_only_simple_global_behavior_controls():
