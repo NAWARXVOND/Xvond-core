@@ -32,13 +32,6 @@ class AIEngine:
             except Exception as exc:
                 print("Could not load OpenAI provider:", exc)
 
-        if settings.GROQ_API_KEY:
-            try:
-                from backend.app.core.ai.providers.groq import GroqProvider
-                provider_registry.register("groq", GroqProvider())
-            except Exception as exc:
-                print("Could not load Groq provider:", exc)
-
         if settings.ANTHROPIC_API_KEY:
             try:
                 from backend.app.core.ai.providers.anthropic import AnthropicProvider
