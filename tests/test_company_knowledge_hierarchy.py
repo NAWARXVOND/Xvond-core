@@ -59,3 +59,17 @@ def test_employee_prompt_forbids_unconfigured_operations_and_unnecessary_forms()
     assert "do not collect customer fields" in prompt
     assert "give the relevant verified contact detail directly" in prompt
     assert "PDFs and website content" in prompt
+
+
+def test_employee_prompt_uses_helpful_non_robotic_fallbacks():
+    prompt = _profile_prompt(
+        "Xvond",
+        EmployeeProfileUpdate(name="Xvond", reply_language="auto", dialect="auto"),
+    )
+    assert "SMART FALLBACK" in prompt
+    assert "Use partial verified knowledge intelligently" in prompt
+    assert "do not expose internal limitations with robotic phrases" in prompt
+    assert "offer the most relevant contact method naturally and briefly" in prompt
+    assert "Do not dump every phone number, email address, website and contact option at once" in prompt
+    assert "Never manufacture a confident answer" in prompt
+    assert "Keep the conversation coherent" in prompt
