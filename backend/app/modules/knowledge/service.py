@@ -33,8 +33,14 @@ class KnowledgeService:
     ARABIC_EQUIVALENTS = {
         "اسعار": {"السعر", "سعر", "الاسعار", "أسعار", "الأسعار", "بكم", "تكلفة", "تكلفه", "ثمن"},
         "خدمات": {
-            "خدمة", "الخدمات", "خدمات", "بتعملو", "بتعملوا", "تقدمون", "تقدموا", "بتقدموا", "نقدم",
+            "خدمة", "الخدمات", "خدمات", "بتعملو", "بتعملوا", "تعملون", "تعملوا", "تقدمون", "تقدموا",
+            "بتقدموا", "بتقدمو", "بتقدمون", "نقدم", "خدماتكم", "خدماتكن", "خدمتكم", "خدمتكن",
             "service", "services", "offer", "offers", "offering", "provide", "provides",
+        },
+        "تواصل": {
+            "تواصل", "التواصل", "اتواصل", "أتواصل", "اكلم", "أكلم", "احكي", "أحكي", "اتصل", "أتصل",
+            "هاتف", "الهاتف", "تلفون", "تليفون", "رقم", "واتساب", "ايميل", "إيميل", "بريد", "البريد",
+            "contact", "phone", "telephone", "whatsapp", "email", "mail",
         },
         "حجز": {"موعد", "مواعيد", "احجز", "الحجز", "حجز", "احجزلي", "موعدي"},
         "دوام": {"ساعات", "الدوام", "دوام", "مفتوح", "تفتحون", "تسكرون", "اغلاق", "إغلاق"},
@@ -45,14 +51,27 @@ class KnowledgeService:
     }
 
     INTENT_CATEGORY_HINTS = {
-        "price": {"services_prices", "menu", "products"},
-        "services": {"services_prices", "menu", "products", "general", "business_profile"},
-        "hours": {"hours", "branches", "general", "business_profile"},
-        "location": {"branches", "general", "business_profile"},
-        "booking": {"booking_rules", "services_prices", "hours", "general"},
-        "order": {"order_rules", "menu", "products", "delivery_payment"},
-        "delivery_payment": {"delivery_payment", "policies", "order_rules"},
-        "policy": {"policies", "booking_rules", "order_rules"},
+        "price": {"services_prices", "menu", "products", "pdf", "website", "general", "business_profile"},
+        "services": {"services_prices", "menu", "products", "general", "business_profile", "pdf", "website"},
+        "contact": {"general", "business_profile", "pdf", "website"},
+        "hours": {"hours", "branches", "general", "business_profile", "pdf", "website"},
+        "location": {"branches", "general", "business_profile", "pdf", "website"},
+        "booking": {"booking_rules", "services_prices", "hours", "general", "pdf", "website"},
+        "order": {"order_rules", "menu", "products", "delivery_payment", "pdf", "website"},
+        "delivery_payment": {"delivery_payment", "policies", "order_rules", "pdf", "website"},
+        "policy": {"policies", "booking_rules", "order_rules", "pdf", "website"},
+    }
+
+    INTENT_CONTENT_TERMS = {
+        "price": {"اسعار", "سعر", "تكلفه", "ثمن", "price", "prices", "cost"},
+        "services": {"خدمات", "خدمه", "نقدم", "تقدم", "service", "services", "offer", "offers", "offering", "provide", "provides"},
+        "contact": {"تواصل", "هاتف", "تلفون", "رقم", "واتساب", "ايميل", "بريد", "contact", "phone", "telephone", "whatsapp", "email", "mail"},
+        "hours": {"دوام", "ساعات", "مفتوح", "اغلاق", "hours", "open", "close"},
+        "location": {"عنوان", "موقع", "فرع", "location", "address", "branch"},
+        "booking": {"حجز", "موعد", "booking", "appointment", "reserve"},
+        "order": {"طلب", "توصيل", "order", "delivery"},
+        "delivery_payment": {"دفع", "بطاقه", "كاش", "payment", "pay", "cash", "card"},
+        "policy": {"سياسه", "الغاء", "استرجاع", "تبديل", "policy", "cancel", "refund", "return"},
     }
 
     def normalize(self, text):
@@ -69,12 +88,32 @@ class KnowledgeService:
 
     def _token_forms(self, token):
         forms = {token}
-        if re.search(r"[\u0600-\u06FF]", token):
-            if token.startswith("ال") and len(token) > 4:
-                forms.add(token[2:])
+        if not re.search(r"[\u0600-\u06FF]", token):
+            return forms
+
+        queue = [token]
+        seen = {token}
+        while queue:
+            current = queue.pop()
+            derived = set()
+
+            for prefix in ("وال", "بال", "فال", "كال", "لل", "ال"):
+                if current.startswith(prefix) and len(current) - len(prefix) >= 3:
+                    derived.add(current[len(prefix):])
+            for prefix in ("و", "ف", "ب", "ك", "ل"):
+                if current.startswith(prefix) and len(current) - 1 >= 3:
+                    derived.add(current[1:])
+
             for suffix in ("كم", "كن", "نا", "هم", "هن"):
-                if token.endswith(suffix) and len(token) - len(suffix) >= 3:
-                    forms.add(token[: -len(suffix)])
+                if current.endswith(suffix) and len(current) - len(suffix) >= 3:
+                    derived.add(current[: -len(suffix)])
+
+            for item in derived:
+                if item not in seen:
+                    seen.add(item)
+                    queue.append(item)
+
+        forms |= seen
         return forms
 
     def _base_tokens(self, text):
@@ -90,9 +129,7 @@ class KnowledgeService:
         tokens = self._base_tokens(text)
         expanded = set(tokens)
         for canonical, variants in self.ARABIC_EQUIVALENTS.items():
-            normalized_variants = {self.normalize(x) for x in variants} | {
-                self.normalize(canonical)
-            }
+            normalized_variants = {self.normalize(x) for x in variants} | {self.normalize(canonical)}
             if tokens & normalized_variants:
                 expanded |= normalized_variants
         return expanded
@@ -102,10 +139,7 @@ class KnowledgeService:
         tokens = [token for token in self.normalize(text).split() if token in base]
         if len(tokens) < size:
             return set()
-        return {
-            " ".join(tokens[index : index + size])
-            for index in range(len(tokens) - size + 1)
-        }
+        return {" ".join(tokens[index : index + size]) for index in range(len(tokens) - size + 1)}
 
     def detect_intents(self, query):
         q = self.normalize(query)
@@ -119,8 +153,12 @@ class KnowledgeService:
         if has({"سعر", "اسعار", "بكم", "تكلفة", "price", "prices", "cost"}): intents.add("price")
         if has({
             "خدمات", "خدمة", "service", "services", "menu", "منيو", "offer", "offers", "offering",
-            "provide", "provides", "تقدمون", "تقدموا", "بتقدموا", "بتعملوا", "بتعملو", "نقدم",
+            "provide", "provides", "تقدمون", "تقدموا", "بتقدموا", "بتقدمو", "بتعملوا", "بتعملو", "تعملون", "تعملوا", "نقدم",
         }): intents.add("services")
+        if has({
+            "تواصل", "اتواصل", "اكلم", "احكي", "اتصل", "هاتف", "تلفون", "تليفون", "رقم", "واتساب",
+            "ايميل", "بريد", "contact", "phone", "telephone", "whatsapp", "email", "mail",
+        }): intents.add("contact")
         if has({"دوام", "ساعات", "مفتوح", "اغلاق", "hours", "open", "close"}): intents.add("hours")
         if has({"وين", "عنوان", "موقع", "فرع", "location", "address", "branch"}): intents.add("location")
         if has({"حجز", "موعد", "احجز", "booking", "appointment", "reserve"}): intents.add("booking")
@@ -163,10 +201,7 @@ class KnowledgeService:
     def _embed_chunks(self, chunks, documents_by_id):
         if not chunks or not knowledge_embedding_client.available:
             return 0
-        texts = [
-            self._embedding_text(documents_by_id[chunk.document_id], chunk.content)
-            for chunk in chunks
-        ]
+        texts = [self._embedding_text(documents_by_id[chunk.document_id], chunk.content) for chunk in chunks]
         vectors = knowledge_embedding_client.embed_many(texts)
         if len(vectors) != len(chunks):
             return 0
@@ -179,9 +214,7 @@ class KnowledgeService:
         return len(chunks)
 
     def rebuild_document_index(self, db, document):
-        db.query(KnowledgeChunk).filter(
-            KnowledgeChunk.document_id == document.id
-        ).delete(synchronize_session=False)
+        db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == document.id).delete(synchronize_session=False)
         chunks = []
         for index, content in enumerate(self.split_content(document.content or "")):
             chunk = KnowledgeChunk(
@@ -198,36 +231,29 @@ class KnowledgeService:
         return len(chunks)
 
     def backfill_company_index(self, db, company_id):
-        docs = (
-            db.query(KnowledgeDocument)
-            .filter(KnowledgeDocument.company_id == company_id)
-            .all()
-        )
+        docs = db.query(KnowledgeDocument).filter(KnowledgeDocument.company_id == company_id).all()
         indexed = 0
         for doc in docs:
-            if (
-                db.query(KnowledgeChunk)
-                .filter(KnowledgeChunk.document_id == doc.id)
-                .first()
-                is None
-            ):
+            if db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == doc.id).first() is None:
                 self.rebuild_document_index(db, doc)
                 indexed += 1
 
         if knowledge_embedding_client.available:
             documents_by_id = {doc.id: doc for doc in docs}
-            chunks = (
-                db.query(KnowledgeChunk)
-                .filter(KnowledgeChunk.company_id == company_id)
-                .all()
-            )
+            chunks = db.query(KnowledgeChunk).filter(KnowledgeChunk.company_id == company_id).all()
             stale = [
-                chunk
-                for chunk in chunks
+                chunk for chunk in chunks
                 if chunk.document_id in documents_by_id and not self._embedding_is_current(chunk)
             ]
             self._embed_chunks(stale, documents_by_id)
         return indexed
+
+    def _intent_content_evidence(self, intents, chunk_tokens):
+        for intent in intents:
+            terms = {self.normalize(term) for term in self.INTENT_CONTENT_TERMS.get(intent, set())}
+            if chunk_tokens & terms:
+                return True
+        return False
 
     def _score_match(self, query, chunk, document):
         qnorm = self.normalize(query)
@@ -247,11 +273,11 @@ class KnowledgeService:
         chunk_phrases = self._ordered_phrases(chunk_norm)
         phrase_matches = query_phrases & chunk_phrases
         category_boost = sum(
-            8
-            for intent in intents
+            8 for intent in intents
             if document.source_type in self.INTENT_CATEGORY_HINTS.get(intent, set())
         )
-        if not common and not title_common and not phrase_matches and category_boost == 0:
+        intent_content_evidence = self._intent_content_evidence(intents, ctokens)
+        if not common and not title_common and not phrase_matches and not intent_content_evidence:
             return None
         coverage = len(common) / max(1, len(qtokens))
         phrase_coverage = len(phrase_matches) / max(1, len(query_phrases)) if query_phrases else 0
@@ -263,6 +289,7 @@ class KnowledgeService:
             + phrase_coverage * 5
             + (14 if exact_query else 0)
             + category_boost
+            + (4 if intent_content_evidence else 0)
         )
 
     def search_agent_knowledge(self, db, company_id, agent_id, query, max_chunks=None):
@@ -284,20 +311,13 @@ class KnowledgeService:
             .all()
         )
 
-        query_embedding = (
-            knowledge_embedding_client.embed_one(query)
-            if knowledge_embedding_client.available
-            else None
-        )
+        query_embedding = knowledge_embedding_client.embed_one(query) if knowledge_embedding_client.available else None
         matches = []
         for chunk, doc in rows:
             lexical_score = self._score_match(query, chunk, doc)
             semantic_similarity = None
             if query_embedding is not None and self._embedding_is_current(chunk):
-                semantic_similarity = knowledge_embedding_client.cosine_similarity(
-                    query_embedding,
-                    chunk.embedding,
-                )
+                semantic_similarity = knowledge_embedding_client.cosine_similarity(query_embedding, chunk.embedding)
             semantic_match = bool(
                 semantic_similarity is not None
                 and semantic_similarity >= settings.KNOWLEDGE_SEMANTIC_MIN_SIMILARITY
@@ -308,14 +328,7 @@ class KnowledgeService:
             if semantic_match:
                 score += max(0.0, semantic_similarity) * settings.KNOWLEDGE_SEMANTIC_WEIGHT
             matches.append(
-                KnowledgeMatch(
-                    doc.id,
-                    doc.title,
-                    doc.source_type,
-                    chunk.chunk_index,
-                    chunk.content,
-                    score,
-                )
+                KnowledgeMatch(doc.id, doc.title, doc.source_type, chunk.chunk_index, chunk.content, score)
             )
 
         matches.sort(key=lambda item: (item.score, -item.chunk_index), reverse=True)
