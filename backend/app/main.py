@@ -70,7 +70,7 @@ from backend.app.core.rate_limit import rate_limiter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
-CUSTOMER_PORTAL_VERSION = "20260905-3"
+CUSTOMER_PORTAL_VERSION = "20260905-4"
 
 
 @asynccontextmanager
