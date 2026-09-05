@@ -285,7 +285,10 @@ class KnowledgeService:
             for intent in intents
             if document.source_type in self.INTENT_CATEGORY_HINTS.get(intent, set())
         )
-        if not common and not title_common and not phrase_matches and category_boost == 0:
+        # Intent/category hints may improve ranking, but must never create a match by themselves.
+        # This prevents generic business/profile chunks from answering unrelated questions merely
+        # because their source category is broadly eligible for the detected intent.
+        if not common and not title_common and not phrase_matches:
             return None
         coverage = len(common) / max(1, len(qtokens))
         phrase_coverage = len(phrase_matches) / max(1, len(query_phrases)) if query_phrases else 0
