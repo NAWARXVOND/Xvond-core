@@ -21,6 +21,14 @@ class OpenAIProvider(AIProvider):
             )
 
         self.api_key = settings.OPENAI_API_KEY
+        self.client = httpx.Client(
+            timeout=120.0,
+            limits=httpx.Limits(
+                max_connections=100,
+                max_keepalive_connections=20,
+                keepalive_expiry=30.0,
+            ),
+        )
 
     def _request_url(self) -> str:
         return "https://api.openai.com/v1/responses"
@@ -124,19 +132,16 @@ class OpenAIProvider(AIProvider):
             payload["tools"] = converted_tools
 
         try:
-            with httpx.Client(
-                timeout=120.0,
-            ) as client:
-                response = client.post(
-                    self._request_url(),
-                    headers={
-                        "Authorization":
-                            f"Bearer {self.api_key}",
-                        "Content-Type":
-                            "application/json",
-                    },
-                    json=payload,
-                )
+            response = self.client.post(
+                self._request_url(),
+                headers={
+                    "Authorization":
+                        f"Bearer {self.api_key}",
+                    "Content-Type":
+                        "application/json",
+                },
+                json=payload,
+            )
 
         except httpx.HTTPError as exc:
             raise RuntimeError(
