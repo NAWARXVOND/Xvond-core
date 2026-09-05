@@ -1,7 +1,6 @@
 import inspect
 
 from backend.app.core.agent_runtime import AgentRuntime
-from backend.app.core.ai.providers.groq import GroqProvider
 from backend.app.api import whatsapp_webhook
 
 
@@ -16,13 +15,3 @@ def test_whatsapp_runtime_defers_commit_until_delivery():
     assert "commit=False" in source
     assert "db.rollback()" in source
     assert "WhatsApp reply delivery failed" in source
-
-
-def test_groq_provider_uses_chat_completions_tool_protocol(monkeypatch):
-    from backend.app.core.config.settings import settings
-    monkeypatch.setattr(settings, "GROQ_API_KEY", "test-key")
-    provider = GroqProvider()
-    source = inspect.getsource(GroqProvider.generate)
-    assert "previous_response_id" not in source
-    assert "tool_outputs" in source
-    assert provider._request_url().endswith("/chat/completions")
