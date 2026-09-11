@@ -17,12 +17,19 @@ def test_embedding_client_reuses_persistent_http_connection():
 
 def test_embedding_lookup_is_latency_bounded_and_cached():
     code = source("backend/app/modules/knowledge/embeddings.py")
-    assert "read=8.0" in code
-    assert "connect=3.0" in code
+    assert "read=4.0" in code
+    assert "connect=2.0" in code
     assert "QUERY_CACHE_TTL_SECONDS = 300.0" in code
     assert "QUERY_CACHE_MAX_ITEMS = 256" in code
     assert "cached = self._cache_get(value)" in code
     assert "self._cache_put(value, vector)" in code
+
+
+def test_trivial_chat_does_not_pay_for_semantic_network_lookup():
+    code = source("backend/app/modules/knowledge/embeddings.py")
+    assert "TRIVIAL_CHAT_TERMS" in code
+    assert "_should_embed_query" in code
+    assert "not self._should_embed_query(value)" in code
 
 
 def test_embedding_failure_keeps_lexical_fallback_available():

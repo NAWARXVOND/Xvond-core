@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import math
+import re
 from collections import OrderedDict
 from time import monotonic
 from typing import Iterable
@@ -22,14 +23,20 @@ class KnowledgeEmbeddingClient:
 
     This path runs synchronously before the main AI response, so it must stay
     latency-bounded. Reuse one HTTP client instead of creating a fresh TLS
-    connection for every customer message, and keep a small short-lived cache for
-    repeated queries.
+    connection for every customer message, keep a small short-lived cache for
+    repeated queries, and avoid a remote embedding request for trivial chat that
+    cannot benefit from semantic retrieval.
     """
 
     BATCH_SIZE = 64
     FAILURE_COOLDOWN_SECONDS = 60.0
     QUERY_CACHE_TTL_SECONDS = 300.0
     QUERY_CACHE_MAX_ITEMS = 256
+    TRIVIAL_CHAT_TERMS = {
+        "hi", "hello", "hey", "thanks", "thank", "ok", "okay", "bye",
+        "مرحبا", "هلا", "اهلا", "أهلا", "السلام", "عليكم", "سلام",
+        "شكرا", "شكراً", "مشكور", "تمام", "اوكي", "أوكي", "باي",
+    }
 
     def __init__(self) -> None:
         self.provider = settings.KNOWLEDGE_EMBEDDING_PROVIDER
@@ -37,7 +44,7 @@ class KnowledgeEmbeddingClient:
         self._retry_after = 0.0
         self._query_cache: OrderedDict[str, tuple[float, list[float]]] = OrderedDict()
         self._client = httpx.Client(
-            timeout=httpx.Timeout(connect=3.0, read=8.0, write=8.0, pool=3.0),
+            timeout=httpx.Timeout(connect=2.0, read=4.0, write=4.0, pool=2.0),
             limits=httpx.Limits(
                 max_connections=20,
                 max_keepalive_connections=10,
@@ -62,6 +69,15 @@ class KnowledgeEmbeddingClient:
         if settings.AI_PII_REDACTION_ENABLED:
             value = protect_text(value).text
         return value
+
+    def _should_embed_query(self, value: str) -> bool:
+        normalized = re.sub(r"[^\w\u0600-\u06FF]+", " ", value.lower()).strip()
+        if not normalized:
+            return False
+        tokens = normalized.split()
+        if len(tokens) <= 3 and all(token in self.TRIVIAL_CHAT_TERMS for token in tokens):
+            return False
+        return True
 
     def _cache_key(self, value: str) -> str:
         payload = f"{self.provider}:{self.model}:{value}".encode("utf-8")
@@ -124,7 +140,7 @@ class KnowledgeEmbeddingClient:
 
     def embed_one(self, text: str) -> list[float] | None:
         value = self._prepare_text(text)
-        if not value or not self.ready:
+        if not value or not self.ready or not self._should_embed_query(value):
             return None
         cached = self._cache_get(value)
         if cached is not None:
