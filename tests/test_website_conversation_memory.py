@@ -15,6 +15,9 @@ def test_website_widget_persists_conversation_across_browser_sessions():
     assert "if(m.role==='user')add(m.content,'xvond-u')" in source
     assert "m.role==='assistant'||m.role==='human'" in source
     assert "poll();" in source
+    assert "function scrollToLatest()" in source
+    assert "requestAnimationFrame" in source
+    assert "if(opening)scrollToLatest()" in source
 
 
 def test_website_visitor_token_default_supports_long_lived_continuity():
