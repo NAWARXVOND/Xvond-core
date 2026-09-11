@@ -12,7 +12,7 @@ def test_customer_portal_loads_cookie_session_immediately_after_base_app():
     cookie = html.index("/static/customer/cookie-session.js")
     enhancements = html.index("/static/customer/portal-enhancements.js")
     assert app < cookie < enhancements
-    assert "cookie-session.js?v=20260905-5" in html
+    assert "cookie-session.js?v=20260911-1" in html
 
 
 def test_customer_cookie_session_ignores_bearer_token_and_uses_same_origin_cookie():

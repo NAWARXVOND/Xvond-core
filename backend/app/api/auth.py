@@ -109,6 +109,17 @@ def login(data: LoginRequest, response: Response):
         db.close()
 
 
+@router.post("/refresh")
+def refresh_session(
+    response: Response,
+    current_user: User = Depends(get_current_user),
+):
+    """Rotate a still-valid browser session without changing token_version."""
+    token = create_access_token(current_user.id, current_user.token_version)
+    _set_session_cookie(response, token)
+    return {"status": "refreshed"}
+
+
 def _validate_new_password(password: str):
     try:
         validate_password(password)
