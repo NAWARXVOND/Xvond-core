@@ -58,6 +58,28 @@ Use BUSINESS CLOCK as the authoritative reference for current dates and times. N
 """
 
 
+_TOOL_INTENT_TERMS = (
+    "book", "booking", "reserve", "reservation", "appointment", "order", "cancel",
+    "reschedule", "refund", "payment", "pay", "quote", "quotation", "handoff",
+    "human", "agent", "representative", "حجز", "احجز", "موعد", "طلب", "اطلب",
+    "الغاء", "إلغاء", "تعديل", "استرجاع", "دفع", "ادفع", "عرض سعر", "موظف",
+    "موظفة", "بشري", "انسان", "إنسان", "تواصل مع", "حولني", "حوّلني",
+)
+
+
+def _message_may_need_tools(message: str, history: str = "") -> bool:
+    """Avoid sending large tool schemas for purely informational turns.
+
+    A short continuation can still need a tool, so inspect a small recent history window
+    in addition to the current message. This is deliberately conservative: a false
+    positive only keeps the old behavior, while a false negative could hide an action.
+    """
+    current = " ".join(str(message or "").lower().split())
+    recent = " ".join(str(history or "")[-1200:].lower().split())
+    combined = f"{recent} {current}".strip()
+    return any(term in combined for term in _TOOL_INTENT_TERMS)
+
+
 def _business_clock_context(
     timezone_name: str | None,
     now: datetime | None = None,
@@ -242,6 +264,8 @@ class AgentRuntime:
         error_message: str,
         latency_ms: int,
         routing_attempts: list[dict],
+        end_to_end_latency_ms: int | None = None,
+        stage_timings_ms: dict | None = None,
     ) -> None:
         db.add(
             AIUsage(
@@ -269,6 +293,8 @@ class AgentRuntime:
                 "model": model,
                 "error": error_message,
                 "latency_ms": latency_ms,
+                "end_to_end_latency_ms": end_to_end_latency_ms,
+                "stage_timings_ms": stage_timings_ms or {},
                 "routing_attempts": routing_attempts,
             },
         )
@@ -289,19 +315,34 @@ class AgentRuntime:
         if len(message) > 12000:
             raise HTTPException(413, "Message is too long")
 
+        end_to_end_started_at = perf_counter()
+        stage_timings_ms: dict[str, int] = {}
+
+        stage_started = perf_counter()
         self.assert_company_runtime_access(db, company_id)
         limits_service.check_token_limit(db, company_id)
         agent = self.get_agent(db, company_id, agent_id)
+        stage_timings_ms["access_and_limits"] = int((perf_counter() - stage_started) * 1000)
 
+        stage_started = perf_counter()
         try:
-            selections = runtime_selections(db, company_id, agent.provider, agent.model)
+            selections = runtime_selections(
+                db,
+                company_id,
+                agent.provider,
+                agent.model,
+                message=message,
+            )
         except ValueError as exc:
             raise HTTPException(503, str(exc)) from exc
         if not selections:
             raise HTTPException(503, "No eligible AI provider/model is available")
+        stage_timings_ms["routing"] = int((perf_counter() - stage_started) * 1000)
 
         active_provider = selections[0].provider
         active_model = selections[0].model
+
+        stage_started = perf_counter()
         conversation = self.get_or_create_conversation(
             db, company_id, agent.id, conversation_id, message
         )
@@ -309,15 +350,20 @@ class AgentRuntime:
         history = self.build_history(db, conversation.id)
         customer_memory = build_customer_memory(db, conversation)
         business_clock = self.build_business_clock(db, company_id)
+        stage_timings_ms["conversation_context"] = int((perf_counter() - stage_started) * 1000)
 
+        stage_started = perf_counter()
         knowledge = ""
         if company_module_enabled(db, company_id, "knowledge"):
             knowledge = knowledge_service.get_agent_context(
                 db, company_id, agent.id, message
             )
+        stage_timings_ms["knowledge"] = int((perf_counter() - stage_started) * 1000)
 
+        stage_started = perf_counter()
         available_tools = []
-        if allow_tools and company_module_enabled(db, company_id, "tools"):
+        tools_relevant = allow_tools and _message_may_need_tools(message, history)
+        if tools_relevant and company_module_enabled(db, company_id, "tools"):
             available_tools = tool_executor.get_agent_tools(db=db, agent_id=agent.id)
         tool_definitions = [
             {
@@ -329,6 +375,7 @@ class AgentRuntime:
             }
             for tool in available_tools
         ]
+        stage_timings_ms["tool_discovery"] = int((perf_counter() - stage_started) * 1000)
 
         context_parts = [GROUNDING_POLICY, business_clock]
         if knowledge:
@@ -373,7 +420,9 @@ class AgentRuntime:
         total_tokens = 0
         total_provider_cost = Decimal("0")
         final_text = ""
-        started_at = perf_counter()
+        provider_started_at = perf_counter()
+        total_model_ms = 0
+        total_tool_execution_ms = 0
 
         for round_index in range(self.MAX_TOOL_ROUNDS):
             try:
@@ -383,6 +432,7 @@ class AgentRuntime:
                     for selection in selections:
                         active_provider = selection.provider
                         active_model = selection.model
+                        attempt_started = perf_counter()
                         try:
                             result = ai_engine.generate(
                                 provider_name=active_provider,
@@ -393,16 +443,21 @@ class AgentRuntime:
                                 tool_outputs=None,
                                 continuation=None,
                             )
+                            attempt_ms = int((perf_counter() - attempt_started) * 1000)
+                            total_model_ms += attempt_ms
                             routing_attempts.append(
                                 {
                                     "provider": active_provider,
                                     "model": active_model,
                                     "reason": selection.reason,
                                     "success": True,
+                                    "latency_ms": attempt_ms,
                                 }
                             )
                             break
                         except Exception as exc:
+                            attempt_ms = int((perf_counter() - attempt_started) * 1000)
+                            total_model_ms += attempt_ms
                             last_error = exc
                             routing_attempts.append(
                                 {
@@ -410,6 +465,7 @@ class AgentRuntime:
                                     "model": active_model,
                                     "reason": selection.reason,
                                     "success": False,
+                                    "latency_ms": attempt_ms,
                                     "error": str(exc)[:500],
                                 }
                             )
@@ -418,6 +474,7 @@ class AgentRuntime:
                             "No AI provider completed the request"
                         )
                 else:
+                    attempt_started = perf_counter()
                     result = ai_engine.generate(
                         provider_name=active_provider,
                         system_prompt=system_prompt,
@@ -427,8 +484,13 @@ class AgentRuntime:
                         tool_outputs=tool_outputs,
                         continuation=continuation,
                     )
+                    attempt_ms = int((perf_counter() - attempt_started) * 1000)
+                    total_model_ms += attempt_ms
             except Exception as exc:
-                latency_ms = int((perf_counter() - started_at) * 1000)
+                provider_latency_ms = int((perf_counter() - provider_started_at) * 1000)
+                stage_timings_ms["model"] = total_model_ms
+                stage_timings_ms["tool_execution"] = total_tool_execution_ms
+                end_to_end_latency_ms = int((perf_counter() - end_to_end_started_at) * 1000)
                 error_message = str(exc)[:2000]
                 if commit:
                     db.rollback()
@@ -443,8 +505,10 @@ class AgentRuntime:
                         total_tokens=total_tokens,
                         provider_cost=total_provider_cost,
                         error_message=error_message,
-                        latency_ms=latency_ms,
+                        latency_ms=provider_latency_ms,
                         routing_attempts=routing_attempts,
+                        end_to_end_latency_ms=end_to_end_latency_ms,
+                        stage_timings_ms=stage_timings_ms,
                     )
                     db.commit()
                 raise HTTPException(502, "AI provider request failed") from exc
@@ -469,7 +533,7 @@ class AgentRuntime:
                 final_text = result.text
                 break
 
-            if not allow_tools:
+            if not allow_tools or not tool_definitions:
                 raise HTTPException(
                     500,
                     "AI attempted a tool call in a tool-disabled runtime context",
@@ -478,6 +542,7 @@ class AgentRuntime:
             continuation = result.continuation
             tool_outputs = []
             for call in result.tool_calls:
+                tool_started = perf_counter()
                 execution = tool_executor.execute(
                     db=db,
                     company_id=company_id,
@@ -486,6 +551,8 @@ class AgentRuntime:
                     arguments=call.arguments or {},
                     conversation_id=conversation.id,
                 )
+                tool_latency_ms = int((perf_counter() - tool_started) * 1000)
+                total_tool_execution_ms += tool_latency_ms
                 output = ToolOutput(
                     call_id=call.id,
                     name=call.name,
@@ -502,6 +569,7 @@ class AgentRuntime:
                         "success": output.success,
                         "data": output.data,
                         "error": output.error,
+                        "latency_ms": tool_latency_ms,
                     }
                 )
                 audit_service.log(
@@ -515,6 +583,7 @@ class AgentRuntime:
                         "tool": call.name,
                         "success": output.success,
                         "error": output.error,
+                        "latency_ms": tool_latency_ms,
                     },
                 )
         else:
@@ -526,6 +595,11 @@ class AgentRuntime:
         if not final_text:
             final_text = "The agent completed its actions but did not return a final response."
 
+        stage_timings_ms["model"] = total_model_ms
+        stage_timings_ms["tool_execution"] = total_tool_execution_ms
+        provider_latency_ms = int((perf_counter() - provider_started_at) * 1000)
+
+        persistence_started = perf_counter()
         assistant_message = AIMessage(
             conversation_id=conversation.id,
             role="assistant",
@@ -542,7 +616,7 @@ class AgentRuntime:
             total_tokens=total_tokens,
             provider_cost=total_provider_cost,
             status="success",
-            latency_ms=int((perf_counter() - started_at) * 1000),
+            latency_ms=provider_latency_ms,
         )
         if settings.is_production and total_tokens > 0:
             service_limits.check(
@@ -554,6 +628,12 @@ class AgentRuntime:
             )
 
         db.add(usage)
+        db.flush()
+        stage_timings_ms["persistence_before_commit"] = int(
+            (perf_counter() - persistence_started) * 1000
+        )
+        end_to_end_latency_ms = int((perf_counter() - end_to_end_started_at) * 1000)
+
         audit_service.log(
             db=db,
             company_id=company_id,
@@ -565,17 +645,24 @@ class AgentRuntime:
                 "provider": active_provider,
                 "model": active_model,
                 "tool_execution_count": len(executed_tools),
+                "tool_schemas_sent": len(tool_definitions),
                 "total_tokens": total_tokens,
                 "latency_ms": usage.latency_ms,
+                "end_to_end_latency_ms": end_to_end_latency_ms,
+                "stage_timings_ms": stage_timings_ms,
                 "routing_attempts": routing_attempts,
             },
         )
-        db.flush()
 
         if commit:
+            commit_started = perf_counter()
             db.commit()
             db.refresh(user_message)
             db.refresh(assistant_message)
+            stage_timings_ms["commit_and_refresh"] = int(
+                (perf_counter() - commit_started) * 1000
+            )
+            end_to_end_latency_ms = int((perf_counter() - end_to_end_started_at) * 1000)
 
         return {
             "conversation_id": conversation.id,
@@ -601,6 +688,8 @@ class AgentRuntime:
                 "total_tokens": total_tokens,
                 "provider_cost": total_provider_cost,
                 "latency_ms": usage.latency_ms,
+                "end_to_end_latency_ms": end_to_end_latency_ms,
+                "stage_timings_ms": stage_timings_ms,
             },
         }
 
