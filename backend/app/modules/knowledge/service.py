@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from time import monotonic
 
 from backend.app.core.config.settings import settings
 from backend.app.modules.knowledge.embeddings import knowledge_embedding_client
@@ -24,6 +25,7 @@ class KnowledgeService:
     DEFAULT_MAX_CONTEXT_CHARS = 12000
     CORE_MAX_CONTEXT_CHARS = 5500
     MAX_CHUNKS_PER_DOCUMENT = 3
+    LIVE_BACKFILL_TTL_SECONDS = 300.0
 
     MANUAL_SOURCE_TYPES = {
         "general",
@@ -93,6 +95,9 @@ class KnowledgeService:
         "delivery_payment": {"دفع", "بطاقه", "كاش", "payment", "pay", "cash", "card"},
         "policy": {"سياسه", "الغاء", "استرجاع", "تبديل", "policy", "cancel", "refund", "return"},
     }
+
+    def __init__(self):
+        self._live_backfill_after: dict[int, float] = {}
 
     def normalize(self, text):
         text = (text or "").lower().replace("\r", " ").replace("\n", " ")
@@ -257,11 +262,22 @@ class KnowledgeService:
 
     def backfill_company_index(self, db, company_id):
         docs = db.query(KnowledgeDocument).filter(KnowledgeDocument.company_id == company_id).all()
-        indexed = 0
-        for doc in docs:
-            if db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == doc.id).first() is None:
-                self.rebuild_document_index(db, doc)
-                indexed += 1
+        if not docs:
+            return 0
+
+        existing_document_ids = {
+            row[0]
+            for row in (
+                db.query(KnowledgeChunk.document_id)
+                .filter(KnowledgeChunk.company_id == company_id)
+                .distinct()
+                .all()
+            )
+        }
+        missing_docs = [doc for doc in docs if doc.id not in existing_document_ids]
+        for doc in missing_docs:
+            self.rebuild_document_index(db, doc)
+
         if knowledge_embedding_client.available:
             documents_by_id = {doc.id: doc for doc in docs}
             chunks = db.query(KnowledgeChunk).filter(KnowledgeChunk.company_id == company_id).all()
@@ -270,7 +286,22 @@ class KnowledgeService:
                 if chunk.document_id in documents_by_id and not self._embedding_is_current(chunk)
             ]
             self._embed_chunks(stale, documents_by_id)
-        return indexed
+        return len(missing_docs)
+
+    def _backfill_live_if_due(self, db, company_id):
+        now = monotonic()
+        if now < self._live_backfill_after.get(company_id, 0.0):
+            return 0
+        # Set the guard before work starts so concurrent/re-entrant requests do not
+        # repeatedly execute the same full-company maintenance scan.
+        self._live_backfill_after[company_id] = now + self.LIVE_BACKFILL_TTL_SECONDS
+        try:
+            return self.backfill_company_index(db, company_id)
+        except Exception:
+            # Allow a later request to retry maintenance rather than suppressing it
+            # for the whole TTL after a failure.
+            self._live_backfill_after.pop(company_id, None)
+            raise
 
     def _intent_content_evidence(self, intents, chunk_tokens):
         for intent in intents:
@@ -404,9 +435,15 @@ class KnowledgeService:
         return source_type
 
     def get_agent_context(self, db, company_id, agent_id, query):
-        self.backfill_company_index(db, company_id)
+        # Greeting/acknowledgement turns do not need a full-company maintenance scan,
+        # chunk load, lexical scoring pass, or semantic request. Keep only the core
+        # company profile so the employee can still identify the business correctly.
+        trivial_query = not knowledge_embedding_client._should_embed_query(str(query or ""))
+        if not trivial_query:
+            self._backfill_live_if_due(db, company_id)
+
         core, core_document_id = self._core_business_information(db, company_id, agent_id)
-        matches = self.search_agent_knowledge(db, company_id, agent_id, query)
+        matches = [] if trivial_query else self.search_agent_knowledge(db, company_id, agent_id, query)
         supplementary = [match for match in matches if match.document_id != core_document_id]
 
         if not core and not supplementary:
