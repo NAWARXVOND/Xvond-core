@@ -1,4 +1,7 @@
 let activeInboxConversationId = null;
+let activeInboxFingerprint = null;
+let inboxRefreshTimer = null;
+let inboxRefreshBusy = false;
 
 function inboxModeBadge(mode) {
     const human = String(mode || "ai").toLowerCase() === "human";
@@ -25,6 +28,50 @@ function inboxMessageClass(role) {
     if (role === "assistant") return "assistant";
     if (role === "human") return "human";
     return "user";
+}
+
+function inboxThreadFingerprint(result) {
+    const conversation = result?.conversation || {};
+    const messages = result?.messages || [];
+    const last = messages.length ? messages[messages.length - 1] : null;
+    return [
+        conversation.id || "",
+        conversation.mode || "ai",
+        conversation.message_count ?? messages.length,
+        last?.id || 0,
+        last?.role || ""
+    ].join(":");
+}
+
+function inboxPageVisible() {
+    const portal = document.getElementById("portal");
+    const page = document.getElementById("page-conversations");
+    return Boolean(
+        portal && !portal.classList.contains("hidden") &&
+        page && !page.classList.contains("hidden")
+    );
+}
+
+function startInboxLiveRefresh() {
+    if (inboxRefreshTimer) return;
+    inboxRefreshTimer = window.setInterval(async () => {
+        if (!inboxPageVisible() || inboxRefreshBusy) return;
+        inboxRefreshBusy = true;
+        try {
+            await loadConversations({preserveThread: true, silent: true});
+            if (activeInboxConversationId) {
+                await loadInboxConversation(
+                    activeInboxConversationId,
+                    null,
+                    {silent: true}
+                );
+            }
+        } catch (_) {
+            // Individual loaders already surface meaningful errors and session expiry.
+        } finally {
+            inboxRefreshBusy = false;
+        }
+    }, 2500);
 }
 
 ensureInboxMarkup = function() {
@@ -82,6 +129,7 @@ async function customerTakeOverConversation(conversationId) {
     try {
         await api(`/customer/inbox/${conversationId}/take-over`, {method: "POST", body: "{}"});
         activeInboxConversationId = conversationId;
+        activeInboxFingerprint = null;
         await loadInboxConversation(conversationId);
         await loadConversations({preserveThread: true});
     } catch (error) {
@@ -101,6 +149,7 @@ async function customerReturnConversationToAI(conversationId) {
     try {
         await api(`/customer/inbox/${conversationId}/return-ai`, {method: "POST", body: "{}"});
         activeInboxConversationId = conversationId;
+        activeInboxFingerprint = null;
         await loadInboxConversation(conversationId);
         await loadConversations({preserveThread: true});
     } catch (error) {
@@ -126,6 +175,7 @@ async function customerSendHumanReply(conversationId) {
         });
         if (input) input.value = "";
         activeInboxConversationId = conversationId;
+        activeInboxFingerprint = null;
         await loadInboxConversation(conversationId);
         await loadConversations({preserveThread: true});
     } catch (error) {
@@ -140,6 +190,7 @@ async function customerSendHumanReply(conversationId) {
 
 loadConversations = async function(options = {}) {
     ensureInboxMarkup();
+    startInboxLiveRefresh();
     const list = document.getElementById("conversation-list");
     if (!list) return;
 
@@ -151,7 +202,9 @@ loadConversations = async function(options = {}) {
     if (channelType) params.set("channel_type", channelType);
     if (search) params.set("search", search);
 
-    list.innerHTML = '<div class="empty-state">Loading conversations...</div>';
+    if (!options.silent) {
+        list.innerHTML = '<div class="empty-state">Loading conversations...</div>';
+    }
     try {
         const result = await api(`/customer/inbox${params.toString() ? `?${params}` : ""}`);
         populateInboxFilters(result.filters || {});
@@ -184,15 +237,18 @@ loadConversations = async function(options = {}) {
 
         if (!options.preserveThread && activeInboxConversationId && !items.some(item => Number(item.id) === Number(activeInboxConversationId))) {
             activeInboxConversationId = null;
+            activeInboxFingerprint = null;
             const target = document.getElementById("conversation-messages");
             if (target) target.innerHTML = '<div class="inbox-v2-empty"><strong>Select a conversation</strong><p>Choose a conversation from the list to view it.</p></div>';
         }
     } catch (error) {
-        list.innerHTML = `<div class="empty-state">${safe(error.message)}</div>`;
+        if (!options.silent) {
+            list.innerHTML = `<div class="empty-state">${safe(error.message)}</div>`;
+        }
     }
 };
 
-loadInboxConversation = async function(conversationId, button = null) {
+loadInboxConversation = async function(conversationId, button = null, options = {}) {
     activeInboxConversationId = conversationId;
     document.querySelectorAll(".inbox-item").forEach(item => item.classList.remove("selected"));
     const selectedButton = button || document.querySelector(`.inbox-item[data-conversation-id="${conversationId}"]`);
@@ -200,13 +256,21 @@ loadInboxConversation = async function(conversationId, button = null) {
 
     const target = document.getElementById("conversation-messages");
     if (!target) return;
-    target.innerHTML = '<div class="empty-state">Loading messages...</div>';
+    if (!options.silent) {
+        target.innerHTML = '<div class="empty-state">Loading messages...</div>';
+    }
     try {
         const result = await api(`/customer/inbox/${conversationId}`);
+        const fingerprint = inboxThreadFingerprint(result);
+        if (options.silent && fingerprint === activeInboxFingerprint) return;
+        activeInboxFingerprint = fingerprint;
+
         const conversation = result.conversation || {};
         const messages = result.messages || [];
         const human = String(conversation.mode || "ai").toLowerCase() === "human";
         const contact = conversation.external_contact_id || conversation.title || `Conversation ${conversationId}`;
+        const previousList = target.querySelector(".inbox-message-list");
+        const keepBottom = !previousList || (previousList.scrollHeight - previousList.scrollTop - previousList.clientHeight < 80);
 
         const controls = human ? `
             <div class="handoff-controls human-active">
@@ -273,8 +337,10 @@ loadInboxConversation = async function(conversationId, button = null) {
             ${composer}
         `;
         const messageList = target.querySelector(".inbox-message-list");
-        if (messageList) messageList.scrollTop = messageList.scrollHeight;
+        if (messageList && keepBottom) messageList.scrollTop = messageList.scrollHeight;
     } catch (error) {
-        target.innerHTML = `<div class="empty-state">${safe(error.message)}</div>`;
+        if (!options.silent) {
+            target.innerHTML = `<div class="empty-state">${safe(error.message)}</div>`;
+        }
     }
 };
