@@ -17,8 +17,12 @@ api = async function(path, options = {}) {
     let data = {};
     try { data = await response.json(); } catch (_) {}
     if (response.status === 401) {
+        // Login failures are credential errors, not expired-session errors.
+        if (path === "/auth/login") {
+            throw new Error(data.detail || "Invalid email or password");
+        }
         clearSession();
-        throw new Error("Unauthorized");
+        throw new Error("Session expired. Please sign in again.");
     }
     if (!response.ok) {
         const detail = typeof data.detail === "string"
@@ -30,13 +34,12 @@ api = async function(path, options = {}) {
 };
 
 // Customer eligibility and company attachment are enforced server-side by
-// /customer/overview. The browser only renders the authenticated server state.
-startPortal = async function() {
+// /customer/overview. Resolve authentication first so an expired session does
+// not fire multiple protected requests and produce duplicate 401 errors.
+startPortal = async function(options = {}) {
     try {
-        [currentUser, portalOverview] = await Promise.all([
-            api("/users/me"),
-            api("/customer/overview")
-        ]);
+        currentUser = await api("/users/me");
+        portalOverview = await api("/customer/overview");
         portalNavigation = portalOverview?.portal?.navigation || fallbackPortalNavigation();
         document.getElementById("login-screen").classList.add("hidden");
         document.getElementById("portal").classList.remove("hidden");
@@ -47,7 +50,12 @@ startPortal = async function() {
     } catch (err) {
         clearSession();
         const error = document.getElementById("login-error");
-        if (error) error.textContent = err.message;
+        if (error) {
+            error.textContent = options.silentAuthFailure && String(err.message).startsWith("Session expired")
+                ? ""
+                : err.message;
+        }
+        throw err;
     }
 };
 
@@ -85,7 +93,4 @@ logout = async function() {
 // app.js no longer resumes from localStorage because the legacy token is
 // removed before it loads. Resume from the HttpOnly cookie instead. A missing
 // cookie on the initial public login screen is expected and should stay silent.
-startPortal().finally(() => {
-    const error = document.getElementById("login-error");
-    if (error?.textContent === "Unauthorized") error.textContent = "";
-});
+startPortal({silentAuthFailure: true}).catch(() => {});
