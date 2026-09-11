@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 from backend.app.core.config_secrets import reveal_config
 from backend.app.core.database.connection import SessionLocal
@@ -203,7 +203,22 @@ def list_inbox(
                 )
             )
 
-        conversations = query.order_by(AIConversation.id.desc()).limit(500).all()
+        # Inbox order must follow activity, not conversation creation. A customer
+        # returning to an older thread should bring that thread back to the top.
+        latest_message_id = (
+            db.query(func.max(AIMessage.id))
+            .filter(AIMessage.conversation_id == AIConversation.id)
+            .correlate(AIConversation)
+            .scalar_subquery()
+        )
+        conversations = (
+            query.order_by(
+                latest_message_id.desc().nullslast(),
+                AIConversation.id.desc(),
+            )
+            .limit(500)
+            .all()
+        )
         conversation_ids = [item.id for item in conversations]
         last_messages = {}
         counts = {item.id: 0 for item in conversations}
