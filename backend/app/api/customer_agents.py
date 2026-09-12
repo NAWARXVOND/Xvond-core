@@ -180,7 +180,5 @@ def update_agent(
 
 
 from backend.app.api.customer_management import router as customer_management_router
-from backend.app.api.customer_meta_whatsapp import router as customer_meta_whatsapp_router
 
 router.include_router(customer_management_router)
-router.include_router(customer_meta_whatsapp_router)

@@ -1,4 +1,11 @@
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from fastapi.testclient import TestClient
+
+from backend.app.core.dependencies import require_customer_user
+from backend.app.main import app
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,10 +33,34 @@ def test_customer_whatsapp_completion_reuses_secure_meta_flow():
     assert 'action="whatsapp.customer_embedded_signup.connected"' in api
 
 
-def test_customer_agent_router_includes_whatsapp_signup_router():
-    api = source("backend/app/api/customer_agents.py")
-    assert "customer_meta_whatsapp_router" in api
-    assert "router.include_router(customer_meta_whatsapp_router)" in api
+def test_customer_whatsapp_routes_match_portal_urls():
+    paths = app.openapi()["paths"]
+    prefix = "/customer/meta/whatsapp/embedded-signup"
+    assert "get" in paths.get(f"{prefix}/config", {})
+    assert "post" in paths.get(f"{prefix}/complete", {})
+    assert not any(path.startswith("/customer/agents/customer/meta/") for path in paths)
+
+
+@pytest.mark.parametrize("method, endpoint", [("GET", "config?agent_id=7"), ("POST", "complete")])
+def test_customer_whatsapp_routes_require_authentication(method, endpoint):
+    response = TestClient(app).request(
+        method, f"/customer/meta/whatsapp/embedded-signup/{endpoint}"
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize("method, endpoint", [("GET", "config?agent_id=7"), ("POST", "complete")])
+def test_customer_whatsapp_routes_forbid_staff(monkeypatch, method, endpoint):
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        require_customer_user,
+        lambda: SimpleNamespace(role="employee", company_id=7),
+    )
+    response = TestClient(app).request(
+        method, f"/customer/meta/whatsapp/embedded-signup/{endpoint}"
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Company management access required"
 
 
 def test_customer_portal_loads_meta_signup_ui():
