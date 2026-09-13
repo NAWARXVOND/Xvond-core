@@ -67,7 +67,7 @@ def test_customer_portal_loads_meta_signup_ui():
     index = source("frontend/customer/index.html")
     js = source("frontend/customer/meta-whatsapp.js")
     assert "/static/customer/meta-whatsapp.js" in index
-    assert "Connect WhatsApp" in js
+    assert "ربط WhatsApp" in js
     assert "/customer/meta/whatsapp/embedded-signup/config" in js
     assert "/customer/meta/whatsapp/embedded-signup/complete" in js
     assert "xvondCustomerMetaLoginOptions" in js
@@ -83,7 +83,20 @@ def test_customer_connection_status_requires_real_meta_onboarding():
     assert 'channel_config.get("waba_id")' in api
     assert 'channel_config.get("phone_number_id")' in api
     assert 'channel_config.get("access_token")' in api
-    assert '"connected": _meta_channel_connected(channel, channel_config)' in api
+    assert '"connected": connected' in api
+
+
+def test_customer_whatsapp_status_exposes_runtime_readiness_and_blockers():
+    api = source("backend/app/api/customer_meta_whatsapp.py")
+    js = source("frontend/customer/meta-whatsapp.js")
+    assert "blockers = _activation_blockers(db, channel)" in api
+    assert '"runtime_ready": bool(connected and enabled and not blockers)' in api
+    assert '"blockers": blockers' in api
+    assert '"coexistence": bool(channel_config.get("coexistence"))' in api
+    assert "xvondCustomerWhatsAppStatus" in js
+    assert "xvondCustomerWhatsAppBlockers" in js
+    assert "config.runtime_ready" in js
+    assert "config.coexistence" in js
 
 
 def test_customer_meta_origin_validation_is_strict():
