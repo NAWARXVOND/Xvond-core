@@ -96,3 +96,11 @@ def test_coexistence_completion_can_resolve_missing_phone_number_id_server_side(
 def test_coexistence_does_not_guess_when_waba_has_multiple_phone_numbers():
     api = source("backend/app/api/admin_meta_whatsapp.py")
     assert "the selected WhatsApp Business Account has multiple phone numbers" in api
+
+
+def test_webhook_verification_uses_platform_token_before_tenant_activation():
+    webhook = source("backend/app/api/whatsapp_webhook.py")
+    assert "from backend.app.api.admin_meta_whatsapp import _meta_settings" in webhook
+    assert 'platform_token = str(_meta_settings().get("verify_token") or "")' in webhook
+    assert "hmac.compare_digest(platform_token, str(verify_token))" in webhook
+    assert webhook.index("platform_token =") < webhook.index("for channel in get_whatsapp_channels(db):")
