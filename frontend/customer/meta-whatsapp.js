@@ -13,8 +13,8 @@ function xvondCustomerTrustedMetaOrigin(origin) {
 }
 
 function xvondCustomerLoadMetaSdk(appId, graphVersion) {
-    // Embedded Signup needs config_id and a code response, which Meta's FedCM
-    // credential request does not forward. Keep the configured OAuth popup flow.
+    // WhatsApp Embedded Signup needs provider-side identifiers and a code
+    // response, but those implementation details stay hidden from customers.
     if (window.FB) {
         FB.init({appId, cookie: true, xfbml: false, version: graphVersion || "v26.0", fedCM: false});
         return Promise.resolve();
@@ -36,7 +36,7 @@ function xvondCustomerLoadMetaSdk(appId, graphVersion) {
         script.defer = true;
         script.crossOrigin = "anonymous";
         script.src = "https://connect.facebook.net/en_US/sdk.js";
-        script.onerror = () => reject(new Error("Could not load Meta SDK"));
+        script.onerror = () => reject(new Error("تعذر فتح نافذة ربط واتساب. حاول مرة أخرى."));
         document.head.appendChild(script);
     });
     return xvondCustomerMetaSdkPromise;
@@ -56,35 +56,54 @@ function xvondCustomerMetaLoginOptions(config) {
 
 function xvondCustomerWhatsAppStatus(config) {
     if (!config.connected) {
-        const invalidToken = config.connection_status === "invalid_token";
+        const needsReconnect = config.configured || config.connection_status === "invalid_token";
         return {
-            title: invalidToken ? "WhatsApp مفصول · رمز Meta غير صالح" : "WhatsApp غير مربوط",
-            detail: safe(config.connection_issue || "اربط رقم WhatsApp Business بهذا الموظف ليبدأ بالرد على العملاء."),
-            label: config.configured ? "إعادة ربط WhatsApp" : "ربط WhatsApp",
+            title: needsReconnect ? "اتصال واتساب يحتاج إعادة ربط" : "اربط رقم واتساب",
+            detail: needsReconnect
+                ? "أعد تأكيد الحساب والرقم حتى يعود الموظف للعمل على واتساب."
+                : "اربط رقم WhatsApp Business الخاص بشركتك بالموظف. ستُفتح نافذة آمنة لتأكيد ملكية الحساب والرقم.",
+            label: needsReconnect ? "إعادة ربط الرقم" : "ربط رقم واتساب",
         };
     }
+
     const phone = safe(config.display_phone_number || "الرقم متصل");
     const name = config.verified_name ? ` · ${safe(config.verified_name)}` : "";
     if (config.runtime_ready) {
         return {
-            title: `WhatsApp جاهز · ${phone}${name}`,
+            title: `واتساب متصل · ${phone}${name}`,
             detail: config.coexistence
-                ? "الوضع المشترك مفعّل: الموظف AI وموظفو WhatsApp Business يعملون على نفس الرقم."
-                : "الموظف AI مفعّل ويستقبل الرسائل على هذا الرقم.",
-            label: "إعادة ربط WhatsApp",
+                ? "الموظف AI جاهز على نفس رقم WhatsApp Business، ويمكن لفريقك متابعة استخدام التطبيق أيضًا."
+                : "الموظف AI جاهز لاستقبال رسائل العملاء على هذا الرقم.",
+            label: "تغيير الرقم أو إعادة الربط",
         };
     }
+
     return {
-        title: `WhatsApp مربوط لكنه غير جاهز · ${phone}${name}`,
-        detail: "أكمل المتطلبات الظاهرة أدناه ثم أعد تحميل الصفحة.",
-        label: "إعادة ربط WhatsApp",
+        title: `تم ربط الرقم · ${phone}${name}`,
+        detail: "الرقم مربوط بنجاح. يحتاج الموظف إلى إكمال بعض إعدادات الخدمة من Xvond قبل بدء الرد على العملاء.",
+        label: "إعادة ربط الرقم",
     };
 }
 
 function xvondCustomerWhatsAppBlockers(config) {
     const blockers = Array.isArray(config.blockers) ? config.blockers.filter(Boolean) : [];
     if (!config.connected || blockers.length === 0) return "";
-    return `<ul class="muted" style="margin:8px 0 0;padding-inline-start:20px">${blockers.map(item => `<li>${safe(item)}</li>`).join("")}</ul>`;
+    return `
+        <div class="muted" style="margin-top:8px">
+            <strong>حالة التشغيل:</strong> يحتاج الموظف إلى إكمال الإعداد من Xvond قبل بدء الرد.
+        </div>
+    `;
+}
+
+function xvondCustomerWhatsAppIntro() {
+    return `
+        <div class="xvond-managed-whatsapp-note" style="margin:0 0 12px;padding:12px;border:1px solid rgba(148,163,184,.25);border-radius:10px">
+            <strong>خدمة واتساب مُدارة من Xvond</strong>
+            <p class="muted" style="margin:6px 0 0">
+                اشتراك الموظف وإدارته يتمان عبر Xvond. نافذة الربط مخصصة لتأكيد ملكية حساب ورقم واتساب وربطه بالموظف.
+            </p>
+        </div>
+    `;
 }
 
 window.addEventListener("message", event => {
@@ -108,22 +127,23 @@ window.openCustomerMetaWhatsAppConnect = async function (agentId) {
     try {
         const config = await api(`/customer/meta/whatsapp/embedded-signup/config?agent_id=${Number(agentId)}`);
         if (!config.ready) {
-            alert(`إعداد WhatsApp غير مكتمل على خادم Xvond: ${(config.missing_settings || []).join(", ")}`);
+            alert("ربط واتساب غير متاح حاليًا. تواصل مع Xvond لإكمال إعداد الخدمة.");
             return;
         }
+
         xvondCustomerMetaSignupState = {agentId: Number(agentId)};
         xvondCustomerMetaSignupMessage = null;
         await xvondCustomerLoadMetaSdk(config.app_id, config.graph_api_version);
         FB.login(response => {
             const code = response?.authResponse?.code;
             if (!code) {
-                if (response?.status !== "unknown") alert("Meta لم تُرجع رمز التفويض.");
+                if (response?.status !== "unknown") alert("لم يكتمل تأكيد حساب واتساب. حاول مرة أخرى.");
                 return;
             }
             xvondCustomerFinishMetaWhatsAppSignup(code);
         }, xvondCustomerMetaLoginOptions(config));
     } catch (error) {
-        alert(error.message || String(error));
+        alert(error.message || "تعذر بدء ربط واتساب. حاول مرة أخرى.");
     }
 };
 
@@ -132,14 +152,16 @@ async function xvondCustomerFinishMetaWhatsAppSignup(code) {
         for (let attempt = 0; attempt < 40 && !xvondCustomerMetaSignupMessage; attempt += 1) {
             await new Promise(resolve => setTimeout(resolve, 250));
         }
+
         const data = xvondCustomerMetaSignupMessage || {};
         const wabaId = data.waba_id || data.wabaId;
         const phoneNumberId = data.phone_number_id || data.phoneNumberId || null;
         const businessId = data.business_id || data.businessId || null;
         if (!wabaId) {
-            alert("تم تفويض Meta، لكن حساب WhatsApp Business لم يصل إلى Xvond. أكمل نافذة Meta بالكامل ثم حاول مجددًا.");
+            alert("لم يكتمل ربط حساب واتساب. أكمل نافذة التحقق حتى النهاية ثم حاول مجددًا.");
             return;
         }
+
         const result = await api("/customer/meta/whatsapp/embedded-signup/complete", {
             method: "POST",
             body: JSON.stringify({
@@ -153,15 +175,18 @@ async function xvondCustomerFinishMetaWhatsAppSignup(code) {
                     : "embedded_signup"
             })
         });
+
         if (result.runtime_ready) {
-            const mode = result.coexistence ? "الوضع المشترك مع WhatsApp Business مفعّل." : "الموظف AI أصبح مفعّلًا على WhatsApp.";
-            alert(`تم ربط WhatsApp بنجاح.\n${result.display_phone_number || result.phone_number_id}\n${mode}`);
+            const mode = result.coexistence
+                ? "الموظف AI جاهز على نفس رقم WhatsApp Business."
+                : "الموظف AI جاهز على واتساب.";
+            alert(`تم ربط رقم واتساب بنجاح.\n${result.display_phone_number || ""}\n${mode}`);
         } else {
-            alert(`تم ربط WhatsApp، لكن الموظف لم يصبح جاهزًا بعد:\n${(result.blockers || []).join("\n")}`);
+            alert("تم ربط رقم واتساب بنجاح. سيبدأ الموظف بالعمل بعد إكمال إعداد الخدمة من Xvond.");
         }
         await loadAgents();
     } catch (error) {
-        alert(error.message || String(error));
+        alert(error.message || "تعذر إكمال ربط واتساب. حاول مرة أخرى أو تواصل مع Xvond.");
     } finally {
         xvondCustomerMetaSignupState = null;
         xvondCustomerMetaSignupMessage = null;
@@ -174,25 +199,28 @@ async function xvondDecorateCustomerAgentsWithWhatsApp() {
     await Promise.all((agents || []).map(async (agent, index) => {
         const card = cards[index];
         if (!card || card.querySelector(".xvond-whatsapp-connect")) return;
+
         const box = document.createElement("div");
         box.className = "xvond-whatsapp-connect";
         box.style.marginTop = "14px";
         box.style.paddingTop = "12px";
         box.style.borderTop = "1px solid rgba(148,163,184,.25)";
-        box.innerHTML = `<p class="muted" style="margin:0 0 8px">WhatsApp: جاري فحص الحالة...</p>`;
+        box.innerHTML = `<p class="muted" style="margin:0">جاري فحص اتصال واتساب...</p>`;
         card.appendChild(box);
+
         try {
             const config = await api(`/customer/meta/whatsapp/embedded-signup/config?agent_id=${Number(agent.id)}`);
             const status = xvondCustomerWhatsAppStatus(config);
             box.innerHTML = `
+                ${xvondCustomerWhatsAppIntro()}
                 <p style="margin:0 0 6px"><strong>${status.title}</strong></p>
                 <p class="muted" style="margin:0 0 8px">${status.detail}</p>
                 ${xvondCustomerWhatsAppBlockers(config)}
                 <button type="button" style="margin-top:10px" onclick="openCustomerMetaWhatsAppConnect(${Number(agent.id)})" ${config.ready ? "" : "disabled"}>${status.label}</button>
-                ${config.ready ? "" : `<p class="muted" style="margin:8px 0 0">إعداد Meta على Xvond ناقص: ${safe((config.missing_settings || []).join(", ") || "إعدادات الخادم")}</p>`}
+                ${config.ready ? "" : `<p class="muted" style="margin:8px 0 0">ربط واتساب يحتاج تفعيلًا من فريق Xvond.</p>`}
             `;
         } catch (error) {
-            box.innerHTML = `<p class="muted" style="margin:0">تعذر قراءة حالة WhatsApp: ${safe(error.message || String(error))}</p>`;
+            box.innerHTML = `<p class="muted" style="margin:0">تعذر فحص اتصال واتساب. تواصل مع Xvond إذا استمرت المشكلة.</p>`;
         }
     }));
 }
