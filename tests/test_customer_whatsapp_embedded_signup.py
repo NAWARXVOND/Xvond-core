@@ -70,7 +70,20 @@ def test_customer_portal_loads_meta_signup_ui():
     assert "Connect WhatsApp" in js
     assert "/customer/meta/whatsapp/embedded-signup/config" in js
     assert "/customer/meta/whatsapp/embedded-signup/complete" in js
-    assert "featureType: \"whatsapp_business_app_onboarding\"" in js
+    assert "xvondCustomerMetaLoginOptions" in js
+    assert "if (config.feature_type) extras.featureType = config.feature_type" in js
+    assert "if (config.session_info_version) extras.sessionInfoVersion" in js
+
+
+def test_customer_connection_status_requires_real_meta_onboarding():
+    api = source("backend/app/api/customer_meta_whatsapp.py")
+    assert "_META_CONNECTION_METHODS" in api
+    assert "meta_embedded_signup" in api
+    assert "meta_embedded_signup_coexistence" in api
+    assert 'channel_config.get("waba_id")' in api
+    assert 'channel_config.get("phone_number_id")' in api
+    assert 'channel_config.get("access_token")' in api
+    assert '"connected": _meta_channel_connected(channel, channel_config)' in api
 
 
 def test_customer_meta_origin_validation_is_strict():
