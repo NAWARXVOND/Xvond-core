@@ -62,6 +62,8 @@ jobs:
           for file in scripts/*.sh; do
             sh -n "$file"
           done
+      - name: Test customer Meta signup flow
+        run: node --test tests/customer-meta-whatsapp.test.cjs
       - name: Validate production Compose
         run: |
           cp .env.example .env
