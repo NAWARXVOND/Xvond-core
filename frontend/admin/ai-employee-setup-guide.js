@@ -7,16 +7,18 @@
     const channels=(d.channels||[]).filter(x=>+x.agent_id===+row.agent.id);
     const enabledActions=(row.actions||[]).filter(x=>x.enabled===true);
     const readyActions=enabledActions.filter(x=>!(x.readiness_issues||[]).length);
-    const connectedChannels=channels.filter(x=>x.configured||x.enabled);
+    const configuredChannels=channels.filter(x=>x.configured===true);
+    const connectedChannels=channels.filter(x=>x.enabled===true&&x.connected===true);
     const connectedApps=(d.integrations||[]).filter(x=>x.enabled&&x.configured);
     return {
       profile:true,
       knowledge:(row.knowledge||[]).some(x=>x.enabled),
       actions:readyActions.length>0,
-      channels:connectedChannels.length>0,
+      channels:configuredChannels.length>0,
       apps:connectedApps.length>0,
       enabledActions:enabledActions.length,
       readyActions:readyActions.length,
+      configuredChannels:configuredChannels.length,
       connectedChannels:connectedChannels.length,
       connectedApps:connectedApps.length,
     };
@@ -103,7 +105,7 @@
       const s=setupState(row,d);
       const configured=s.profile&&s.knowledge&&s.channels&&(s.enabledActions===0||s.readyActions===s.enabledActions);
       const live=row.agent.enabled===true;
-      return `<div class="integration-card"><div class="integration-card-head"><div><h4>${f(row.agent.name)}</h4><div class="meta">${live?'Live':configured?'Draft · configuration complete':'Draft · setup still needs attention'}</div></div>${wsPill(live?'Live':configured?'Draft Ready':'Draft',live?'good':'neutral')}</div><div class="meta">${s.readyActions} ready actions · ${s.connectedChannels} connected channels · ${s.connectedApps} connected apps</div><div class="workspace-inline-actions"><button class="primary-button" onclick="openAIEmployeeSetupGuide(${row.agent.id})">Check Delivery Readiness</button></div></div>`;
+      return `<div class="integration-card"><div class="integration-card-head"><div><h4>${f(row.agent.name)}</h4><div class="meta">${live?'Live':configured?'Draft · configuration complete':'Draft · setup still needs attention'}</div></div>${wsPill(live?'Live':configured?'Draft Ready':'Draft',live?'good':'neutral')}</div><div class="meta">${s.readyActions} ready actions · ${s.connectedChannels} connected / ${s.configuredChannels} configured channels · ${s.connectedApps} connected apps</div><div class="workspace-inline-actions"><button class="primary-button" onclick="openAIEmployeeSetupGuide(${row.agent.id})">Check Delivery Readiness</button></div></div>`;
     }).join('');
     const guide=`<div class="workspace-panel" style="margin-bottom:16px"><div class="workspace-panel-head"><div><h3>AI Employee Delivery</h3><p>Create in Draft, configure what the customer ordered, test it, then Go Live only after delivery readiness passes.</p></div><button class="primary-button" onclick="openAddAIEmployee(${d.view.company.id})">+ AI Employee</button></div><div class="integration-grid">${rows}</div></div>`;
     return guide+html;

@@ -78,12 +78,11 @@ def test_customer_portal_loads_meta_signup_ui():
 def test_customer_connection_status_requires_real_meta_onboarding():
     api = source("backend/app/api/customer_meta_whatsapp.py")
     assert "_META_CONNECTION_METHODS" in api
-    assert "meta_embedded_signup" in api
-    assert "meta_embedded_signup_coexistence" in api
-    assert 'channel_config.get("waba_id")' in api
-    assert 'channel_config.get("phone_number_id")' in api
-    assert 'channel_config.get("access_token")' in api
+    assert "whatsapp_meta_onboarding_complete" in api
+    assert "whatsapp_connection_state(channel_config, verify_remote=True)" in api
     assert '"connected": connected' in api
+    assert '"connection_status": connection["connection_status"]' in api
+    assert '"connection_issue": connection["connection_issue"]' in api
 
 
 def test_customer_whatsapp_status_exposes_runtime_readiness_and_blockers():

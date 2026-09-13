@@ -16,6 +16,7 @@ from backend.app.modules.ai_agent.profile_models import AIAgentProfile
 from backend.app.modules.billing.service_models import ServicePlan, ServiceSubscription
 from backend.app.modules.channels.catalog import validate_channel_config
 from backend.app.modules.channels.models import AgentChannel
+from backend.app.modules.channels.whatsapp_connection import whatsapp_meta_onboarding_complete
 from backend.app.modules.integrations.catalog import validate_integration_config
 from backend.app.modules.integrations.models import CompanyIntegration
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeDocument
@@ -238,10 +239,18 @@ def company_readiness(db, company_id: int):
         )
         channel_results = []
         for channel in channels:
+            channel_config = reveal_config(channel.config)
             configured, error = validate_config(
                 validate_channel_config,
                 channel.channel_type,
-                reveal_config(channel.config),
+                channel_config,
+            )
+            connected = bool(
+                configured
+                and (
+                    channel.channel_type != "whatsapp"
+                    or whatsapp_meta_onboarding_complete(channel_config)
+                )
             )
             channel_results.append(
                 {
@@ -249,13 +258,18 @@ def company_readiness(db, company_id: int):
                     "type": channel.channel_type,
                     "enabled": channel.enabled,
                     "configured": configured,
+                    "connected": connected,
                     "config": public_config(channel.config),
                     "configured_secret_fields": configured_secret_fields(channel.config),
                     "issue": error,
                 }
             )
         configured_channels = [item for item in channel_results if item["configured"]]
-        live_channels = [item for item in configured_channels if item["enabled"]]
+        live_channels = [
+            item
+            for item in channel_results
+            if item["enabled"] and item["connected"]
+        ]
 
         provider_selections, provider_error = _provider_runtime(
             db,
@@ -288,6 +302,15 @@ def company_readiness(db, company_id: int):
             warnings.append("AI employee is in draft mode; activate the company, then use Go Live")
         elif not live_channels:
             warnings.append("AI employee is live but no customer channel is active")
+        if any(
+            item["type"] == "whatsapp"
+            and item["enabled"]
+            and not item["connected"]
+            for item in channel_results
+        ):
+            warnings.append(
+                "WhatsApp is enabled locally but Meta Embedded Signup is not connected"
+            )
         if tools and not ready_action:
             warnings.append("Tools are assigned, but no configured customer action is runtime-ready")
 

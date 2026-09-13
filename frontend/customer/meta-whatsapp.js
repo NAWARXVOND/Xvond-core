@@ -56,10 +56,11 @@ function xvondCustomerMetaLoginOptions(config) {
 
 function xvondCustomerWhatsAppStatus(config) {
     if (!config.connected) {
+        const invalidToken = config.connection_status === "invalid_token";
         return {
-            title: "WhatsApp غير مربوط",
-            detail: "اربط رقم WhatsApp Business بهذا الموظف ليبدأ بالرد على العملاء.",
-            label: "ربط WhatsApp",
+            title: invalidToken ? "WhatsApp مفصول · رمز Meta غير صالح" : "WhatsApp غير مربوط",
+            detail: safe(config.connection_issue || "اربط رقم WhatsApp Business بهذا الموظف ليبدأ بالرد على العملاء."),
+            label: config.configured ? "إعادة ربط WhatsApp" : "ربط WhatsApp",
         };
     }
     const phone = safe(config.display_phone_number || "الرقم متصل");

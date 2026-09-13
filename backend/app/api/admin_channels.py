@@ -12,6 +12,7 @@ from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.billing.limits import limits_service
 from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.channels.catalog import get_channel_definition, validate_channel_config
+from backend.app.modules.channels.whatsapp_connection import whatsapp_connection_state
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeDocument
 
 router = APIRouter(prefix="/admin/channels", tags=["Xvond Admin - Channels"])
@@ -44,15 +45,35 @@ class WhatsAppConfigUpdate(BaseModel):
     channel_instructions: str | None = None
 
 
-def _channel_configured(channel: AgentChannel) -> bool:
+def _channel_configured(channel: AgentChannel, channel_config: dict | None = None) -> bool:
     try:
-        validate_channel_config(channel.channel_type, reveal_config(channel.config))
+        validate_channel_config(
+            channel.channel_type,
+            reveal_config(channel.config) if channel_config is None else channel_config,
+        )
         return True
     except ValueError:
         return False
 
 
-def serialize_channel(channel: AgentChannel) -> dict:
+def serialize_channel(channel: AgentChannel, *, verify_connection: bool = False) -> dict:
+    channel_config = reveal_config(channel.config)
+    configured = _channel_configured(channel, channel_config)
+    if channel.channel_type == "whatsapp":
+        connection = whatsapp_connection_state(
+            channel_config,
+            verify_remote=verify_connection,
+        )
+    else:
+        connection = {
+            "connected": configured,
+            "meta_onboarding_complete": False,
+            "connection_status": "connected" if configured else "incomplete",
+            "connection_issue": None if configured else "Channel configuration is incomplete.",
+            "connection_checked_at": None,
+            "meta_error_code": None,
+        }
+
     return {
         "id": channel.id,
         "company_id": channel.company_id,
@@ -60,7 +81,10 @@ def serialize_channel(channel: AgentChannel) -> dict:
         "channel_type": channel.channel_type,
         "config": public_config(channel.config),
         "configured_secret_fields": configured_secret_fields(channel.config),
-        "configured": _channel_configured(channel),
+        "configured": configured,
+        **connection,
+        "connection_method": channel_config.get("connection_method"),
+        "coexistence": bool(channel_config.get("coexistence")),
         "enabled": channel.enabled,
         "created_at": channel.created_at,
     }
@@ -181,7 +205,16 @@ def list_company_channels(company_id: int, current_admin: User = Depends(require
         items = db.query(AgentChannel).filter(
             AgentChannel.company_id == company_id
         ).order_by(AgentChannel.id.asc()).all()
-        return {"company_id": company_id, "channels": [serialize_channel(item) for item in items]}
+        return {
+            "company_id": company_id,
+            "channels": [
+                serialize_channel(
+                    item,
+                    verify_connection=item.channel_type == "whatsapp",
+                )
+                for item in items
+            ],
+        }
     finally:
         db.close()
 

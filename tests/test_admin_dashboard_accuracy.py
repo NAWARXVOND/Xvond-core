@@ -26,7 +26,8 @@ def test_employee_channel_count_uses_enabled_channels_only():
 
 def test_connected_readiness_requires_configured_and_enabled_channel():
     source = ACCURACY_JS.read_text(encoding="utf-8")
-    assert "x.enabled===true&&x.configured===true" in source
+    assert "x.enabled===true&&x.connected===true" in source
+    assert "connected · ${configured} configured" in source
 
 
 def test_billing_surfaces_reached_and_exceeded_limits():
