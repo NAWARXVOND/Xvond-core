@@ -46,8 +46,13 @@ def _meta_settings() -> dict:
         "app_secret": _env("META_APP_SECRET"),
         "config_id": _env("META_WHATSAPP_CONFIG_ID"),
         "verify_token": _env("META_WHATSAPP_VERIFY_TOKEN"),
-        "graph_api_version": _env("META_GRAPH_API_VERSION", "v23.0"),
+        "graph_api_version": _env("META_GRAPH_API_VERSION", "v26.0"),
         "redirect_uri": _env("META_WHATSAPP_REDIRECT_URI"),
+        # Standard Embedded Signup should not be forced into WhatsApp Business
+        # App onboarding/coexistence. Set these only when the Meta configuration
+        # explicitly requires those options.
+        "feature_type": _env("META_WHATSAPP_FEATURE_TYPE"),
+        "session_info_version": _env("META_WHATSAPP_SESSION_INFO_VERSION"),
     }
 
 
@@ -256,8 +261,8 @@ def embedded_signup_config(
             "app_id": config["app_id"] if ready else None,
             "config_id": config["config_id"] if ready else None,
             "graph_api_version": config["graph_api_version"],
-            "feature": "whatsapp_business_app_onboarding",
-            "session_info_version": "3",
+            "feature_type": config.get("feature_type") or None,
+            "session_info_version": config.get("session_info_version") or None,
             "missing_settings": missing,
         }
     finally:
