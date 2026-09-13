@@ -11,8 +11,8 @@ def source(path: str) -> str:
 
 
 def test_graph_url_is_pinned_to_meta_graph_host():
-    url = admin_meta_whatsapp._graph_url("v23.0", "123/phone_numbers", {"fields": "id"})
-    assert url.startswith("https://graph.facebook.com/v23.0/123/phone_numbers?")
+    url = admin_meta_whatsapp._graph_url("v26.0", "123/phone_numbers", {"fields": "id"})
+    assert url.startswith("https://graph.facebook.com/v26.0/123/phone_numbers?")
 
 
 def test_meta_completion_subscribes_waba_before_local_activation():
@@ -67,11 +67,19 @@ def test_meta_environment_template_contains_no_real_secrets():
     assert "META_APP_SECRET=" in env
     assert "META_WHATSAPP_CONFIG_ID=" in env
     assert "META_WHATSAPP_VERIFY_TOKEN=" in env
+    assert "META_GRAPH_API_VERSION=v26.0" in env
+    assert "META_WHATSAPP_FEATURE_TYPE=" in env
+    assert "META_WHATSAPP_SESSION_INFO_VERSION=" in env
 
 
-def test_embedded_signup_launches_whatsapp_business_app_coexistence_flow():
+def test_embedded_signup_login_options_follow_server_configuration():
+    api = source("backend/app/api/admin_meta_whatsapp.py")
     js = source("frontend/admin/meta-whatsapp.js")
-    assert "featureType:'whatsapp_business_app_onboarding'" in js
+    assert '"feature_type": _env("META_WHATSAPP_FEATURE_TYPE")' in api
+    assert '"session_info_version": _env("META_WHATSAPP_SESSION_INFO_VERSION")' in api
+    assert "if(config.feature_type)extras.featureType=config.feature_type" in js
+    assert "if(config.session_info_version)extras.sessionInfoVersion" in js
+    assert "featureType:'whatsapp_business_app_onboarding'" not in js
     assert "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" in js
     assert "connection_mode:data.event==='FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING'?'coexistence':'embedded_signup'" in js
 
