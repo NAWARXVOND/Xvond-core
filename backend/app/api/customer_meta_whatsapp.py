@@ -28,6 +28,11 @@ router = APIRouter(
     tags=["Customer - Meta WhatsApp"],
 )
 
+_META_CONNECTION_METHODS = {
+    "meta_embedded_signup",
+    "meta_embedded_signup_coexistence",
+}
+
 
 class CustomerEmbeddedSignupComplete(BaseModel):
     agent_id: int
@@ -50,6 +55,20 @@ def _customer_agent(db, current_user: User, agent_id: int) -> AIAgent:
     if agent is None:
         raise HTTPException(status_code=404, detail="AI Employee not found")
     return agent
+
+
+def _meta_channel_connected(channel: AgentChannel | None, channel_config: dict) -> bool:
+    if channel is None:
+        return False
+    method = str(channel_config.get("connection_method") or "").strip()
+    if method not in _META_CONNECTION_METHODS:
+        return False
+    required = (
+        channel_config.get("waba_id"),
+        channel_config.get("phone_number_id"),
+        channel_config.get("access_token"),
+    )
+    return all(str(value or "").strip() for value in required)
 
 
 @router.get("/embedded-signup/config")
@@ -80,11 +99,12 @@ def embedded_signup_config(
             "app_id": meta["app_id"] if ready else None,
             "config_id": meta["config_id"] if ready else None,
             "graph_api_version": meta["graph_api_version"],
-            "feature": "whatsapp_business_app_onboarding",
-            "session_info_version": "3",
+            "feature_type": meta.get("feature_type") or None,
+            "session_info_version": meta.get("session_info_version") or None,
             "missing_settings": missing,
-            "connected": bool(channel_config.get("phone_number_id")),
+            "connected": _meta_channel_connected(channel, channel_config),
             "enabled": bool(channel.enabled) if channel is not None else False,
+            "connection_method": channel_config.get("connection_method"),
             "display_phone_number": channel_config.get("display_phone_number"),
             "verified_name": channel_config.get("verified_name"),
         }
