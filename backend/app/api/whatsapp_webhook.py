@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from redis.exceptions import RedisError
 
+from backend.app.api.admin_meta_whatsapp import _meta_settings
 from backend.app.core.config_secrets import reveal_config
 from backend.app.core.customer_runtime_policy import (
     human_handoff_acknowledgement,
@@ -331,12 +332,21 @@ def verify_webhook(
     verify_token: str | None = Query(default=None, alias="hub.verify_token"),
     challenge: str | None = Query(default=None, alias="hub.challenge"),
 ):
+    if mode != "subscribe":
+        raise HTTPException(status_code=403, detail="Invalid webhook mode")
+    if not verify_token:
+        raise HTTPException(status_code=403, detail="Verify token required")
+
+    # Meta verifies the app callback before a customer WhatsApp channel may be
+    # activated. Validate the platform-level token first so onboarding cannot
+    # deadlock on an inactive/not-yet-created tenant channel.
+    platform_token = str(_meta_settings().get("verify_token") or "")
+    if platform_token and hmac.compare_digest(platform_token, str(verify_token)):
+        return int(challenge or "0")
+
+    # Keep tenant tokens as a backwards-compatible fallback for older channels.
     db = SessionLocal()
     try:
-        if mode != "subscribe":
-            raise HTTPException(status_code=403, detail="Invalid webhook mode")
-        if not verify_token:
-            raise HTTPException(status_code=403, detail="Verify token required")
         for channel in get_whatsapp_channels(db):
             config = reveal_config(channel.config)
             stored_token = str(config.get("verify_token", ""))
