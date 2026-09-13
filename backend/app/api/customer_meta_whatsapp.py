@@ -21,6 +21,11 @@ from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.audit.service import audit_service
 from backend.app.modules.channels.catalog import validate_channel_config
 from backend.app.modules.channels.models import AgentChannel
+from backend.app.modules.channels.whatsapp_connection import (
+    META_CONNECTION_METHODS,
+    whatsapp_connection_state,
+    whatsapp_meta_onboarding_complete,
+)
 
 
 router = APIRouter(
@@ -28,10 +33,7 @@ router = APIRouter(
     tags=["Customer - Meta WhatsApp"],
 )
 
-_META_CONNECTION_METHODS = {
-    "meta_embedded_signup",
-    "meta_embedded_signup_coexistence",
-}
+_META_CONNECTION_METHODS = META_CONNECTION_METHODS
 
 
 class CustomerEmbeddedSignupComplete(BaseModel):
@@ -58,17 +60,7 @@ def _customer_agent(db, current_user: User, agent_id: int) -> AIAgent:
 
 
 def _meta_channel_connected(channel: AgentChannel | None, channel_config: dict) -> bool:
-    if channel is None:
-        return False
-    method = str(channel_config.get("connection_method") or "").strip()
-    if method not in _META_CONNECTION_METHODS:
-        return False
-    required = (
-        channel_config.get("waba_id"),
-        channel_config.get("phone_number_id"),
-        channel_config.get("access_token"),
-    )
-    return all(str(value or "").strip() for value in required)
+    return channel is not None and whatsapp_meta_onboarding_complete(channel_config)
 
 
 @router.get("/embedded-signup/config")
@@ -92,7 +84,15 @@ def embedded_signup_config(
             .first()
         )
         channel_config = reveal_config(channel.config) if channel is not None else {}
-        connected = _meta_channel_connected(channel, channel_config)
+        configured = False
+        if channel is not None:
+            try:
+                validate_channel_config("whatsapp", channel_config)
+                configured = True
+            except ValueError:
+                pass
+        connection = whatsapp_connection_state(channel_config, verify_remote=True)
+        connected = channel is not None and connection["connected"]
         blockers = _activation_blockers(db, channel) if channel is not None else []
         enabled = bool(channel.enabled) if channel is not None else False
         return {
@@ -106,12 +106,17 @@ def embedded_signup_config(
             "session_info_version": meta.get("session_info_version") or None,
             "missing_settings": missing,
             "channel_id": channel.id if channel is not None else None,
+            "configured": configured,
             "connected": connected,
             "enabled": enabled,
             "runtime_ready": bool(connected and enabled and not blockers),
             "blockers": blockers,
             "connection_method": channel_config.get("connection_method"),
             "coexistence": bool(channel_config.get("coexistence")),
+            "connection_status": connection["connection_status"],
+            "connection_issue": connection["connection_issue"],
+            "connection_checked_at": connection["connection_checked_at"],
+            "meta_error_code": connection["meta_error_code"],
             "display_phone_number": channel_config.get("display_phone_number"),
             "verified_name": channel_config.get("verified_name"),
         }

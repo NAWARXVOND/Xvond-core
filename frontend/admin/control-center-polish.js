@@ -1,9 +1,10 @@
 const xvondPolish={customerQuery:'',customerChannel:'all',conversationMode:'all',conversationChannel:'all',notificationType:'all',notificationSeverity:'all',analyticsComparison:null};
 
 function xpChannelState(channel){
+  if(typeof wsChannelPresentation==='function')return wsChannelPresentation(channel);
   if(!channel)return {label:'Not connected',kind:'bad'};
-  if(channel.enabled)return {label:'Active',kind:'good'};
-  if(channel.configured)return {label:'Configured',kind:'neutral'};
+  if(channel.enabled&&channel.connected===true)return {label:'Active',kind:'good'};
+  if(channel.configured)return {label:'Configured only',kind:'neutral'};
   return {label:'Needs setup',kind:'bad'};
 }
 function xpPercent(used,limit){
@@ -25,7 +26,11 @@ function xpNeedsAttention(){
     }
   }
   for(const x of (d.channels||[])){
-    if(x.configured&&!x.enabled)items.push({kind:'neutral',title:`${wsAgentName(x.agent_id)}: ${x.channel_type} configured but inactive`,body:'Channel is not currently serving customers.',tab:'channels'});
+    if(x.channel_type==='whatsapp'&&x.enabled&&x.connected!==true){
+      items.push({kind:'bad',title:`${wsAgentName(x.agent_id)}: WhatsApp disconnected`,body:x.connection_issue||'The local channel is active, but Meta is not connected.',tab:'channels'});
+    }else if(x.configured&&!x.enabled){
+      items.push({kind:'neutral',title:`${wsAgentName(x.agent_id)}: ${x.channel_type} configured but inactive`,body:'Channel is not currently serving customers.',tab:'channels'});
+    }
   }
   const pending=(d.handoffs||[]).filter(x=>['pending','in_progress'].includes(String(x.status||x.mode||'').toLowerCase())||x.mode==='human');
   if(pending.length)items.push({kind:'bad',title:`${pending.length} human handoff${pending.length===1?'':'s'} need attention`,body:'Customers are waiting for a human response.',tab:'conversations'});

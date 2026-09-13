@@ -42,7 +42,8 @@ def test_draft_can_be_setup_with_configured_channel_before_channel_activation():
     assert 'if not channels["configured"]' in READINESS
     assert 'setup_blockers.append("Connect and configure at least one customer channel")' in READINESS
     assert 'elif not channels["live"]' in READINESS
-    assert 'blockers.append("Activate at least one customer channel")' in READINESS
+    assert 'blockers.append("Activate at least one connected customer channel")' in READINESS
+    assert "whatsapp_meta_onboarding_complete" in READINESS
 
 
 def test_go_live_is_guarded_by_setup_company_state_and_plan_capacity():

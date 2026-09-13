@@ -25,6 +25,7 @@ def test_control_center_polish_contains_core_product_controls():
         "Mark all read",
         "previous-period comparison",
         "External delivery not connected",
+        "WhatsApp disconnected",
     ]
     for value in required:
         assert value in js

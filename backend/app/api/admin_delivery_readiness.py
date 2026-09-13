@@ -10,7 +10,9 @@ from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.ai_agent.profile_models import AIAgentProfile
 from backend.app.modules.billing.limits import limits_service
+from backend.app.modules.channels.catalog import validate_channel_config
 from backend.app.modules.channels.models import AgentChannel
+from backend.app.modules.channels.whatsapp_connection import whatsapp_meta_onboarding_complete
 from backend.app.modules.integrations.models import CompanyIntegration
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeDocument
 from backend.app.modules.tools.models import AgentToolAssignment
@@ -79,8 +81,21 @@ def _channel_state(db, company_id: int, agent_id: int) -> dict:
         )
         .all()
     )
-    configured = [row for row in rows if bool(reveal_config(row.config) or {})]
-    live = [row for row in configured if row.enabled]
+    configured = []
+    live = []
+    for row in rows:
+        config = reveal_config(row.config) or {}
+        try:
+            validate_channel_config(row.channel_type, config)
+        except ValueError:
+            continue
+        configured.append(row)
+        connected = bool(
+            row.channel_type != "whatsapp"
+            or whatsapp_meta_onboarding_complete(config)
+        )
+        if row.enabled and connected:
+            live.append(row)
     return {
         "configured_count": len(configured),
         "live_count": len(live),
@@ -173,7 +188,7 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
     if not agent.enabled:
         blockers.insert(0, "AI employee is in draft mode")
     elif not channels["live"]:
-        blockers.append("Activate at least one customer channel")
+        blockers.append("Activate at least one connected customer channel")
 
     ready_for_customer = bool(
         company.active and agent.enabled and setup_ready and channels["live"]

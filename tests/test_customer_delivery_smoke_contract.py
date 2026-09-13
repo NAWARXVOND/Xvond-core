@@ -32,7 +32,7 @@ def test_customer_delivery_flow_requires_knowledge_and_configured_channel_before
 
 def test_customer_delivery_flow_requires_live_channel_only_after_employee_goes_live():
     assert 'elif not channels["live"]' in READINESS_API
-    assert 'blockers.append("Activate at least one customer channel")' in READINESS_API
+    assert 'blockers.append("Activate at least one connected customer channel")' in READINESS_API
     assert 'company.active and agent.enabled and setup_ready and channels["live"]' in READINESS_API
     assert '"live_channels": channels["live"]' in READINESS_API
 
