@@ -9,6 +9,7 @@ from backend.app.models.user import User
 from backend.app.modules.ai_agent.customer_access import can_view_conversations
 from backend.app.modules.ai_agent.factory_models import AgentConfig
 from backend.app.modules.ai_agent.models import AIAgent, AIConversation, AIMessage
+from backend.app.modules.audit.service import audit_service
 from backend.app.modules.channels.handoff import activate_human_handoff, human_handoff_active, resume_ai
 from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.channels.whatsapp import whatsapp_sender
@@ -161,6 +162,25 @@ def _whatsapp_channel(db, conversation: AIConversation, session: WhatsAppSession
     return None, None
 
 
+def _audit_handoff(db, *, action: str, conversation: AIConversation, current_user: User, details: dict | None = None):
+    payload = {
+        "agent_id": conversation.agent_id,
+        "channel_type": conversation.channel_type or "unknown",
+        "external_contact_id": conversation.external_contact_id,
+    }
+    if details:
+        payload.update(details)
+    audit_service.log(
+        db=db,
+        action=action,
+        resource_type="conversation",
+        resource_id=conversation.id,
+        user_id=current_user.id,
+        company_id=current_user.company_id,
+        details=payload,
+    )
+
+
 @router.get("")
 def list_inbox(
     agent_id: int | None = None,
@@ -203,8 +223,6 @@ def list_inbox(
                 )
             )
 
-        # Inbox order must follow activity, not conversation creation. A customer
-        # returning to an older thread should bring that thread back to the top.
         latest_message_id = (
             db.query(func.max(AIMessage.id))
             .filter(AIMessage.conversation_id == AIConversation.id)
@@ -342,8 +360,14 @@ def take_over_conversation(
             activate_human_handoff(
                 session,
                 reason=handoff.reason or "customer_portal_takeover",
-                human_message=True,
             )
+        _audit_handoff(
+            db,
+            action="customer_inbox.handoff_started",
+            conversation=conversation,
+            current_user=current_user,
+            details={"handoff_reason": handoff.reason},
+        )
         db.commit()
         return {"status": "human_active", "conversation_id": conversation.id, "mode": "human"}
     except Exception:
@@ -376,6 +400,13 @@ def return_conversation_to_ai(
         session = _session(db, current_user.company_id, conversation.id)
         if session is not None:
             resume_ai(session)
+        _audit_handoff(
+            db,
+            action="customer_inbox.ai_resumed",
+            conversation=conversation,
+            current_user=current_user,
+            details={"completed_handoffs": len(handoffs)},
+        )
         db.commit()
         return {"status": "ai_active", "conversation_id": conversation.id, "mode": "ai"}
     except Exception:
@@ -419,6 +450,16 @@ def send_human_reply(
         handoff.status = "in_progress"
         message = AIMessage(conversation_id=conversation.id, role="human", content=text)
         db.add(message)
+        _audit_handoff(
+            db,
+            action="customer_inbox.human_reply_sent",
+            conversation=conversation,
+            current_user=current_user,
+            details={
+                "wa_id": session.wa_id,
+                "delivery_status_code": result.get("status_code"),
+            },
+        )
         db.commit()
         db.refresh(message)
         return {
