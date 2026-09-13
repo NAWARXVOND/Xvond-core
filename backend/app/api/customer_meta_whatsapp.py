@@ -92,6 +92,9 @@ def embedded_signup_config(
             .first()
         )
         channel_config = reveal_config(channel.config) if channel is not None else {}
+        connected = _meta_channel_connected(channel, channel_config)
+        blockers = _activation_blockers(db, channel) if channel is not None else []
+        enabled = bool(channel.enabled) if channel is not None else False
         return {
             "ready": ready,
             "agent_id": agent.id,
@@ -102,9 +105,13 @@ def embedded_signup_config(
             "feature_type": meta.get("feature_type") or None,
             "session_info_version": meta.get("session_info_version") or None,
             "missing_settings": missing,
-            "connected": _meta_channel_connected(channel, channel_config),
-            "enabled": bool(channel.enabled) if channel is not None else False,
+            "channel_id": channel.id if channel is not None else None,
+            "connected": connected,
+            "enabled": enabled,
+            "runtime_ready": bool(connected and enabled and not blockers),
+            "blockers": blockers,
             "connection_method": channel_config.get("connection_method"),
+            "coexistence": bool(channel_config.get("coexistence")),
             "display_phone_number": channel_config.get("display_phone_number"),
             "verified_name": channel_config.get("verified_name"),
         }
@@ -241,6 +248,9 @@ def complete_embedded_signup(
             "display_phone_number": phone.get("display_phone_number"),
             "verified_name": phone.get("verified_name"),
             "connection_mode": connection_mode,
+            "coexistence": connection_mode == "coexistence",
+            "enabled": bool(channel.enabled),
+            "runtime_ready": bool(channel.enabled and not blockers),
             "ready": not blockers,
             "blockers": blockers,
         }
