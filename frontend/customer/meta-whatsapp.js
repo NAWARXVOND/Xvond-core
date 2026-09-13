@@ -13,14 +13,16 @@ function xvondCustomerTrustedMetaOrigin(origin) {
 }
 
 function xvondCustomerLoadMetaSdk(appId, graphVersion) {
+    // Embedded Signup needs config_id and a code response, which Meta's FedCM
+    // credential request does not forward. Keep the configured OAuth popup flow.
     if (window.FB) {
-        FB.init({appId, cookie: true, xfbml: false, version: graphVersion || "v26.0"});
+        FB.init({appId, cookie: true, xfbml: false, version: graphVersion || "v26.0", fedCM: false});
         return Promise.resolve();
     }
     if (xvondCustomerMetaSdkPromise) return xvondCustomerMetaSdkPromise;
     xvondCustomerMetaSdkPromise = new Promise((resolve, reject) => {
         window.fbAsyncInit = function () {
-            FB.init({appId, cookie: true, xfbml: false, version: graphVersion || "v26.0"});
+            FB.init({appId, cookie: true, xfbml: false, version: graphVersion || "v26.0", fedCM: false});
             resolve();
         };
         const existing = document.getElementById("facebook-jssdk");
