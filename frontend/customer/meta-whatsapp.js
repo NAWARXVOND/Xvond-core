@@ -14,13 +14,13 @@ function xvondCustomerTrustedMetaOrigin(origin) {
 
 function xvondCustomerLoadMetaSdk(appId, graphVersion) {
     if (window.FB) {
-        FB.init({appId, cookie: true, xfbml: false, version: graphVersion || "v23.0"});
+        FB.init({appId, cookie: true, xfbml: false, version: graphVersion || "v26.0"});
         return Promise.resolve();
     }
     if (xvondCustomerMetaSdkPromise) return xvondCustomerMetaSdkPromise;
     xvondCustomerMetaSdkPromise = new Promise((resolve, reject) => {
         window.fbAsyncInit = function () {
-            FB.init({appId, cookie: true, xfbml: false, version: graphVersion || "v23.0"});
+            FB.init({appId, cookie: true, xfbml: false, version: graphVersion || "v26.0"});
             resolve();
         };
         const existing = document.getElementById("facebook-jssdk");
@@ -38,6 +38,18 @@ function xvondCustomerLoadMetaSdk(appId, graphVersion) {
         document.head.appendChild(script);
     });
     return xvondCustomerMetaSdkPromise;
+}
+
+function xvondCustomerMetaLoginOptions(config) {
+    const extras = {setup: {}};
+    if (config.feature_type) extras.featureType = config.feature_type;
+    if (config.session_info_version) extras.sessionInfoVersion = String(config.session_info_version);
+    return {
+        config_id: config.config_id,
+        response_type: "code",
+        override_default_response_type: true,
+        extras,
+    };
 }
 
 window.addEventListener("message", event => {
@@ -74,16 +86,7 @@ window.openCustomerMetaWhatsAppConnect = async function (agentId) {
                 return;
             }
             xvondCustomerFinishMetaWhatsAppSignup(code);
-        }, {
-            config_id: config.config_id,
-            response_type: "code",
-            override_default_response_type: true,
-            extras: {
-                setup: {},
-                featureType: "whatsapp_business_app_onboarding",
-                sessionInfoVersion: config.session_info_version || "3"
-            }
-        });
+        }, xvondCustomerMetaLoginOptions(config));
     } catch (error) {
         alert(error.message || String(error));
     }
