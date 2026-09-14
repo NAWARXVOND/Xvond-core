@@ -1,7 +1,7 @@
 import inspect
 from pathlib import Path
 
-from backend.app.api import admin_dashboard, customer_inbox, customer_portal
+from backend.app.api import admin_dashboard, customer_inbox, customer_portal, usage
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,3 +52,17 @@ def test_customer_inbox_exposes_reply_capability_to_the_ui():
     assert "reply_capability" in ui
     assert "inboxPageLimit" in ui
     assert "changeInboxPage" in ui
+
+
+def test_customer_usage_uses_canonical_service_subscription_cycle():
+    source = inspect.getsource(usage.my_usage)
+    module = (ROOT / "backend/app/api/usage.py").read_text(encoding="utf-8")
+    assert "ServiceSubscription" in module
+    assert "ServicePlan" in module
+    assert "modules.billing.models" not in module
+    assert "current_billing_cycle" not in module
+    assert 'ServiceSubscription.service_code == "ai_agents"' in source
+    assert "ServiceSubscription.current_period_start" in source
+    assert "ServiceSubscription.current_period_end" in source
+    assert 'AIUsage.status != "success"' in source
+    assert 'AIUsage.status == "success"' in source
