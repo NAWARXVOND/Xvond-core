@@ -110,6 +110,18 @@ def _locked(db, delivery_id: int) -> WhatsAppOutboundDelivery:
     return row
 
 
+def _provider_id_conflicts(db, *, delivery_id: int, provider_message_id: str) -> bool:
+    return (
+        db.query(WhatsAppOutboundDelivery.id)
+        .filter(
+            WhatsAppOutboundDelivery.provider_message_id == provider_message_id,
+            WhatsAppOutboundDelivery.id != delivery_id,
+        )
+        .first()
+        is not None
+    )
+
+
 def attempt_delivery(db, *, delivery_id: int, config: dict) -> dict:
     """Send exactly one durable delivery attempt.
 
@@ -161,7 +173,24 @@ def attempt_delivery(db, *, delivery_id: int, config: dict) -> dict:
     row.last_status_code = result.get("status_code")
     row.updated_at = _now()
     if result.get("success"):
-        provider_message_id = str(result.get("provider_message_id") or "").strip() or None
+        provider_message_id = (
+            str(result.get("provider_message_id") or "").strip() or None
+        )
+        if provider_message_id and _provider_id_conflicts(
+            db,
+            delivery_id=row.id,
+            provider_message_id=provider_message_id,
+        ):
+            # A provider message ID must identify one outbound delivery. If Meta
+            # or an adapter ever returns the same ID for two deliveries, do not
+            # crash the worker and do not guess which send is authoritative.
+            row.provider_message_id = None
+            row.status = "unknown"
+            row.retryable = False
+            row.last_error_code = "provider_message_id_conflict"
+            db.commit()
+            return {"success": False, "unknown": True, **delivery_payload(row)}
+
         row.provider_message_id = provider_message_id
         row.status = "accepted"
         row.retryable = False
@@ -176,7 +205,11 @@ def attempt_delivery(db, *, delivery_id: int, config: dict) -> dict:
         row.retryable = bool(result.get("retryable"))
         row.last_error_code = str(
             result.get("error_type")
-            or (f"http_{row.last_status_code}" if row.last_status_code else "meta_rejected")
+            or (
+                f"http_{row.last_status_code}"
+                if row.last_status_code
+                else "meta_rejected"
+            )
         )[:160]
         row.failed_at = _now()
     else:
@@ -206,7 +239,12 @@ def delivery_for_inbound(db, inbound_external_message_id: str):
     )
 
 
-def retry_delivery_for_inbound(db, *, inbound_external_message_id: str, config: dict) -> dict | None:
+def retry_delivery_for_inbound(
+    db,
+    *,
+    inbound_external_message_id: str,
+    config: dict,
+) -> dict | None:
     row = delivery_for_inbound(db, inbound_external_message_id)
     if row is None:
         return None
@@ -219,13 +257,18 @@ def retry_delivery_for_inbound(db, *, inbound_external_message_id: str, config: 
     return attempt_delivery(db, delivery_id=row.id, config=config)
 
 
-def apply_provider_status(db, status_event: dict) -> WhatsAppOutboundDelivery | None:
+def apply_provider_status(
+    db,
+    status_event: dict,
+) -> WhatsAppOutboundDelivery | None:
     provider_message_id = str(status_event.get("id") or "").strip()
     if not provider_message_id:
         return None
     row = (
         db.query(WhatsAppOutboundDelivery)
-        .filter(WhatsAppOutboundDelivery.provider_message_id == provider_message_id)
+        .filter(
+            WhatsAppOutboundDelivery.provider_message_id == provider_message_id
+        )
         .with_for_update()
         .first()
     )
@@ -259,7 +302,11 @@ def apply_provider_status(db, status_event: dict) -> WhatsAppOutboundDelivery | 
         code = None
         if isinstance(errors, list) and errors and isinstance(errors[0], dict):
             code = errors[0].get("code")
-        row.last_error_code = f"meta_status_{code}"[:160] if code is not None else "meta_status_failed"
+        row.last_error_code = (
+            f"meta_status_{code}"[:160]
+            if code is not None
+            else "meta_status_failed"
+        )
     else:
         return row
 
