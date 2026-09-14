@@ -18,9 +18,24 @@ class Company(Base):
         nullable=False,
     )
 
+    # Runtime/emergency switch only. Commercial/customer lifecycle is tracked
+    # separately so onboarding users can access the portal before AI goes live.
     active: Mapped[bool] = mapped_column(
         Boolean,
-        default=True,
+        default=False,
+        nullable=False,
+    )
+
+    lifecycle_status: Mapped[str] = mapped_column(
+        String(30),
+        default="onboarding",
+        nullable=False,
+        index=True,
+    )
+
+    lifecycle_updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
         nullable=False,
     )
 
