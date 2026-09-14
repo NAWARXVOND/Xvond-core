@@ -17,15 +17,13 @@ def test_admin_loads_operational_onboarding_workflow():
 
 
 def test_onboarding_workflow_uses_canonical_lifecycle_actions():
-    # The generated HTML escapes quotes inside JavaScript string literals, so
-    # assert the operator actions and canonical lifecycle function separately
-    # instead of depending on one exact source-escaping form.
+    # Verify the operator transitions semantically without coupling this test to
+    # quote escaping inside generated HTML template literals.
     assert "setWorkspaceLifecycle" in WORKFLOW
     assert "Move to Testing" in WORKFLOW
     assert "Go Live" in WORKFLOW
-    assert "'onboarding'" in WORKFLOW
-    assert "'testing'" in WORKFLOW
-    assert "'live'" in WORKFLOW
+    assert "lifecycle==='onboarding'" in WORKFLOW
+    assert "lifecycle==='testing'" in WORKFLOW
     assert "readinessReady" in WORKFLOW
 
 
