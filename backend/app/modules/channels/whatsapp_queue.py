@@ -214,18 +214,10 @@ class WhatsAppJobQueue:
             "configured": True,
             "worker_active": bool(worker_owner and lease_ttl > 0),
             "worker_lease_ttl_seconds": max(0, lease_ttl),
-            "queued": int(
-                self.client.llen(self.queue_key)
-            ),
-            "processing": int(
-                self.client.llen(self.processing_key)
-            ),
-            "retrying": int(
-                self.client.zcard(self.retry_key)
-            ),
-            "dead": int(
-                self.client.llen(self.dead_key)
-            ),
+            "queued": int(self.client.llen(self.queue_key)),
+            "processing": int(self.client.llen(self.processing_key)),
+            "retrying": int(self.client.zcard(self.retry_key)),
+            "dead": int(self.client.llen(self.dead_key)),
         }
 
     def dead_jobs(self, limit: int = 50) -> list[dict]:
@@ -267,29 +259,36 @@ class WhatsAppJobQueue:
             return 0
 
         safe_limit = max(1, min(int(limit), 500))
+        script = """
+        local raw = redis.call('RPOP', KEYS[1])
+        if not raw then
+            return 0
+        end
+        local ok, job = pcall(cjson.decode, raw)
+        if not ok or type(job) ~= 'table' then
+            redis.call('RPUSH', KEYS[1], raw)
+            return -1
+        end
+        job['attempts'] = 0
+        job['last_error'] = nil
+        job['last_failed_at'] = nil
+        job['retry_after_seconds'] = nil
+        redis.call('LPUSH', KEYS[2], cjson.encode(job))
+        return 1
+        """
         requeued = 0
-
         for _ in range(safe_limit):
-            raw = self.client.rpop(self.dead_key)
-            if raw is None:
-                break
-
-            try:
-                job = json.loads(raw)
-            except (TypeError, ValueError):
-                self.client.rpush(self.dead_key, raw)
-                break
-
-            job["attempts"] = 0
-            job.pop("last_error", None)
-            job.pop("last_failed_at", None)
-            job.pop("retry_after_seconds", None)
-            self.client.lpush(
-                self.queue_key,
-                json.dumps(job),
+            moved = int(
+                self.client.eval(
+                    script,
+                    2,
+                    self.dead_key,
+                    self.queue_key,
+                )
             )
-            requeued += 1
-
+            if moved <= 0:
+                break
+            requeued += moved
         return requeued
 
     def retry_or_dead_letter(
@@ -309,10 +308,7 @@ class WhatsAppJobQueue:
 
         if job["attempts"] >= max_attempts:
             transaction = self.client.pipeline(transaction=True)
-            transaction.lpush(
-                self.dead_key,
-                encoded,
-            )
+            transaction.lpush(self.dead_key, encoded)
             transaction.lrem(self.processing_key, 1, raw)
             transaction.execute()
             return "dead"
