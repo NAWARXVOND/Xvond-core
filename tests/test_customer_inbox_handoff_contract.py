@@ -11,13 +11,37 @@ def test_customer_inbox_exposes_human_handoff_actions():
     assert '@router.post("/{conversation_id}/message")' in source
     assert "require_customer_manager" in source
     assert "resume_ai(session)" in source
-    assert 'AIMessage(conversation_id=conversation.id, role="human"' in source
+    assert 'role="human"' in source
 
 
-def test_customer_inbox_returns_current_mode():
+def test_customer_inbox_returns_current_mode_and_channel_capabilities():
     source = inspect.getsource(customer_inbox._conversation_meta)
     assert '"mode": handoff["mode"]' in source
     assert '"handoff_status": handoff["handoff_status"]' in source
+    assert "_handoff_capabilities(channel_type)" in source
+    assert "**capabilities" in source
+
+
+def test_handoff_capability_matrix_matches_real_delivery_adapters():
+    whatsapp = customer_inbox._handoff_capabilities("whatsapp")
+    website = customer_inbox._handoff_capabilities("website")
+    voice = customer_inbox._handoff_capabilities("voice")
+    unknown = customer_inbox._handoff_capabilities("future_channel")
+
+    assert whatsapp == {
+        "handoff_supported": True,
+        "human_reply_supported": True,
+        "human_reply_delivery": "whatsapp",
+    }
+    assert website == {
+        "handoff_supported": True,
+        "human_reply_supported": True,
+        "human_reply_delivery": "website_widget",
+    }
+    assert voice["handoff_supported"] is False
+    assert voice["human_reply_supported"] is False
+    assert unknown["handoff_supported"] is False
+    assert unknown["human_reply_supported"] is False
 
 
 def test_customer_inbox_orders_by_latest_message_activity():
@@ -44,13 +68,29 @@ def test_customer_inbox_audits_handoff_lifecycle_without_message_content():
     assert '"content"' not in audit_helper
 
 
-def test_human_reply_is_recorded_only_after_whatsapp_delivery_succeeds():
+def test_whatsapp_human_reply_is_recorded_only_after_delivery_succeeds():
     source = inspect.getsource(customer_inbox.send_human_reply)
     send_position = source.index("whatsapp_sender.send_text")
     success_check_position = source.index('if not result.get("success")')
-    message_position = source.index('AIMessage(conversation_id=conversation.id, role="human"')
+    message_position = source.index("message = AIMessage(")
     assert send_position < success_check_position < message_position
     assert "WhatsApp delivery failed; the reply was not recorded as sent" in source
+
+
+def test_website_human_reply_uses_canonical_conversation_delivery():
+    source = inspect.getsource(customer_inbox.send_human_reply)
+    assert 'delivery == "website_widget"' in source
+    assert "Website visitors poll the canonical conversation" in source
+    assert 'role="human"' in source
+
+
+def test_unsupported_channels_do_not_offer_fake_takeover():
+    source = inspect.getsource(customer_inbox.take_over_conversation)
+    assert "_require_handoff_supported(conversation)" in source
+    ui = Path("frontend/customer/handoff-inbox.js").read_text(encoding="utf-8")
+    assert "conversation.handoff_supported === true" in ui
+    assert "conversation.human_reply_supported === true" in ui
+    assert "Xvond will not show a fake reply control" in ui
 
 
 def test_return_to_ai_completes_handoffs_and_resumes_session():
