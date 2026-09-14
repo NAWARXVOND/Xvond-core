@@ -26,6 +26,14 @@ def test_operational_employee_requires_workflow_and_configured_integrations():
     assert "N8N_SHARED_SECRET" in READINESS
 
 
+def test_action_gate_rejects_empty_or_legacy_business_execution_state():
+    assert 'LEGACY_BUSINESS_TOOL_NAMES = frozenset({"booking", "order", "lead"})' in READINESS
+    assert "Legacy business tools are still enabled" in READINESS
+    assert "Business Actions are enabled, but no customer operation is enabled and runtime-ready" in READINESS
+    assert '"legacy_business_tools": legacy_business_tools' in READINESS
+    assert '"ready": bool(not issues and (assignment is None or enabled_actions))' in READINESS
+
+
 def test_readiness_separates_setup_live_and_customer_accepted_state():
     assert '"setup_ready": setup_ready' in READINESS
     assert '"ready_for_customer": ready_for_customer' in READINESS
