@@ -57,6 +57,18 @@ def test_go_live_is_guarded_by_setup_company_state_and_plan_capacity():
     assert '@router.post("/companies/{company_id}/agents/{agent_id}/deactivate")' in READINESS
 
 
+def test_operational_go_live_requires_real_workflow_health_before_enable():
+    assert "def _assert_workflow_runtime_ready" in READINESS
+    assert 'action="health_check"' in READINESS
+    assert '"source": "delivery_readiness_go_live"' in READINESS
+    assert '"workflow_required": workflow_required' in READINESS
+    assert 'if state["payload"]["workflow_required"]' in READINESS
+    health_gate = READINESS.index("_assert_workflow_runtime_ready(company_id, agent_id)")
+    enable = READINESS.index("agent.enabled = True")
+    assert health_gate < enable
+    assert "Workflow Engine did not confirm the canonical action workflow" in READINESS
+
+
 def test_readiness_checks_customer_delivery_basics():
     for value in (
         "company_active",
@@ -70,5 +82,6 @@ def test_readiness_checks_customer_delivery_basics():
         "connected_apps",
         "ready_for_customer",
         "setup_ready",
+        "workflow_required",
     ):
         assert value in READINESS
