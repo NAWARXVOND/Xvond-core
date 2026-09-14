@@ -13,6 +13,8 @@ function authHeaders(){return {"Content-Type":"application/json"}}
 function clearAdminSession(){token=null;document.getElementById("app")?.classList.add("hidden");document.getElementById("login-screen")?.classList.remove("hidden")}
 function adminNumber(value){const n=Number(value||0);return Number.isFinite(n)?n.toLocaleString():String(value??0)}
 function adminMoney(value){const n=Number(value||0);return Number.isFinite(n)?n.toFixed(3):"0.000"}
+function adminLifecycleLabel(value){const status=String(value||"onboarding").toLowerCase();const labels={onboarding:"Onboarding",testing:"Testing",live:"Live",paused:"Paused",suspended:"Suspended",cancelled:"Cancelled",archived:"Archived"};return labels[status]||status}
+function adminLifecycleClass(value){const status=String(value||"onboarding").toLowerCase();return status==="live"?"status-active":["suspended","cancelled","archived"].includes(status)?"status-inactive":"status-pending"}
 
 async function api(url,options={}){
   const response=await fetch(API+url,{...options,credentials:"same-origin",headers:{...(options.headers||{}),"Content-Type":"application/json"}});
@@ -72,7 +74,7 @@ async function loadDashboard(){
     const workerState=!worker.configured?"Not configured":worker.worker_active?"Online":"Offline";
     const cards=[
       ["Companies",adminNumber(data.companies)],
-      ["Active Companies",adminNumber(data.active_companies)],
+      ["Runtime Active",adminNumber(data.active_companies)],
       ["Active Employees",`${adminNumber(data.active_agents)} / ${adminNumber(data.agents)}`],
       ["Active Channels",adminNumber(data.active_channels)],
       ["Active Services",adminNumber(data.active_subscriptions)],
@@ -94,10 +96,13 @@ async function loadDashboard(){
 }
 
 async function loadCompanies(){
-  try{const data=await api("/admin/companies");companiesCache=data.companies||[];document.getElementById("companies-table").innerHTML=companiesCache.map(company=>`<tr><td>${company.id}</td><td><strong>${escapeAdmin(company.name)}</strong></td><td><span class="status ${company.active?'status-active':'status-inactive'}">${company.active?'Active':'Inactive'}</span></td><td>${company.created_at?new Date(company.created_at).toLocaleDateString():''}</td><td><button class="table-button" onclick="openCompany(${company.id})">Open</button></td></tr>`).join("")}catch(e){alert(e.message)}
+  try{
+    const data=await api("/admin/companies");companiesCache=data.companies||[];
+    document.getElementById("companies-table").innerHTML=companiesCache.map(company=>`<tr><td>${company.id}</td><td><strong>${escapeAdmin(company.name)}</strong></td><td><span class="status ${adminLifecycleClass(company.lifecycle_status)}">${escapeAdmin(adminLifecycleLabel(company.lifecycle_status))}</span></td><td><span class="status ${company.active?'status-active':'status-inactive'}">${company.active?'Running':'Stopped'}</span></td><td>${company.created_at?new Date(company.created_at).toLocaleDateString():''}</td><td><button class="table-button" onclick="openCompany(${company.id})">Open</button></td></tr>`).join("")
+  }catch(e){alert(e.message)}
 }
 
-function openCreateCompany(){openModal("Create Company",`<div class="form-group"><label>Company Name</label><input id="company-name"></div><div class="form-group"><label>Owner Full Name</label><input id="owner-name"></div><div class="form-group"><label>Owner Email</label><input id="owner-email" type="email"></div><div class="form-group"><label>Owner Password</label><input id="owner-password" type="password"></div><button class="modal-submit" onclick="createCompany()">Create Company</button>`)}
+function openCreateCompany(){openModal("Create Company",`<div class="form-group"><label>Company Name</label><input id="company-name"></div><div class="form-group"><label>Owner Full Name</label><input id="owner-name"></div><div class="form-group"><label>Owner Email</label><input id="owner-email" type="email"></div><div class="form-group"><label>Owner Password</label><input id="owner-password" type="password"></div><p class="meta">The company starts in Onboarding. Customer portal access is available while AI runtime remains stopped until Go Live.</p><button class="modal-submit" onclick="createCompany()">Create Company</button>`)}
 async function createCompany(){try{const data=await api("/admin/companies",{method:"POST",body:JSON.stringify({name:document.getElementById("company-name").value.trim(),owner_full_name:document.getElementById("owner-name").value.trim(),owner_email:document.getElementById("owner-email").value.trim(),owner_password:document.getElementById("owner-password").value})});closeModal();await loadCompanies();await openCompany(data.company.id)}catch(e){alert(e.message)}}
 
 function openAddAIEmployee(companyId){simpleCompanyId=Number(companyId);openModal("Create AI Employee",employeeForm({},false));const language=document.getElementById("simple-language"),style=document.getElementById("simple-conversation-style");if(language)language.value="auto";if(style)style.value="professional_friendly"}
