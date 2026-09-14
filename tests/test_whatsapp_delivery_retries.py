@@ -13,9 +13,13 @@ def test_unknown_phone_numbers_are_not_queued():
 
 
 def test_retry_uses_durable_delivery_instead_of_replaying_ai_turn():
-    webhook_source = inspect.getsource(whatsapp_webhook.process_webhook_payload)
+    process_source = inspect.getsource(whatsapp_webhook.process_webhook_payload)
+    existing_source = inspect.getsource(
+        whatsapp_webhook._handle_existing_inbound_delivery
+    )
     retry_source = inspect.getsource(whatsapp_delivery.retry_delivery_for_inbound)
-    assert "retry_delivery_for_inbound(" in webhook_source
+    assert "_handle_existing_inbound_delivery(" in process_source
+    assert "retry_delivery_for_inbound(" in existing_source
     assert "delivery_for_inbound(" in retry_source
     assert "attempt_delivery(" in retry_source
     assert 'row.status == "unknown"' in retry_source
