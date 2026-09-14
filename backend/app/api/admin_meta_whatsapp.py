@@ -9,7 +9,11 @@ import urllib.request
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from backend.app.api.admin_channels import _activation_blockers, _ensure_channels_module
+from backend.app.api.admin_channels import (
+    _activation_blockers,
+    _assert_unique_whatsapp_phone_number_id,
+    _ensure_channels_module,
+)
 from backend.app.core.config_secrets import merge_config, reveal_config
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
@@ -27,8 +31,6 @@ router = APIRouter(
 
 
 WHATSAPP_BEHAVIOR_DEFAULTS = {
-    "language": "auto",
-    "dialect": "auto",
     "tone": "professional_friendly",
     "response_style": "conversational",
     "response_length": "concise",
@@ -188,7 +190,10 @@ def _resolve_signup_phone(
     if len(phones) == 1:
         return phones[0]
     if not phones:
-        raise HTTPException(status_code=400, detail="Meta returned no phone numbers for the selected WhatsApp Business Account")
+        raise HTTPException(
+            status_code=400,
+            detail="Meta returned no phone numbers for the selected WhatsApp Business Account",
+        )
     raise HTTPException(
         status_code=400,
         detail="Meta did not return a phone number ID and the selected WhatsApp Business Account has multiple phone numbers",
@@ -293,7 +298,10 @@ def complete_embedded_signup(
     )
     phone_number_id = str(phone.get("id") or "").strip()
     if not phone_number_id:
-        raise HTTPException(status_code=502, detail="Meta did not return a usable phone number ID")
+        raise HTTPException(
+            status_code=502,
+            detail="Meta did not return a usable phone number ID",
+        )
     _subscribe_app_to_waba(
         waba_id=waba_id,
         access_token=access_token,
@@ -314,7 +322,16 @@ def complete_embedded_signup(
             )
             .first()
         )
-        method = "meta_embedded_signup_coexistence" if connection_mode == "coexistence" else "meta_embedded_signup"
+        _assert_unique_whatsapp_phone_number_id(
+            db,
+            phone_number_id,
+            exclude_channel_id=channel.id if channel is not None else None,
+        )
+        method = (
+            "meta_embedded_signup_coexistence"
+            if connection_mode == "coexistence"
+            else "meta_embedded_signup"
+        )
         incoming = {
             "waba_id": waba_id,
             "meta_business_id": data.business_id,
