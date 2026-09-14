@@ -56,6 +56,20 @@ function xvondCustomerMetaLoginOptions(config) {
 
 function xvondCustomerWhatsAppStatus(config) {
     if (!config.connected) {
+        if (config.coexistence && config.connection_status === "coexistence_echo_pending") {
+            return {
+                title: "واتساب مربوط · بانتظار اختبار التحكم البشري",
+                detail: "أرسل ردًا يدويًا واحدًا من تطبيق WhatsApp Business على محادثة عميل. عند وصول الرد إلى Xvond سيتوقف الموظف AI تلقائيًا عن الرد على تلك المحادثة، ويكتمل التحقق من وضع التعايش.",
+                label: "إعادة الربط عند الحاجة",
+            };
+        }
+        if (config.coexistence && config.connection_status === "coexistence_setup_required") {
+            return {
+                title: "ربط واتساب موجود · إعداد التعايش غير مكتمل",
+                detail: "Xvond لم يتحقق بعد من اشتراكات Meta المطلوبة لرسائل العملاء وردود تطبيق WhatsApp Business. لن نعرض الاتصال كجاهز حتى يثبت وصول كلا النوعين من الأحداث.",
+                label: "إعادة الربط لإكمال الإعداد",
+            };
+        }
         const needsReconnect = config.configured || config.connection_status === "invalid_token";
         return {
             title: needsReconnect ? "اتصال واتساب يحتاج إعادة ربط" : "اربط رقم واتساب",
@@ -87,6 +101,20 @@ function xvondCustomerWhatsAppStatus(config) {
 
 function xvondCustomerWhatsAppBlockers(config) {
     const blockers = Array.isArray(config.blockers) ? config.blockers.filter(Boolean) : [];
+    if (!config.connected && config.connection_status === "coexistence_echo_pending") {
+        return `
+            <div class="muted" style="margin-top:8px">
+                <strong>التحكم البشري:</strong> بانتظار أول رد يدوي من تطبيق WhatsApp Business لإثبات أن Xvond يستقبل أحداث التعايش ويوقف الـAI فورًا.
+            </div>
+        `;
+    }
+    if (!config.connected && config.connection_status === "coexistence_setup_required") {
+        return `
+            <div class="muted" style="margin-top:8px">
+                <strong>حالة Meta:</strong> اشتراكات Coexistence المطلوبة غير مكتملة أو لم يتم التحقق منها بعد.
+            </div>
+        `;
+    }
     if (!config.connected || blockers.length === 0) return "";
     return `
         <div class="muted" style="margin-top:8px">
@@ -181,6 +209,8 @@ async function xvondCustomerFinishMetaWhatsAppSignup(code) {
                 ? "الموظف AI جاهز على نفس رقم WhatsApp Business."
                 : "الموظف AI جاهز على واتساب.";
             alert(`تم ربط رقم واتساب بنجاح.\n${result.display_phone_number || ""}\n${mode}`);
+        } else if (result.coexistence) {
+            alert("تم ربط رقم واتساب. لإكمال وضع التعايش، أرسل ردًا يدويًا من تطبيق WhatsApp Business على محادثة عميل حتى يتحقق Xvond من التحويل التلقائي إلى الوضع البشري.");
         } else {
             alert("تم ربط رقم واتساب بنجاح. سيبدأ الموظف بالعمل بعد إكمال إعداد الخدمة من Xvond.");
         }
