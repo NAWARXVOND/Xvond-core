@@ -86,18 +86,22 @@ def test_customer_connection_status_requires_real_meta_onboarding():
     assert '"connection_issue": connection["connection_issue"]' in api
 
 
-def test_customer_whatsapp_status_exposes_runtime_readiness_and_blockers():
+def test_customer_whatsapp_status_exposes_runtime_and_coexistence_truth():
     api = source("backend/app/api/customer_meta_whatsapp.py")
     js = source("frontend/customer/meta-whatsapp.js")
     assert "blockers = (" in api
     assert "_activation_blockers(db, channel)" in api
     assert '"runtime_ready": bool(connected and enabled and not blockers)' in api
     assert '"blockers": blockers' in api
-    assert '"coexistence": bool(channel_config.get("coexistence"))' in api
+    assert '"coexistence": coexistence' in api
+    assert '"coexistence_ready"' in api
+    assert '"echo_received"' in api
     assert "xvondCustomerWhatsAppStatus" in js
     assert "xvondCustomerWhatsAppBlockers" in js
     assert "config.runtime_ready" in js
-    assert "config.coexistence" in js
+    assert "config.coexistence_ready === false" in js
+    assert "الموظف AI يستطيع الرد الآن" in js
+    assert "التحويل التلقائي للبشر تم التحقق منه" in js
 
 
 def test_customer_meta_origin_validation_is_strict():
