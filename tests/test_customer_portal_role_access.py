@@ -55,7 +55,9 @@ def test_customer_agent_management_is_manager_only_and_never_exposes_provider_mo
     assert "controls.get(\"can_enable_disable\", False)" in source
     assert "controls.get(\"can_edit_prompt\")" in source
     assert "_profile_prompt(company.name, update)" in source
-    assert "_sync_channel_setup" in source
+    assert "AI employee activation is managed by Xvond Delivery Readiness" in source
+    assert "_sync_channel_setup" not in source
+    assert "employee_setup" not in source
 
 
 def test_company_user_role_hierarchy_is_enforced_server_side():
