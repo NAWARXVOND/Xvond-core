@@ -65,6 +65,17 @@ SERVICE_PORTAL_REGISTRY = {
             {"id": "agents", "label": "AI Employees", "loader": "agents"},
             {"id": "chat", "label": "Test AI Employee", "loader": "chat"},
             {"id": "conversations", "label": "Inbox", "loader": "conversations"},
+            {"id": "customers", "label": "Customers", "loader": "customers"},
+            {
+                "id": "business-analytics",
+                "label": "Business Analytics",
+                "loader": "customer-analytics",
+            },
+            {
+                "id": "notifications",
+                "label": "Notifications",
+                "loader": "customer-notifications",
+            },
             {"id": "usage", "label": "Usage", "loader": "usage"},
         ],
     },
