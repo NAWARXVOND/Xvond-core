@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func
 
 from backend.app.core.database.connection import SessionLocal
-from backend.app.core.dependencies import require_xvond_admin
+from backend.app.core.dependencies import require_xvond_operator
 from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent, AIConversation, AIUsage
@@ -125,7 +125,7 @@ def _lifecycle_counts(db) -> dict[str, int]:
 
 
 @router.get("/summary")
-def summary(current_admin: User = Depends(require_xvond_admin)):
+def summary(current_admin: User = Depends(require_xvond_operator)):
     db = SessionLocal()
     try:
         now = datetime.now(UTC).replace(tzinfo=None)
