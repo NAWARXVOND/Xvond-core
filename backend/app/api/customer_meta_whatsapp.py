@@ -112,6 +112,7 @@ def embedded_signup_config(
             else []
         )
         enabled = bool(channel.enabled) if channel is not None else False
+        coexistence = bool(channel_config.get("coexistence"))
         return {
             "ready": ready,
             "agent_id": agent.id,
@@ -129,7 +130,13 @@ def embedded_signup_config(
             "runtime_ready": bool(connected and enabled and not blockers),
             "blockers": blockers,
             "connection_method": channel_config.get("connection_method"),
-            "coexistence": bool(channel_config.get("coexistence")),
+            "coexistence": coexistence,
+            "coexistence_ready": (
+                bool(connection.get("coexistence_ready")) if coexistence else None
+            ),
+            "echo_received": (
+                bool(connection.get("echo_received")) if coexistence else None
+            ),
             "connection_status": connection["connection_status"],
             "connection_issue": connection["connection_issue"],
             "connection_checked_at": connection["connection_checked_at"],
@@ -262,6 +269,20 @@ def complete_embedded_signup(
         db.flush()
         blockers = _activation_blockers(db, channel)
         channel.enabled = not blockers
+        connection = whatsapp_connection_state(
+            reveal_config(channel.config),
+            verify_remote=True,
+        )
+        coexistence_ready = (
+            bool(connection.get("coexistence_ready"))
+            if connection_mode == "coexistence"
+            else None
+        )
+        echo_received = (
+            bool(connection.get("echo_received"))
+            if connection_mode == "coexistence"
+            else None
+        )
 
         audit_service.log(
             db=db,
@@ -276,6 +297,7 @@ def complete_embedded_signup(
                 "phone_number_id": phone_number_id,
                 "connection_method": method,
                 "coexistence": connection_mode == "coexistence",
+                "coexistence_ready": coexistence_ready,
                 "webhook_subscribed": True,
                 "runtime_ready": not blockers,
                 "blockers": blockers,
@@ -296,6 +318,8 @@ def complete_embedded_signup(
             "verified_name": phone.get("verified_name"),
             "connection_mode": connection_mode,
             "coexistence": connection_mode == "coexistence",
+            "coexistence_ready": coexistence_ready,
+            "echo_received": echo_received,
             "enabled": bool(channel.enabled),
             "runtime_ready": bool(channel.enabled and not blockers),
             "ready": not blockers,
