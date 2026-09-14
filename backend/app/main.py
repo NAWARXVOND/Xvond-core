@@ -12,7 +12,6 @@ from sqlalchemy import text
 from backend.app.api.auth import router as auth_router
 from backend.app.api.users import router as users_router
 from backend.app.api.admin import router as admin_router
-from backend.app.api.admin_customer_operations import router as admin_customer_operations_router
 from backend.app.api.admin_ai import router as admin_ai_router
 from backend.app.api.admin_ai_employee import router as admin_ai_employee_router
 from backend.app.api.admin_ai_employee_profile import router as admin_ai_employee_profile_router
@@ -52,6 +51,7 @@ from backend.app.api.customer_agents import router as customer_agents_router
 from backend.app.api.customer_business import router as customer_business_router
 from backend.app.api.customer_inbox import router as customer_inbox_router
 from backend.app.api.customer_meta_whatsapp import router as customer_meta_whatsapp_router
+from backend.app.api.customer_operations import router as customer_operations_router
 from backend.app.api.customer_portal import router as customer_portal_router
 from backend.app.api.modules import router as modules_router
 from backend.app.api.usage import router as usage_router
@@ -71,7 +71,7 @@ from backend.app.core.rate_limit import rate_limiter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
-CUSTOMER_PORTAL_VERSION = "20260905-4"
+CUSTOMER_PORTAL_VERSION = "20260914-2"
 
 
 @asynccontextmanager
@@ -189,7 +189,6 @@ for r in [
     auth_router,
     users_router,
     admin_router,
-    admin_customer_operations_router,
     admin_ai_router,
     admin_ai_employee_router,
     admin_ai_employee_profile_router,
@@ -230,6 +229,7 @@ for r in [
     customer_business_router,
     customer_inbox_router,
     customer_meta_whatsapp_router,
+    customer_operations_router,
     customer_portal_router,
     usage_router,
     whatsapp_webhook_router,
