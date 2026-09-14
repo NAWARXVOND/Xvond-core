@@ -2,6 +2,8 @@ let activeInboxConversationId = null;
 let activeInboxFingerprint = null;
 let inboxRefreshTimer = null;
 let inboxRefreshBusy = false;
+let inboxPageOffset = 0;
+const inboxPageLimit = 75;
 
 function inboxModeBadge(mode) {
     const human = String(mode || "ai").toLowerCase() === "human";
@@ -38,6 +40,7 @@ function inboxThreadFingerprint(result) {
         conversation.id || "",
         conversation.mode || "ai",
         conversation.message_count ?? messages.length,
+        conversation.reply_capability?.supported ? "reply" : "locked",
         last?.id || 0,
         last?.role || ""
     ].join(":");
@@ -74,6 +77,18 @@ function startInboxLiveRefresh() {
     }, 2500);
 }
 
+function reloadInboxFromStart() {
+    inboxPageOffset = 0;
+    return loadConversations();
+}
+
+function changeInboxPage(direction) {
+    inboxPageOffset = Math.max(0, inboxPageOffset + (Number(direction) * inboxPageLimit));
+    activeInboxConversationId = null;
+    activeInboxFingerprint = null;
+    return loadConversations();
+}
+
 ensureInboxMarkup = function() {
     const page = document.getElementById("page-conversations");
     if (!page || page.dataset.inboxV2Ready === "1") return;
@@ -89,15 +104,15 @@ ensureInboxMarkup = function() {
                 <button class="inbox-refresh-button" onclick="loadConversations()">Refresh</button>
             </div>
             <div class="inbox-v2-filters">
-                <select id="conversation-agent" onchange="loadConversations()" aria-label="Filter by AI employee">
+                <select id="conversation-agent" onchange="reloadInboxFromStart()" aria-label="Filter by AI employee">
                     <option value="">All AI Employees</option>
                 </select>
-                <select id="conversation-channel" onchange="loadConversations()" aria-label="Filter by channel">
+                <select id="conversation-channel" onchange="reloadInboxFromStart()" aria-label="Filter by channel">
                     <option value="">All Channels</option>
                 </select>
                 <div class="inbox-v2-search">
-                    <input id="conversation-search" placeholder="Search customer or conversation..." onkeydown="if(event.key==='Enter') loadConversations()">
-                    <button onclick="loadConversations()">Search</button>
+                    <input id="conversation-search" placeholder="Search customer or conversation..." onkeydown="if(event.key==='Enter') reloadInboxFromStart()">
+                    <button onclick="reloadInboxFromStart()">Search</button>
                 </div>
             </div>
             <div class="inbox-v2-layout">
@@ -107,6 +122,11 @@ ensureInboxMarkup = function() {
                         <span id="conversation-count">0</span>
                     </div>
                     <div id="conversation-list" class="inbox-list"></div>
+                    <div class="inbox-pagination" id="inbox-pagination">
+                        <button id="inbox-prev" onclick="changeInboxPage(-1)" disabled>Previous</button>
+                        <span id="inbox-page-label">0 of 0</span>
+                        <button id="inbox-next" onclick="changeInboxPage(1)" disabled>Next</button>
+                    </div>
                 </aside>
                 <section id="conversation-messages" class="conversation-messages inbox-thread inbox-v2-thread">
                     <div class="inbox-v2-empty">
@@ -201,16 +221,28 @@ loadConversations = async function(options = {}) {
     if (agentId) params.set("agent_id", agentId);
     if (channelType) params.set("channel_type", channelType);
     if (search) params.set("search", search);
+    params.set("limit", String(inboxPageLimit));
+    params.set("offset", String(inboxPageOffset));
 
     if (!options.silent) {
         list.innerHTML = '<div class="empty-state">Loading conversations...</div>';
     }
     try {
-        const result = await api(`/customer/inbox${params.toString() ? `?${params}` : ""}`);
+        const result = await api(`/customer/inbox?${params}`);
         populateInboxFilters(result.filters || {});
         const items = result.conversations || [];
+        const pagination = result.pagination || {total: items.length, limit: inboxPageLimit, offset: inboxPageOffset, has_more: false};
+        const total = Number(pagination.total || 0);
+        const first = items.length ? Number(pagination.offset || 0) + 1 : 0;
+        const last = Number(pagination.offset || 0) + items.length;
         const count = document.getElementById("conversation-count");
-        if (count) count.textContent = String(items.length);
+        if (count) count.textContent = String(total);
+        const pageLabel = document.getElementById("inbox-page-label");
+        if (pageLabel) pageLabel.textContent = `${first}-${last} of ${total}`;
+        const prev = document.getElementById("inbox-prev");
+        const next = document.getElementById("inbox-next");
+        if (prev) prev.disabled = Number(pagination.offset || 0) <= 0;
+        if (next) next.disabled = !pagination.has_more;
 
         list.innerHTML = items.length ? items.map(item => {
             const preview = item.last_message?.content || item.title || "No messages";
@@ -268,6 +300,8 @@ loadInboxConversation = async function(conversationId, button = null, options = 
         const conversation = result.conversation || {};
         const messages = result.messages || [];
         const human = String(conversation.mode || "ai").toLowerCase() === "human";
+        const replyCapability = conversation.reply_capability || {supported: conversation.channel_type === "whatsapp"};
+        const canReply = replyCapability.supported === true;
         const contact = conversation.external_contact_id || conversation.title || `Conversation ${conversationId}`;
         const previousList = target.querySelector(".inbox-message-list");
         const keepBottom = !previousList || (previousList.scrollHeight - previousList.scrollTop - previousList.clientHeight < 80);
@@ -276,8 +310,8 @@ loadInboxConversation = async function(conversationId, button = null, options = 
             <div class="handoff-controls human-active">
                 <div class="handoff-copy">
                     <span class="handoff-kicker">Human control</span>
-                    <strong>You are replying to this customer</strong>
-                    <p>The AI employee remains paused until you return control.</p>
+                    <strong>You control this conversation</strong>
+                    <p>${canReply ? "The AI employee remains paused until you return control." : "The AI employee is paused. Reply from the channel's native inbox if needed."}</p>
                 </div>
                 <button id="return-ai-button" class="secondary-button" onclick="customerReturnConversationToAI(${conversationId})">Return to AI</button>
             </div>
@@ -286,13 +320,13 @@ loadInboxConversation = async function(conversationId, button = null, options = 
                 <div class="handoff-copy">
                     <span class="handoff-kicker">AI control</span>
                     <strong>AI employee is handling this conversation</strong>
-                    <p>Take over only when a human response is required.</p>
+                    <p>Take over when the AI should stop responding automatically.</p>
                 </div>
                 <button id="takeover-button" class="takeover-button" onclick="customerTakeOverConversation(${conversationId})">Take Over</button>
             </div>
         `;
 
-        const composer = human ? `
+        const composer = human && canReply ? `
             <div class="human-reply-box">
                 <textarea id="human-reply-message" rows="2" maxlength="12000" placeholder="Type your reply..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();customerSendHumanReply(${conversationId})}"></textarea>
                 <div class="human-reply-actions">
@@ -300,10 +334,15 @@ loadInboxConversation = async function(conversationId, button = null, options = 
                     <button id="human-reply-send" onclick="customerSendHumanReply(${conversationId})">Send</button>
                 </div>
             </div>
+        ` : human ? `
+            <div class="ai-reply-lock">
+                <span>${safe(replyCapability.reason || "Direct replies from Xvond are not available for this channel yet.")}</span>
+                <button onclick="customerReturnConversationToAI(${conversationId})">Return to AI</button>
+            </div>
         ` : `
             <div class="ai-reply-lock">
                 <span>AI is currently responding automatically.</span>
-                <button onclick="customerTakeOverConversation(${conversationId})">Take over to reply</button>
+                <button onclick="customerTakeOverConversation(${conversationId})">Take over</button>
             </div>
         `;
 
