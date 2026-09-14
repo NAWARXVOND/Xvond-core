@@ -12,6 +12,8 @@ PRIVACY = Path("frontend/admin/privacy-boundaries.js").read_text(encoding="utf-8
 SIMPLE_COMPANY = Path("frontend/admin/simple-company.js").read_text(encoding="utf-8")
 COMPANY_USERS = Path("backend/app/api/admin_company_users.py").read_text(encoding="utf-8")
 COMPANY_MODULES = Path("backend/app/api/company_modules.py").read_text(encoding="utf-8-sig")
+COMPANY_PROFILE = Path("backend/app/api/admin_company_profile.py").read_text(encoding="utf-8")
+CHANNELS = Path("backend/app/api/admin_channels.py").read_text(encoding="utf-8")
 
 
 def test_company_activation_is_readiness_gated_and_deactivation_is_emergency_stop():
@@ -92,3 +94,16 @@ def test_sensitive_operator_mutations_are_audited_without_customer_identity_payl
     assert '"company_module.enabled"' in COMPANY_MODULES
     assert '"company_module.disabled"' in COMPANY_MODULES
     assert 'details={"module_name": item.module_name, "enabled": item.enabled}' in COMPANY_MODULES
+
+    assert 'action="company_profile.updated"' in COMPANY_PROFILE
+    profile_audit = COMPANY_PROFILE.split('action="company_profile.updated"', 1)[1]
+    assert 'details={"changed_fields": sorted(set(changed_fields))}' in profile_audit
+    assert '"phone":' not in profile_audit.split("db.commit()", 1)[0]
+    assert '"email":' not in profile_audit.split("db.commit()", 1)[0]
+
+    assert '"channel.created"' in CHANNELS
+    assert '"channel.updated"' in CHANNELS
+    assert '"channel.whatsapp_configured"' in CHANNELS
+    assert '"channel.deleted"' in CHANNELS
+    assert "access_token" not in CHANNELS.split("def _audit_channel", 1)[1].split("def _has_real_runtime_provider", 1)[0]
+    assert "app_secret" not in CHANNELS.split("def _audit_channel", 1)[1].split("def _has_real_runtime_provider", 1)[0]
