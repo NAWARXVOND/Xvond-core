@@ -5,7 +5,6 @@ import uuid
 from datetime import datetime, timezone
 
 from redis import Redis
-from redis.exceptions import RedisError
 
 from backend.app.core.config.settings import settings
 
@@ -15,6 +14,7 @@ class WhatsAppJobQueue:
     processing_key = "xvond:whatsapp:processing"
     dead_key = "xvond:whatsapp:dead"
     retry_key = "xvond:whatsapp:retry"
+    worker_lock_key = "xvond:whatsapp:worker-lock"
     retry_delays = (5, 30, 120, 600)
 
     def __init__(self, redis_url: str | None = None):
@@ -56,6 +56,57 @@ class WhatsAppJobQueue:
             json.dumps(job),
         )
         return job_id
+
+    def acquire_worker_lock(self, owner: str, ttl_seconds: int = 30) -> bool:
+        if self.client is None:
+            return False
+        ttl = max(10, min(int(ttl_seconds), 3600))
+        return bool(
+            self.client.set(
+                self.worker_lock_key,
+                owner,
+                nx=True,
+                ex=ttl,
+            )
+        )
+
+    def refresh_worker_lock(self, owner: str, ttl_seconds: int = 30) -> bool:
+        if self.client is None:
+            return False
+        ttl = max(10, min(int(ttl_seconds), 3600))
+        script = """
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+            return redis.call('EXPIRE', KEYS[1], ARGV[2])
+        end
+        return 0
+        """
+        return bool(
+            self.client.eval(
+                script,
+                1,
+                self.worker_lock_key,
+                owner,
+                ttl,
+            )
+        )
+
+    def release_worker_lock(self, owner: str) -> bool:
+        if self.client is None:
+            return False
+        script = """
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+            return redis.call('DEL', KEYS[1])
+        end
+        return 0
+        """
+        return bool(
+            self.client.eval(
+                script,
+                1,
+                self.worker_lock_key,
+                owner,
+            )
+        )
 
     def recover_interrupted(self) -> int:
         if self.client is None:
@@ -138,7 +189,12 @@ class WhatsAppJobQueue:
     def clear_human_marker(self, phone_number_id: str, wa_id: str, expected: str | None) -> None:
         if self.client is not None and expected is not None:
             # A concurrent newer echo must survive an explicit return to AI.
-            self.client.eval("if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0", 1, self._human_key(phone_number_id, wa_id), expected)
+            self.client.eval(
+                "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0",
+                1,
+                self._human_key(phone_number_id, wa_id),
+                expected,
+            )
 
     def stats(self) -> dict:
         if self.client is None:
