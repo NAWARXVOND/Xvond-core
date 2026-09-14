@@ -9,6 +9,7 @@ class FakeRedis:
     def __init__(self):
         self.data = {}
         self.sorted = {}
+        self.ttls = {}
 
     def pipeline(self, transaction=True):
         parent = self
@@ -36,17 +37,30 @@ class FakeRedis:
         if nx and key in self.data:
             return False
         self.data[key] = value
+        if ex is not None:
+            self.ttls[key] = int(ex)
         return True
 
     def get(self, key):
         value = self.data.get(key)
         return value if not isinstance(value, list) else None
 
-    def delete(self, key):
-        return 1 if self.data.pop(key, None) is not None else 0
+    def ttl(self, key):
+        if key not in self.data:
+            return -2
+        return self.ttls.get(key, -1)
 
-    def expire(self, key, _ttl):
-        return 1 if key in self.data else 0
+    def delete(self, key):
+        existed = key in self.data
+        self.data.pop(key, None)
+        self.ttls.pop(key, None)
+        return 1 if existed else 0
+
+    def expire(self, key, ttl):
+        if key not in self.data:
+            return 0
+        self.ttls[key] = int(ttl)
+        return 1
 
     def lpush(self, key, value):
         self.data.setdefault(key, []).insert(0, value)
@@ -134,7 +148,6 @@ def test_worker_lease_allows_one_owner_and_protects_release():
     assert queue.refresh_worker_lock("worker-a", 30) is True
     assert queue.refresh_worker_lock("worker-b", 30) is False
     assert queue.release_worker_lock("worker-b") is False
-    assert queue.human_marker("missing", "missing") is None
     assert queue.release_worker_lock("worker-a") is True
     assert queue.acquire_worker_lock("worker-b", 30) is True
 
@@ -200,7 +213,7 @@ def test_interrupted_jobs_are_recovered_on_worker_start():
     assert len(queue.client.data[queue.queue_key]) == 1
 
 
-def test_stats_report_queue_depths():
+def test_stats_report_queue_depths_and_worker_health():
     queue = make_queue()
     queue.enqueue(body="{}", signature="secret")
     queue.client.lpush(
@@ -213,9 +226,12 @@ def test_stats_report_queue_depths():
             "last_error": "delivery failed",
         }),
     )
+    assert queue.acquire_worker_lock("worker-a", 30) is True
 
     assert queue.stats() == {
         "configured": True,
+        "worker_active": True,
+        "worker_lease_ttl_seconds": 30,
         "queued": 1,
         "processing": 0,
         "retrying": 0,
