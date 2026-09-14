@@ -72,6 +72,19 @@ compose build app
 compose up -d --no-deps --force-recreate app
 wait_healthy xvond-core
 
+# The application container owns the authoritative parsed production settings.
+# If customer business actions are enabled globally, bring the external
+# execution plane up as part of the same release instead of relying on a second
+# forgotten operator command. Workflow import/publish is intentionally not
+# fabricated here: production acceptance below will fail for action-enabled
+# employees unless the documented health_check workflow is actually active.
+workflow_enabled="$(compose exec -T app python -c "from backend.app.core.config.settings import settings; print('true' if settings.N8N_ENABLED else 'false')" | tr -d '\r\n')"
+if [ "$workflow_enabled" = "true" ]; then
+    docker compose -f "$COMPOSE_FILE" --profile workflow up -d workflow-postgres workflow-engine
+    wait_healthy xvond-workflow-postgres
+    wait_healthy xvond-workflow-engine
+fi
+
 compose up -d --no-deps --force-recreate whatsapp-worker
 
 app_image="$(docker inspect --format '{{.Image}}' xvond-core)"
@@ -109,3 +122,4 @@ fi
 printf 'Xvond release complete: %s\n' "$release_sha"
 printf 'API image: %s\n' "$app_image"
 printf 'WhatsApp worker image: %s\n' "$worker_image"
+printf 'Workflow engine enabled: %s\n' "$workflow_enabled"
