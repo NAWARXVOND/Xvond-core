@@ -30,6 +30,42 @@ class N8NActionGateway:
     def configured(self) -> bool:
         return bool(self.enabled and self.webhook_url and self.shared_secret)
 
+    @staticmethod
+    def _safe_workflow_result(
+        result: dict[str, Any],
+        *,
+        request_id: str,
+        action: str,
+    ) -> dict[str, Any]:
+        """Prevent failed workflow payloads from entering prompts/audit storage.
+
+        Successful workflow data is part of the configured business-operation
+        contract. Failed workflow responses are untrusted provider output and may
+        contain credentials, stack traces, request bodies or customer data, so
+        only structural control-plane metadata is allowed to leave this boundary.
+        """
+        success = bool(result.get("success"))
+        safe = {
+            "success": success,
+            "request_id": str(result.get("request_id") or request_id),
+            "action": str(result.get("action") or action),
+        }
+        if success:
+            safe["data"] = result.get("data")
+            return safe
+
+        raw_code = result.get("error_code") or result.get("code")
+        if isinstance(raw_code, (str, int)):
+            code = str(raw_code).strip()
+            if code and len(code) <= 120 and all(
+                char.isalnum() or char in {"_", "-", ".", ":"}
+                for char in code
+            ):
+                safe["error_code"] = code
+        safe["error"] = "Workflow execution failed"
+        safe["data"] = None
+        return safe
+
     def execute(
         self,
         *,
@@ -82,9 +118,11 @@ class N8NActionGateway:
                     raise N8NGatewayError("n8n returned a non-object response")
                 if str(result.get("request_id") or request_id) != request_id:
                     raise N8NGatewayError("n8n response request_id mismatch")
-                result.setdefault("request_id", request_id)
-                result.setdefault("action", normalized_action)
-                return result
+                return self._safe_workflow_result(
+                    result,
+                    request_id=request_id,
+                    action=normalized_action,
+                )
             except (httpx.HTTPError, ValueError, N8NGatewayError) as exc:
                 last_error = exc
                 logger.warning(
