@@ -17,7 +17,7 @@ from backend.app.modules.ai_agent.profile_models import AIAgentProfile
 from backend.app.modules.billing.service_models import ServicePlan, ServiceSubscription
 from backend.app.modules.channels.catalog import validate_channel_config
 from backend.app.modules.channels.models import AgentChannel
-from backend.app.modules.channels.whatsapp_connection import whatsapp_meta_onboarding_complete
+from backend.app.modules.channels.whatsapp_connection import whatsapp_connection_state
 from backend.app.modules.integrations.catalog import validate_integration_config
 from backend.app.modules.integrations.models import CompanyIntegration
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeDocument
@@ -246,11 +246,17 @@ def company_readiness(db, company_id: int):
                 channel.channel_type,
                 channel_config,
             )
+            connection = None
+            if configured and channel.channel_type == "whatsapp":
+                connection = whatsapp_connection_state(
+                    channel_config,
+                    verify_remote=True,
+                )
             connected = bool(
                 configured
                 and (
                     channel.channel_type != "whatsapp"
-                    or whatsapp_meta_onboarding_complete(channel_config)
+                    or (connection and connection["connected"] is True)
                 )
             )
             channel_results.append(
@@ -260,6 +266,12 @@ def company_readiness(db, company_id: int):
                     "enabled": channel.enabled,
                     "configured": configured,
                     "connected": connected,
+                    "connection_status": (
+                        connection.get("connection_status") if connection else None
+                    ),
+                    "connection_issue": (
+                        connection.get("connection_issue") if connection else error
+                    ),
                     "config": public_config(channel.config),
                     "configured_secret_fields": configured_secret_fields(channel.config),
                     "issue": error,
@@ -310,7 +322,7 @@ def company_readiness(db, company_id: int):
             for item in channel_results
         ):
             warnings.append(
-                "WhatsApp is enabled locally but Meta Embedded Signup is not connected"
+                "WhatsApp is enabled locally but Meta/Coexistence is not verified"
             )
         if tools and not ready_action:
             warnings.append("Tools are assigned, but no configured customer action is runtime-ready")
