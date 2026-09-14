@@ -1,15 +1,17 @@
 import hashlib
 import hmac
 import json
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from redis.exceptions import RedisError
+from starlette.concurrency import run_in_threadpool
 
 from backend.app.api.admin_meta_whatsapp import _meta_settings
-from backend.app.core.config_secrets import reveal_config
+from backend.app.core.config_secrets import reveal_config, merge_config
 from backend.app.core.customer_runtime_policy import (
     human_handoff_acknowledgement,
     is_service_access_error,
@@ -21,6 +23,7 @@ from backend.app.core.database.connection import SessionLocal
 from backend.app.modules.ai_agent.models import AIMessage
 from backend.app.modules.audit.service import audit_service
 from backend.app.modules.channels.models import AgentChannel
+from backend.app.modules.channels.conversation_source import bind_conversation_source
 from backend.app.modules.channels.handoff import activate_human_handoff, echo_recipient, extend_human_handoff, human_handoff_active, requests_human
 from backend.app.modules.channels.whatsapp import whatsapp_sender
 from backend.app.modules.channels.whatsapp_models import WhatsAppInboundMessage, WhatsAppSession
@@ -29,6 +32,7 @@ from backend.app.modules.tools.business_models import HumanHandoff
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["WhatsApp Webhook"])
 ACTIVE_HANDOFF_STATUSES = ["pending", "in_progress"]
+logger = logging.getLogger(__name__)
 
 
 def get_whatsapp_channels(db):
@@ -37,7 +41,6 @@ def get_whatsapp_channels(db):
         .join(CompanyModule, CompanyModule.company_id == AgentChannel.company_id)
         .filter(
             AgentChannel.channel_type == "whatsapp",
-            AgentChannel.enabled.is_(True),
             CompanyModule.module_name == "channels",
             CompanyModule.enabled.is_(True),
         )
@@ -70,27 +73,27 @@ def claim_message(db, message_id: str, company_id: int, agent_id: int, wa_id: st
         agent_id=agent_id,
         wa_id=wa_id,
     )
-    db.add(item)
     try:
-        # Persist only the idempotency claim before processing. Business actions
-        # happen in the next transaction and commit only after reply delivery.
-        db.commit()
+        # The claim and the processed event commit together. A worker crash must
+        # not leave a permanent claim for an event that was never processed.
+        with db.begin_nested():
+            db.add(item)
+            db.flush()
         return True
     except IntegrityError:
-        db.rollback()
         return False
 
 
 def release_message_claim(db, message_id: str):
-    item = db.query(WhatsAppInboundMessage).filter(WhatsAppInboundMessage.external_message_id == message_id).first()
-    if item is not None:
-        db.delete(item)
-    db.commit()
+    # Claims are transactional now. Never delete by external ID after rollback:
+    # another worker may already have successfully processed that same event.
+    db.rollback()
 
 
 def lock_contact(db, agent_id: int, wa_id: str):
     key = f"xvond-whatsapp:{agent_id}:{wa_id}"
-    db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": key})
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": key})
 
 
 def _ensure_handoff_record(db, *, channel: AgentChannel, conversation_id: int, reason: str, status: str = "pending"):
@@ -195,24 +198,10 @@ def process_business_app_echo(db, channel: AgentChannel, value: dict) -> list[di
 
         try:
             lock_contact(db, channel.agent_id, wa_id)
-            session = (
-                db.query(WhatsAppSession)
-                .filter(
-                    WhatsAppSession.company_id == channel.company_id,
-                    WhatsAppSession.agent_id == channel.agent_id,
-                    WhatsAppSession.phone_number_id == phone_number_id,
-                    WhatsAppSession.wa_id == wa_id,
-                )
-                .first()
+            session = _get_or_create_whatsapp_session(
+                db=db, channel=channel, wa_id=wa_id,
+                phone_number_id=phone_number_id, incoming_text=content,
             )
-            if session is None:
-                session = _get_or_create_whatsapp_session(
-                    db=db,
-                    channel=channel,
-                    wa_id=wa_id,
-                    phone_number_id=phone_number_id,
-                    incoming_text=content,
-                )
 
             activate_human_handoff(session, reason="business_app_reply", human_message=True)
             _ensure_handoff_record(
@@ -232,6 +221,14 @@ def process_business_app_echo(db, channel: AgentChannel, value: dict) -> list[di
             if created_at is not None:
                 message_kwargs["created_at"] = created_at
             db.add(AIMessage(**message_kwargs))
+            config = reveal_config(channel.config) or {}
+            if config.get("coexistence") is True:
+                channel.config = merge_config(channel.config, {"coexistence_echo_received_at": datetime.utcnow().isoformat()})
+                if config.get("activation_pending_coexistence"):
+                    from backend.app.api.admin_channels import _activation_blockers
+                    if not _activation_blockers(db, channel):
+                        channel.enabled = True
+                        channel.config = merge_config(channel.config, {"activation_pending_coexistence": False})
 
             audit_service.log(
                 db=db,
@@ -266,7 +263,12 @@ def process_business_app_echo(db, channel: AgentChannel, value: dict) -> list[di
 def _get_or_create_whatsapp_session(db, channel: AgentChannel, wa_id: str, phone_number_id: str, incoming_text: str):
     session = (
         db.query(WhatsAppSession)
-        .filter(WhatsAppSession.agent_id == channel.agent_id, WhatsAppSession.wa_id == wa_id)
+        .filter(
+            WhatsAppSession.company_id == channel.company_id,
+            WhatsAppSession.agent_id == channel.agent_id,
+            WhatsAppSession.phone_number_id == phone_number_id,
+            WhatsAppSession.wa_id == wa_id,
+        )
         .first()
     )
     if session is None:
@@ -286,12 +288,19 @@ def _get_or_create_whatsapp_session(db, channel: AgentChannel, wa_id: str, phone
         )
         db.add(session)
         db.flush()
+    bind_conversation_source(
+        db, conversation_id=session.conversation_id,
+        company_id=channel.company_id, agent_id=channel.agent_id,
+        channel_type="whatsapp", channel_id=channel.id, external_contact_id=wa_id,
+    )
     return session
 
 
 def _service_access_fallback(db, *, channel: AgentChannel, config: dict, wa_id: str, phone_number_id: str, incoming_text: str, message_id: str, error: HTTPException):
     db.rollback()
     lock_contact(db, channel.agent_id, wa_id)
+    if not claim_message(db, message_id, channel.company_id, channel.agent_id, wa_id):
+        raise RuntimeError("WhatsApp fallback event was already processed")
     session = _get_or_create_whatsapp_session(db, channel, wa_id, phone_number_id, incoming_text)
     agent = agent_runtime.get_agent(db, channel.company_id, channel.agent_id)
     activate_human_handoff(session, reason="service_limit_or_entitlement")
@@ -362,8 +371,9 @@ def validate_webhook_request(raw_body: bytes, signature: str | None) -> tuple[di
         payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
-    if payload.get("object") != "whatsapp_business_account":
+    if not isinstance(payload, dict) or payload.get("object") != "whatsapp_business_account":
         raise HTTPException(status_code=400, detail="Invalid WhatsApp webhook object")
+    _validate_payload_shape(payload)
     db = SessionLocal()
     matched_channels = 0
     try:
@@ -386,20 +396,68 @@ def validate_webhook_request(raw_body: bytes, signature: str | None) -> tuple[di
     return payload, matched_channels
 
 
+def _validate_payload_shape(payload):
+    try:
+        entries = payload.get("entry", [])
+        if not isinstance(entries, list):
+            raise ValueError
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("changes", []), list):
+                raise ValueError
+            for change in entry.get("changes", []):
+                if not isinstance(change, dict):
+                    raise ValueError
+                value = change.get("value") or {}
+                if not isinstance(value, dict) or not isinstance(value.get("metadata", {}), dict):
+                    raise ValueError
+                for key in ("messages", "message_echoes"):
+                    messages = value.get(key, [])
+                    if not isinstance(messages, list) or any(not isinstance(item, dict) for item in messages):
+                        raise ValueError
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid WhatsApp webhook structure") from None
+
+
 @router.post("")
 async def receive_webhook(request: Request):
-    raw_body = await request.body()
+    raw_body = b""
+    async for chunk in request.stream():
+        raw_body += chunk
+        if len(raw_body) > 1024 * 1024:
+            raise HTTPException(413, "WhatsApp webhook payload is too large")
     signature = request.headers.get("x-hub-signature-256")
-    _, matched_channels = validate_webhook_request(raw_body=raw_body, signature=signature)
+    payload, matched_channels = await run_in_threadpool(validate_webhook_request, raw_body=raw_body, signature=signature)
     if matched_channels == 0:
         return {"status": "ignored", "reason": "unknown_phone_number_id"}
     if whatsapp_job_queue.enabled:
         try:
+            # Record the control signal at ingress, before a slow AI job can
+            # finish. The worker still mirrors/deduplicates the signed echo.
+            await run_in_threadpool(_mark_incoming_echoes, payload)
             job_id = whatsapp_job_queue.enqueue(body=raw_body.decode("utf-8"), signature=signature or "")
         except (RedisError, ValueError) as exc:
             raise HTTPException(status_code=503, detail="WhatsApp processing queue unavailable") from exc
         return {"status": "accepted", "job_id": job_id}
-    return process_webhook_payload(raw_body=raw_body, signature=signature)
+    return await run_in_threadpool(process_webhook_payload, raw_body=raw_body, signature=signature)
+
+
+def _mark_incoming_echoes(payload):
+    db = SessionLocal()
+    try:
+        for entry in payload.get("entry", []):
+            for change in entry.get("changes", []):
+                if change.get("field") != "smb_message_echoes":
+                    continue
+                value = change.get("value") or {}
+                phone = str((value.get("metadata") or {}).get("phone_number_id") or "")
+                if find_channel_by_phone_number_id(db, phone) is None:
+                    continue
+                for echo in value.get("message_echoes", []):
+                    recipient, event_id = echo_recipient(echo), str(echo.get("id") or "")
+                    if recipient and event_id and not db.query(WhatsAppInboundMessage.id).filter(WhatsAppInboundMessage.external_message_id == event_id).first():
+                        whatsapp_job_queue.mark_human(phone, recipient, event_id)
+    finally:
+        db.close()
 
 
 def process_webhook_payload(raw_body: bytes, signature: str | None):
@@ -407,8 +465,9 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
         payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
-    if payload.get("object") != "whatsapp_business_account":
+    if not isinstance(payload, dict) or payload.get("object") != "whatsapp_business_account":
         raise HTTPException(status_code=400, detail="Invalid WhatsApp webhook object")
+    _validate_payload_shape(payload)
 
     db = SessionLocal()
     processed = []
@@ -428,10 +487,14 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                     raise HTTPException(status_code=403, detail="Invalid webhook signature")
 
                 field = change.get("field")
+                logger.info("WhatsApp event received; channel_id=%s field=%s", channel.id, field if field in {"messages", "smb_message_echoes", "smb_app_state_sync", "history", "account_update"} else "other")
                 if field == "smb_message_echoes":
                     processed.extend(process_business_app_echo(db=db, channel=channel, value=value))
                     continue
                 if field not in (None, "messages"):
+                    continue
+                if not channel.enabled:
+                    logger.info("WhatsApp automation inactive; channel_id=%s", channel.id)
                     continue
 
                 for message in value.get("messages", []):
@@ -451,10 +514,12 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                         continue
 
                     if message.get("type") != "text":
+                        db.commit()
                         processed.append({"message_id": message_id, "status": "ignored_non_text"})
                         continue
                     incoming_text = str((message.get("text", {}) or {}).get("body", "")).strip()
                     if not incoming_text:
+                        db.commit()
                         processed.append({"message_id": message_id, "status": "ignored_empty"})
                         continue
 
@@ -463,7 +528,16 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                         session = _get_or_create_whatsapp_session(db, channel, wa_id, phone_number_id, incoming_text)
                         agent = agent_runtime.get_agent(db, channel.company_id, channel.agent_id)
 
-                        if requests_human(incoming_text):
+                        if config.get("coexistence") is True:
+                            from backend.app.modules.channels.whatsapp_connection import whatsapp_connection_state
+                            if not whatsapp_connection_state(config).get("connected"):
+                                activate_human_handoff(session, reason="coexistence_unverified")
+                                logger.warning("WhatsApp automation held for unverified Coexistence; channel_id=%s", channel.id)
+
+                        if whatsapp_job_queue.human_marker(phone_number_id, wa_id):
+                            activate_human_handoff(session, reason="business_app_reply")
+
+                        if requests_human(incoming_text) and not human_handoff_active(session):
                             activate_human_handoff(session, reason="customer_request")
                             _ensure_handoff_record(
                                 db,
@@ -550,7 +624,7 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                             action="whatsapp.runtime_failed",
                             resource_type="channel",
                             resource_id=channel.id,
-                            details={"message_id": message_id, "error": str(exc)[:1000]},
+                            details={"message_id": message_id, "error_type": type(exc).__name__},
                         )
                         db.commit()
                         raise
@@ -563,12 +637,26 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                             action="whatsapp.runtime_failed",
                             resource_type="channel",
                             resource_id=channel.id,
-                            details={"message_id": message_id, "error": str(exc)[:1000]},
+                            details={"message_id": message_id, "error_type": type(exc).__name__},
                         )
                         db.commit()
                         raise
 
                     reply_text = str(result["response"]["content"])
+                    # A portal takeover or signed echo may arrive while the
+                    # provider is generating. Do not commit or deliver that turn.
+                    db.refresh(session)
+                    if human_handoff_active(session) or whatsapp_job_queue.human_marker(phone_number_id, wa_id):
+                        db.rollback()
+                        lock_contact(db, channel.agent_id, wa_id)
+                        if claim_message(db, message_id, channel.company_id, channel.agent_id, wa_id):
+                            session = _get_or_create_whatsapp_session(db, channel, wa_id, phone_number_id, incoming_text)
+                            activate_human_handoff(session, reason="human_takeover_during_generation")
+                            _ensure_handoff_record(db, channel=channel, conversation_id=session.conversation_id, reason=session.handoff_reason)
+                            db.add(AIMessage(conversation_id=session.conversation_id, role="user", content=incoming_text))
+                            db.commit()
+                        processed.append({"message_id": message_id, "status": "waiting_for_human"})
+                        continue
                     send_result = whatsapp_sender.send_text(config=config, to=wa_id, text=reply_text)
                     if not send_result.get("success"):
                         # Roll back the assistant/user messages AND every booking/order/lead
@@ -584,7 +672,7 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                             details={
                                 "message_id": message_id,
                                 "status_code": send_result.get("status_code"),
-                                "error": str(send_result.get("error", ""))[:1000],
+                                "error": "Meta delivery failed",
                             },
                         )
                         db.commit()

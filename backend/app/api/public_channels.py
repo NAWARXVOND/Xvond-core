@@ -130,6 +130,7 @@ def _conversation(db, channel: AgentChannel, conversation_id: int):
             AIConversation.id == conversation_id,
             AIConversation.company_id == channel.company_id,
             AIConversation.agent_id == channel.agent_id,
+            AIConversation.channel_id == channel.id,
         )
         .first()
     )
@@ -359,7 +360,7 @@ def website_chat(
         original_prompt = agent.system_prompt
         try:
             language_policy = _website_language_policy(db, channel, data.message)
-            agent.system_prompt = (
+            runtime_prompt = (
                 original_prompt
                 + "\n\n"
                 + website_behavior(config)
@@ -373,6 +374,8 @@ def website_chat(
                     agent_id=channel.agent_id,
                     message=data.message,
                     conversation_id=data.conversation_id,
+                    channel_type="website", channel_id=channel.id,
+                    system_prompt_override=runtime_prompt, commit=False,
                 )
             except HTTPException as exc:
                 if _is_service_access_error(exc):
@@ -478,7 +481,7 @@ def voice_turn(
         agent = agent_runtime.get_agent(db, channel.company_id, channel.agent_id)
         original_prompt = agent.system_prompt or ""
         try:
-            agent.system_prompt = (
+            runtime_prompt = (
                 original_prompt + "\n\n" + build_voice_behavior_prompt(config)
             ).strip()
             result = agent_runtime.chat(
@@ -487,6 +490,9 @@ def voice_turn(
                 agent_id=channel.agent_id,
                 message=data.transcript,
                 conversation_id=data.conversation_id,
+                channel_type="voice", channel_id=channel.id,
+                external_contact_id=data.session_id,
+                system_prompt_override=runtime_prompt, commit=False,
             )
         finally:
             agent.system_prompt = original_prompt

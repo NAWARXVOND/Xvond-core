@@ -19,9 +19,11 @@ class WhatsAppSession(Base):
 
     __table_args__ = (
         UniqueConstraint(
+            "company_id",
             "agent_id",
+            "phone_number_id",
             "wa_id",
-            name="uq_whatsapp_agent_contact",
+            name="uq_whatsapp_channel_contact",
         ),
     )
 

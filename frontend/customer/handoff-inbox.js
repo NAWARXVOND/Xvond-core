@@ -2,6 +2,8 @@ let activeInboxConversationId = null;
 let activeInboxFingerprint = null;
 let inboxRefreshTimer = null;
 let inboxRefreshBusy = false;
+let inboxListRequest = 0;
+let inboxThreadRequest = 0;
 
 function inboxModeBadge(mode) {
     const human = String(mode || "ai").toLowerCase() === "human";
@@ -203,6 +205,7 @@ async function customerSendHumanReply(conversationId) {
 }
 
 loadConversations = async function(options = {}) {
+    const requestVersion = ++inboxListRequest;
     ensureInboxMarkup();
     startInboxLiveRefresh();
     const list = document.getElementById("conversation-list");
@@ -221,6 +224,7 @@ loadConversations = async function(options = {}) {
     }
     try {
         const result = await api(`/customer/inbox${params.toString() ? `?${params}` : ""}`);
+        if (requestVersion !== inboxListRequest) return;
         populateInboxFilters(result.filters || {});
         const items = result.conversations || [];
         const count = document.getElementById("conversation-count");
@@ -250,7 +254,7 @@ loadConversations = async function(options = {}) {
             `;
         }).join("") : '<div class="empty-state">No conversations match these filters.</div>';
 
-        if (!options.preserveThread && activeInboxConversationId && !items.some(item => Number(item.id) === Number(activeInboxConversationId))) {
+        if (activeInboxConversationId && !items.some(item => Number(item.id) === Number(activeInboxConversationId))) {
             activeInboxConversationId = null;
             activeInboxFingerprint = null;
             const target = document.getElementById("conversation-messages");
@@ -394,6 +398,7 @@ function handoffComposer(conversation, conversationId) {
 }
 
 loadInboxConversation = async function(conversationId, button = null, options = {}) {
+    const requestVersion = ++inboxThreadRequest;
     activeInboxConversationId = conversationId;
     document.querySelectorAll(".inbox-item").forEach(item => item.classList.remove("selected"));
     const selectedButton = button || document.querySelector(`.inbox-item[data-conversation-id="${conversationId}"]`);
@@ -406,6 +411,7 @@ loadInboxConversation = async function(conversationId, button = null, options = 
     }
     try {
         const result = await api(`/customer/inbox/${conversationId}`);
+        if (requestVersion !== inboxThreadRequest || Number(activeInboxConversationId) !== Number(conversationId)) return;
         const fingerprint = inboxThreadFingerprint(result);
         if (options.silent && fingerprint === activeInboxFingerprint) return;
         activeInboxFingerprint = fingerprint;
@@ -414,6 +420,7 @@ loadInboxConversation = async function(conversationId, button = null, options = 
         const messages = result.messages || [];
         const contact = conversation.external_contact_id || conversation.title || `Conversation ${conversationId}`;
         const previousList = target.querySelector(".inbox-message-list");
+        const replyDraft = options.silent ? document.getElementById("human-reply-message")?.value : "";
         const keepBottom = !previousList || (previousList.scrollHeight - previousList.scrollTop - previousList.clientHeight < 80);
 
         target.innerHTML = `
@@ -447,9 +454,11 @@ loadInboxConversation = async function(conversationId, button = null, options = 
             ${handoffComposer(conversation, conversationId)}
         `;
         const messageList = target.querySelector(".inbox-message-list");
+        const composer = document.getElementById("human-reply-message");
+        if (composer && replyDraft) composer.value = replyDraft;
         if (messageList && keepBottom) messageList.scrollTop = messageList.scrollHeight;
     } catch (error) {
-        if (!options.silent) {
+        if (!options.silent && requestVersion === inboxThreadRequest && Number(activeInboxConversationId) === Number(conversationId)) {
             target.innerHTML = `<div class="empty-state">${safe(error.message)}</div>`;
         }
     }

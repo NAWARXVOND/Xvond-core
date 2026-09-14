@@ -235,6 +235,7 @@ class AgentRuntime:
             db.query(AgentChannel)
             .filter(
                 AgentChannel.company_id == conversation.company_id,
+                AgentChannel.id == conversation.channel_id,
                 AgentChannel.agent_id == conversation.agent_id,
                 AgentChannel.channel_type == "whatsapp",
                 AgentChannel.enabled.is_(True),
@@ -308,6 +309,10 @@ class AgentRuntime:
         conversation_id: int | None = None,
         commit: bool = True,
         allow_tools: bool = True,
+        channel_type: str | None = None,
+        channel_id: int | None = None,
+        external_contact_id: str | None = None,
+        system_prompt_override: str | None = None,
     ) -> dict:
         message = (message or "").strip()
         if not message:
@@ -346,7 +351,17 @@ class AgentRuntime:
         conversation = self.get_or_create_conversation(
             db, company_id, agent.id, conversation_id, message
         )
-        system_prompt = self.build_runtime_system_prompt(db, agent, conversation)
+        if channel_type:
+            from backend.app.modules.channels.conversation_source import bind_conversation_source
+            try:
+                bind_conversation_source(
+                    db, conversation_id=conversation.id, company_id=company_id,
+                    agent_id=agent.id, channel_type=channel_type,
+                    channel_id=channel_id, external_contact_id=external_contact_id,
+                )
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+        system_prompt = system_prompt_override if system_prompt_override is not None else self.build_runtime_system_prompt(db, agent, conversation)
         history = self.build_history(db, conversation.id)
         customer_memory = build_customer_memory(db, conversation)
         business_clock = self.build_business_clock(db, company_id)

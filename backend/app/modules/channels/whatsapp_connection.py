@@ -84,6 +84,8 @@ def _cache_key(config: dict, token: str) -> tuple[str, ...]:
         str(config.get("waba_id") or "").strip(),
         str(config.get("connection_method") or "").strip(),
         str(config.get("coexistence") is True),
+        str(config.get("coexistence_echo_received_at") or ""),
+        str(config.get("subscription_checked_at") or ""),
         hashlib.sha256(token.encode("utf-8")).hexdigest(),
     )
 
@@ -269,6 +271,29 @@ def whatsapp_connection_state(
                 checked_at=_checked_at(),
             ),
         )
+
+    if config.get("coexistence") is True:
+        # Phone/token validity alone says nothing about Business App events.
+        # Refresh app + WABA evidence for legacy connections as well as signup.
+        from backend.app.api.admin_meta_whatsapp import (
+            _coexistence_subscription_evidence, _graph_request, _graph_url, _meta_settings,
+        )
+        meta = _meta_settings()
+        try:
+            evidence = _coexistence_subscription_evidence(meta)
+            subscriptions = _graph_request("GET", _graph_url(graph_api_version, f"{urllib.parse.quote(str(config.get('waba_id') or ''), safe='')}/subscribed_apps"), access_token=access_token)
+            subscribed = any(str((row.get("whatsapp_business_api_data") or row).get("id")) == str(meta["app_id"]) for row in subscriptions.get("data", []))
+            fields = set(evidence["subscribed_webhook_fields"])
+            setup_ok = subscribed and {"messages", "smb_message_echoes"}.issubset(fields)
+        except Exception:
+            setup_ok = False
+        echo_seen = bool(config.get("coexistence_echo_received_at"))
+        if not setup_ok or not echo_seen:
+            state = _state(connected=False, registered=True,
+                status="coexistence_setup_required" if not setup_ok else "coexistence_echo_pending",
+                issue="Verify Meta app and WABA subscriptions for messages and smb_message_echoes." if not setup_ok else "Send a reply from WhatsApp Business App to verify automatic human takeover.", checked_at=_checked_at())
+            state.update(coexistence_ready=False, echo_received=echo_seen)
+            return _store(key, state)
 
     return _store(
         key,

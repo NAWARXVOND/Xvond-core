@@ -10,6 +10,20 @@ class FakeRedis:
         self.data = {}
         self.sorted = {}
 
+    def pipeline(self, transaction=True):
+        parent = self
+        class Pipeline:
+            def __init__(self):
+                self.commands = []
+            def __getattr__(self, name):
+                def queue(*args, **kwargs):
+                    self.commands.append((name, args, kwargs))
+                    return self
+                return queue
+            def execute(self):
+                return [getattr(parent, name)(*args, **kwargs) for name, args, kwargs in self.commands]
+        return Pipeline()
+
     def lpush(self, key, value):
         self.data.setdefault(key, []).insert(0, value)
 
@@ -121,7 +135,7 @@ def test_failed_job_retries_then_moves_to_dead_letter():
         queue.client.data[queue.dead_key][0]
     )
     assert dead["attempts"] == 2
-    assert dead["last_error"] == "permanent"
+    assert dead["last_error"] == "RuntimeError"
 
 
 def test_interrupted_jobs_are_recovered_on_worker_start():

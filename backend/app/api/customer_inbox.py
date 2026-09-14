@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_
 
 from backend.app.core.config_secrets import reveal_config
@@ -19,6 +19,7 @@ from backend.app.modules.channels.handoff import (
 )
 from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.channels.whatsapp import whatsapp_sender
+from backend.app.modules.channels.whatsapp_queue import whatsapp_job_queue
 from backend.app.modules.channels.whatsapp_models import WhatsAppSession
 from backend.app.modules.tools.business_models import HumanHandoff
 
@@ -59,6 +60,14 @@ HANDOFF_CAPABILITIES = {
 
 class HumanReply(BaseModel):
     message: str = Field(min_length=1, max_length=12000)
+
+    @field_validator("message")
+    @classmethod
+    def nonblank_message(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("A reply cannot be blank")
+        return value
 
 
 def _visible_agents(db, current_user: User) -> list[AIAgent]:
@@ -276,17 +285,19 @@ def _conversation_meta(
     }
 
 
-def _authorized_conversation(db, current_user: User, conversation_id: int):
+def _authorized_conversation(db, current_user: User, conversation_id: int, *, lock: bool = False):
     agents = _visible_agents(db, current_user)
     agent_map = {item.id: item for item in agents}
-    conversation = (
+    query = (
         db.query(AIConversation)
         .filter(
             AIConversation.id == conversation_id,
             AIConversation.company_id == current_user.company_id,
         )
-        .first()
     )
+    if lock:
+        query = query.with_for_update()
+    conversation = query.first()
     if conversation is None or conversation.agent_id not in agent_map:
         raise HTTPException(404, "Conversation not found")
     return conversation, agent_map[conversation.agent_id]
@@ -311,6 +322,7 @@ def _whatsapp_channel(
         db.query(AgentChannel)
         .filter(
             AgentChannel.company_id == conversation.company_id,
+            AgentChannel.id == conversation.channel_id,
             AgentChannel.agent_id == conversation.agent_id,
             AgentChannel.channel_type == "whatsapp",
             AgentChannel.enabled.is_(True),
@@ -356,6 +368,7 @@ def _audit_handoff(
 def list_inbox(
     agent_id: int | None = None,
     channel_type: str | None = None,
+    channel_id: int | None = None,
     search: str | None = None,
     current_user: User = Depends(require_customer_operator),
 ):
@@ -382,15 +395,19 @@ def list_inbox(
         )
         if agent_id is not None:
             query = query.filter(AIConversation.agent_id == agent_id)
+        if channel_id is not None:
+            query = query.filter(AIConversation.channel_id == channel_id)
 
         normalized_channel = str(channel_type or "").strip().lower()
         if normalized_channel:
             if normalized_channel == "unknown":
-                query = query.filter(AIConversation.channel_type.is_(None))
+                query = query.filter(or_(AIConversation.channel_type.is_(None), AIConversation.channel_type.in_(["", "unknown"])))
             else:
                 query = query.filter(
                     AIConversation.channel_type == normalized_channel
                 )
+        else:
+            query = query.filter(AIConversation.channel_type.in_(["whatsapp", "website", "voice", "instagram"]))
 
         search_value = str(search or "").strip()
         if search_value:
@@ -532,6 +549,7 @@ def take_over_conversation(
             db,
             current_user,
             conversation_id,
+            lock=True,
         )
         capabilities = _require_handoff_supported(conversation)
         handoff = _active_handoff(
@@ -599,6 +617,7 @@ def return_conversation_to_ai(
             db,
             current_user,
             conversation_id,
+            lock=True,
         )
         handoffs = (
             db.query(HumanHandoff)
@@ -612,6 +631,10 @@ def return_conversation_to_ai(
         for handoff in handoffs:
             _require_handoff_close_permission(handoff, current_user)
 
+        session = _session(db, current_user.company_id, conversation.id)
+        if not handoffs and session is not None and human_handoff_active(session) and current_user.role not in HANDOFF_MANAGER_ROLES:
+            raise HTTPException(409, "A manager must return this unassigned conversation to AI")
+        marker = whatsapp_job_queue.human_marker(session.phone_number_id, session.wa_id) if session else None
         completed_at = datetime.utcnow()
         for handoff in handoffs:
             handoff.status = "completed"
@@ -635,6 +658,8 @@ def return_conversation_to_ai(
             },
         )
         db.commit()
+        if session:
+            whatsapp_job_queue.clear_human_marker(session.phone_number_id, session.wa_id, marker)
         return {
             "status": "ai_active",
             "conversation_id": conversation.id,
@@ -659,6 +684,7 @@ def send_human_reply(
             db,
             current_user,
             conversation_id,
+            lock=True,
         )
         capabilities = _require_handoff_supported(conversation)
         if not capabilities["human_reply_supported"]:

@@ -112,6 +112,8 @@ def chat(
             agent_id=agent_id,
             message=data.message,
             conversation_id=data.conversation_id,
+            channel_type="portal_test",
+            commit=False,
         )
         bind_conversation_source(
             db,

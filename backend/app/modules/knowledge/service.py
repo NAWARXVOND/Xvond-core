@@ -243,7 +243,7 @@ class KnowledgeService:
             chunk.embedding_updated_at = updated_at
         return len(chunks)
 
-    def rebuild_document_index(self, db, document):
+    def rebuild_document_index(self, db, document, *, embed=True):
         db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == document.id).delete(synchronize_session=False)
         chunks = []
         for index, content in enumerate(self.split_content(document.content or "")):
@@ -257,10 +257,11 @@ class KnowledgeService:
             db.add(chunk)
             chunks.append(chunk)
         db.flush()
-        self._embed_chunks(chunks, {document.id: document})
+        if embed:
+            self._embed_chunks(chunks, {document.id: document})
         return len(chunks)
 
-    def backfill_company_index(self, db, company_id):
+    def backfill_company_index(self, db, company_id, *, embed=True):
         docs = db.query(KnowledgeDocument).filter(KnowledgeDocument.company_id == company_id).all()
         if not docs:
             return 0
@@ -276,9 +277,9 @@ class KnowledgeService:
         }
         missing_docs = [doc for doc in docs if doc.id not in existing_document_ids]
         for doc in missing_docs:
-            self.rebuild_document_index(db, doc)
+            self.rebuild_document_index(db, doc, embed=embed)
 
-        if knowledge_embedding_client.available:
+        if embed and knowledge_embedding_client.available:
             documents_by_id = {doc.id: doc for doc in docs}
             chunks = db.query(KnowledgeChunk).filter(KnowledgeChunk.company_id == company_id).all()
             stale = [
@@ -296,7 +297,7 @@ class KnowledgeService:
         # repeatedly execute the same full-company maintenance scan.
         self._live_backfill_after[company_id] = now + self.LIVE_BACKFILL_TTL_SECONDS
         try:
-            return self.backfill_company_index(db, company_id)
+            return self.backfill_company_index(db, company_id, embed=False)
         except Exception:
             # Allow a later request to retry maintenance rather than suppressing it
             # for the whole TTL after a failure.

@@ -16,6 +16,7 @@ from backend.app.api.admin_meta_whatsapp import (
     _missing_meta_settings,
     _resolve_signup_phone,
     _subscribe_app_to_waba,
+    _coexistence_subscription_evidence,
 )
 from backend.app.core.config_secrets import merge_config, reveal_config
 from backend.app.core.database.connection import SessionLocal
@@ -189,6 +190,9 @@ def complete_embedded_signup(
         access_token=access_token,
         graph_api_version=config["graph_api_version"],
     )
+    evidence = {"waba_subscription_verified": True, "meta_app_id": config["app_id"]}
+    if connection_mode == "coexistence":
+        evidence.update(_coexistence_subscription_evidence(config))
 
     db = SessionLocal()
     try:
@@ -220,6 +224,7 @@ def complete_embedded_signup(
             else "meta_embedded_signup"
         )
         incoming = {
+            **evidence,
             "waba_id": waba_id,
             "meta_business_id": data.business_id,
             "phone_number_id": phone_number_id,
@@ -231,6 +236,8 @@ def complete_embedded_signup(
             "graph_api_version": config["graph_api_version"],
             "connection_method": method,
             "coexistence": connection_mode == "coexistence",
+            "coexistence_echo_received_at": None,
+            "activation_pending_coexistence": connection_mode == "coexistence",
         }
         if channel is None:
             incoming.update(WHATSAPP_BEHAVIOR_DEFAULTS)

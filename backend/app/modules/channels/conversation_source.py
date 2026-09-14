@@ -1,4 +1,5 @@
 from backend.app.modules.ai_agent.models import AIConversation
+from backend.app.modules.channels.models import AgentChannel
 
 
 def bind_conversation_source(
@@ -27,6 +28,21 @@ def bind_conversation_source(
     if not normalized_type:
         raise ValueError("Conversation channel type is required")
 
+    if channel_id is not None:
+        channel = db.query(AgentChannel).filter(
+            AgentChannel.id == channel_id,
+            AgentChannel.company_id == company_id,
+            AgentChannel.agent_id == agent_id,
+            AgentChannel.channel_type == normalized_type,
+        ).first()
+        if channel is None:
+            raise ValueError("Channel does not belong to this company and employee")
+    contact = str(external_contact_id or "").strip()
+    if len(contact) > 200:
+        raise ValueError("External contact identity is too long")
+    if conversation.external_contact_id and contact and conversation.external_contact_id != contact:
+        raise ValueError("Conversation is already bound to another contact")
+
     if conversation.channel_type and conversation.channel_type != normalized_type:
         raise ValueError("Conversation is already bound to another channel type")
     if conversation.channel_id and channel_id and conversation.channel_id != channel_id:
@@ -37,7 +53,7 @@ def bind_conversation_source(
         conversation.channel_id = conversation.channel_id or channel_id
     if external_contact_id:
         conversation.external_contact_id = (
-            conversation.external_contact_id or str(external_contact_id).strip()[:200]
+            conversation.external_contact_id or contact
         )
     db.flush()
     return conversation

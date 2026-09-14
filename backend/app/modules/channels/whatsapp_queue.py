@@ -1,4 +1,5 @@
 import json
+import hashlib
 import time
 import uuid
 from datetime import datetime, timezone
@@ -120,6 +121,25 @@ class WhatsAppJobQueue:
                 raw,
             )
 
+    @staticmethod
+    def _human_key(phone_number_id: str, wa_id: str) -> str:
+        digest = hashlib.sha256(f"{phone_number_id}:{wa_id}".encode()).hexdigest()
+        return f"xvond:whatsapp:human:{digest}"
+
+    def mark_human(self, phone_number_id: str, wa_id: str, event_id: str) -> None:
+        if self.client is not None:
+            self.client.set(self._human_key(phone_number_id, wa_id), event_id)
+
+    def human_marker(self, phone_number_id: str, wa_id: str) -> str | None:
+        if self.client is None:
+            return None
+        return self.client.get(self._human_key(phone_number_id, wa_id))
+
+    def clear_human_marker(self, phone_number_id: str, wa_id: str, expected: str | None) -> None:
+        if self.client is not None and expected is not None:
+            # A concurrent newer echo must survive an explicit return to AI.
+            self.client.eval("if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0", 1, self._human_key(phone_number_id, wa_id), expected)
+
     def stats(self) -> dict:
         if self.client is None:
             return {
@@ -220,22 +240,19 @@ class WhatsAppJobQueue:
         if self.client is None:
             return "unavailable"
 
-        self.client.lrem(
-            self.processing_key,
-            1,
-            raw,
-        )
-
         job["attempts"] = int(job.get("attempts", 0)) + 1
-        job["last_error"] = str(error)[:1000]
+        job["last_error"] = type(error).__name__
         job["last_failed_at"] = datetime.now(timezone.utc).isoformat()
         encoded = json.dumps(job)
 
         if job["attempts"] >= max_attempts:
-            self.client.lpush(
+            transaction = self.client.pipeline(transaction=True)
+            transaction.lpush(
                 self.dead_key,
                 encoded,
             )
+            transaction.lrem(self.processing_key, 1, raw)
+            transaction.execute()
             return "dead"
 
         delay_index = min(
@@ -246,12 +263,15 @@ class WhatsAppJobQueue:
         job["retry_after_seconds"] = delay_seconds
         encoded = json.dumps(job)
 
-        self.client.zadd(
+        transaction = self.client.pipeline(transaction=True)
+        transaction.zadd(
             self.retry_key,
             {
                 encoded: time.time() + delay_seconds,
             },
         )
+        transaction.lrem(self.processing_key, 1, raw)
+        transaction.execute()
         return "retry"
 
 
