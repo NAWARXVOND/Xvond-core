@@ -12,6 +12,9 @@ def bind_conversation_source(
     channel_id: int | None = None,
     external_contact_id: str | None = None,
 ) -> AIConversation:
+    # Source identity is immutable once established. Lock the row so two
+    # simultaneous first messages cannot both observe an unbound conversation
+    # and race to attach different channels/contacts.
     conversation = (
         db.query(AIConversation)
         .filter(
@@ -19,6 +22,7 @@ def bind_conversation_source(
             AIConversation.company_id == company_id,
             AIConversation.agent_id == agent_id,
         )
+        .with_for_update()
         .first()
     )
     if conversation is None:
