@@ -28,6 +28,12 @@ def test_support_can_read_operational_control_plane():
     assert 'def whatsapp_worker_status(current_admin: User = Depends(require_xvond_operator))' in OPERATIONS
 
 
+def test_support_company_view_minimizes_tenant_identity_data():
+    assert 'support_view = current_admin.role == "support"' in COMPANY_VIEW
+    assert 'user_payload = [] if support_view else [' in COMPANY_VIEW
+    assert '"user_count": len(users)' in COMPANY_VIEW
+
+
 def test_support_cannot_mutate_production_or_reconcile_incidents():
     assert 'def create_company(data: CompanyCreate, current_admin: User = Depends(require_xvond_admin))' in ADMIN
     assert 'current_admin: User = Depends(require_xvond_admin),' in ADMIN
