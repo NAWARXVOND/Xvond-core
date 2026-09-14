@@ -17,6 +17,7 @@ CAPABILITY_PORTAL_ITEMS = (
             "label": "Quotation Requests",
             "loader": "business",
             "capability_module": "quotation",
+            "group": "Customer Operations",
         },
     ),
     (
@@ -26,6 +27,7 @@ CAPABILITY_PORTAL_ITEMS = (
             "label": "Bookings",
             "loader": "business",
             "capability_module": "booking",
+            "group": "Customer Operations",
         },
     ),
     (
@@ -35,6 +37,7 @@ CAPABILITY_PORTAL_ITEMS = (
             "label": "Orders & Requests",
             "loader": "business",
             "capability_module": "orders",
+            "group": "Customer Operations",
         },
     ),
     (
@@ -44,6 +47,7 @@ CAPABILITY_PORTAL_ITEMS = (
             "label": "Leads",
             "loader": "business",
             "capability_module": "lead_management",
+            "group": "Customer Operations",
         },
     ),
     (
@@ -54,29 +58,57 @@ CAPABILITY_PORTAL_ITEMS = (
             "loader": "business",
             "capability_module": "customer_support",
             "include_handoffs": True,
+            "group": "Customer Operations",
         },
     ),
 )
 
 SERVICE_PORTAL_REGISTRY = {
     "ai_agents": {
-        "group": "AI Agents",
+        "group": "AI Workforce",
         "items": [
-            {"id": "agents", "label": "AI Employees", "loader": "agents"},
-            {"id": "chat", "label": "Test AI Employee", "loader": "chat"},
-            {"id": "conversations", "label": "Inbox", "loader": "conversations"},
-            {"id": "customers", "label": "Customers", "loader": "customers"},
+            {
+                "id": "agents",
+                "label": "AI Employees",
+                "loader": "agents",
+                "group": "AI Workforce",
+            },
+            {
+                "id": "chat",
+                "label": "Test AI Employee",
+                "loader": "chat",
+                "group": "AI Workforce",
+            },
+            {
+                "id": "usage",
+                "label": "AI Usage",
+                "loader": "usage",
+                "group": "AI Workforce",
+            },
+            {
+                "id": "conversations",
+                "label": "Inbox",
+                "loader": "conversations",
+                "group": "Customer Operations",
+            },
+            {
+                "id": "customers",
+                "label": "Customers",
+                "loader": "customers",
+                "group": "Customer Operations",
+            },
             {
                 "id": "business-analytics",
                 "label": "Business Analytics",
                 "loader": "customer-analytics",
+                "group": "Customer Operations",
             },
             {
                 "id": "notifications",
                 "label": "Notifications",
                 "loader": "customer-notifications",
+                "group": "Customer Operations",
             },
-            {"id": "usage", "label": "Usage", "loader": "usage"},
         ],
     },
     "automation": {
@@ -102,7 +134,7 @@ SERVICE_PORTAL_REGISTRY = {
         ],
     },
     "integrations": {
-        "group": "AI Integrations",
+        "group": "Connected Systems",
         "items": [
             {
                 "id": "integrations",
@@ -118,7 +150,7 @@ SERVICE_ORDER = ("ai_agents", "automation", "analytics", "integrations")
 
 
 def _item_with_group(item: dict, group: str, service_code: str | None = None) -> dict:
-    value = {**item, "group": group}
+    value = {**item, "group": item.get("group") or group}
     if service_code and not value.get("service_code"):
         value["service_code"] = service_code
     return value
@@ -134,6 +166,17 @@ def build_customer_portal_navigation(
     navigation = [
         {"id": "dashboard", "label": "Overview", "loader": "dashboard", "group": "Workspace"}
     ]
+
+    if "ai_agents" in active:
+        navigation.append(
+            {
+                "id": "business-profile",
+                "label": "Business Profile",
+                "loader": "business-profile",
+                "group": "Company",
+                "service_code": "ai_agents",
+            }
+        )
 
     ordered_services = [code for code in SERVICE_ORDER if code in active]
     ordered_services.extend(sorted(active.difference(ordered_services)))
@@ -154,7 +197,7 @@ def build_customer_portal_navigation(
 
         group = definition["group"]
         for item in definition["items"]:
-            if service_code == "ai_agents" and item["id"] == "usage":
+            if service_code == "ai_agents" and item["id"] == "business-analytics":
                 for capability, capability_item in CAPABILITY_PORTAL_ITEMS:
                     if capability in modules:
                         navigation.append(
@@ -162,6 +205,14 @@ def build_customer_portal_navigation(
                         )
             navigation.append(_item_with_group(item, group, service_code))
 
+    navigation.append(
+        {
+            "id": "account",
+            "label": "Account & Security",
+            "loader": "account",
+            "group": "Account",
+        }
+    )
     navigation.append(
         {"id": "billing", "label": "Billing", "loader": "billing", "group": "Account"}
     )
