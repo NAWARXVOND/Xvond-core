@@ -12,26 +12,26 @@ def test_control_center_polish_is_loaded_last():
     )
 
 
-def test_control_center_polish_contains_core_product_controls():
+def test_control_center_polish_contains_operator_product_controls():
     js = (ROOT / "frontend/admin/control-center-polish.js").read_text(encoding="utf-8")
     required = [
         "Needs Attention",
-        "Active Channel",
-        "Limit exceeded",
-        "All modes",
-        "All channels",
-        "Search name, phone, email, tag",
-        "All types",
-        "Mark all read",
-        "previous-period comparison",
-        "External delivery not connected",
-        "WhatsApp disconnected",
+        "Live Channels",
+        "limit reached",
+        "WhatsApp connection needs attention",
+        "External Reconciliation",
+        "Company Subscription",
+        "Global Package Catalog",
+        "Global Xvond package",
+        "Customer content is intentionally excluded",
     ]
     for value in required:
         assert value in js
 
 
-def test_customer_ops_filters_keep_company_scope():
+def test_operator_control_center_does_not_reintroduce_tenant_customer_ops():
     js = (ROOT / "frontend/admin/control-center-polish.js").read_text(encoding="utf-8")
-    assert "/admin/customer-operations/companies/${xvondWorkspace.companyId}/analytics" in js
-    assert "xvondWorkspace.data" in js
+    assert "/admin/customer-operations/" not in js
+    assert "xvondWorkspace?.data" in js
+    assert "Customer payloads remain in the tenant workspace" in js
+    assert "['Conversations','Customers','Notifications','Business Analytics']" in js
