@@ -39,12 +39,8 @@ class WhatsAppSession(Base):
     handoff_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
     human_takeover_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_human_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-    # Durable ordering guard for delayed Coexistence echoes. An explicit
-    # Return-to-AI wins over any business-app echo sent at or before this time.
     ai_resumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     ai_resume_echo_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -71,7 +67,12 @@ class WhatsAppInboundMessage(Base):
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), nullable=False, index=True)
     agent_id: Mapped[int] = mapped_column(ForeignKey("ai_agents.id"), nullable=False, index=True)
     wa_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    # processing can survive an inner business-action commit. A later queue retry
+    # may resume it; processed/ignored are terminal and are treated as duplicates.
+    status: Mapped[str] = mapped_column(String(30), default="processing", nullable=False, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
 class WhatsAppOutboundDelivery(Base):
@@ -96,17 +97,12 @@ class WhatsAppOutboundDelivery(Base):
     message_id: Mapped[int] = mapped_column(ForeignKey("ai_messages.id"), nullable=False, index=True)
     inbound_external_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     wa_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-
-    # pending -> sending -> accepted -> delivered -> read
-    #                  \-> failed (definite rejection, optionally retryable)
-    #                  \-> unknown (ambiguous network/process failure; no blind resend)
     status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False, index=True)
     retryable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     provider_message_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True, index=True)
     last_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_error_code: Mapped[str | None] = mapped_column(String(160), nullable=True)
-
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
