@@ -1,4 +1,7 @@
 from datetime import UTC, datetime
+import os
+from pathlib import Path
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -33,6 +36,40 @@ class ReconcileExternalOperation(BaseModel):
 
 def _utcnow_naive() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _backup_marker(name: str, *, expected: bool, stale_after: int) -> dict:
+    status_dir = Path(os.getenv("BACKUP_STATUS_DIR", "/backup-status"))
+    path = status_dir / name
+    now = int(time.time())
+    if not expected:
+        return {
+            "status": "not_configured",
+            "expected": False,
+            "last_success_at": None,
+            "age_seconds": None,
+            "stale_after_seconds": stale_after,
+        }
+    try:
+        epoch = int(path.read_text(encoding="utf-8").strip())
+        if epoch <= 0 or epoch > now + 300:
+            raise ValueError("invalid backup marker")
+    except (OSError, ValueError):
+        return {
+            "status": "missing",
+            "expected": True,
+            "last_success_at": None,
+            "age_seconds": None,
+            "stale_after_seconds": stale_after,
+        }
+    age = max(0, now - epoch)
+    return {
+        "status": "healthy" if age <= stale_after else "stale",
+        "expected": True,
+        "last_success_at": datetime.fromtimestamp(epoch, UTC),
+        "age_seconds": age,
+        "stale_after_seconds": stale_after,
+    }
 
 
 def get_company_or_404(db, company_id: int):
@@ -74,6 +111,40 @@ def _delivery_metadata(item: WhatsAppOutboundDelivery) -> dict:
         "failed_at": item.failed_at,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
+    }
+
+
+@router.get("/backups/status")
+def backup_status(current_admin: User = Depends(require_xvond_admin)):
+    """Backup freshness only; repository locations and credentials stay private."""
+    try:
+        stale_after = int(os.getenv("BACKUP_STALE_AFTER_SECONDS", "129600"))
+    except ValueError:
+        stale_after = 129600
+    stale_after = max(3600, min(stale_after, 604800))
+    offsite_expected = bool(
+        str(os.getenv("RESTIC_REPOSITORY") or "").strip()
+        and str(os.getenv("RESTIC_PASSWORD") or "").strip()
+    )
+    local = _backup_marker(
+        "local_success_epoch",
+        expected=True,
+        stale_after=stale_after,
+    )
+    offsite = _backup_marker(
+        "offsite_success_epoch",
+        expected=offsite_expected,
+        stale_after=stale_after,
+    )
+    overall = "healthy"
+    if local["status"] != "healthy" or (
+        offsite_expected and offsite["status"] != "healthy"
+    ):
+        overall = "attention_required"
+    return {
+        "status": overall,
+        "local": local,
+        "offsite": offsite,
     }
 
 
