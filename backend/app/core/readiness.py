@@ -8,6 +8,7 @@ from backend.app.core.config_secrets import (
     public_config,
     reveal_config,
 )
+from backend.app.core.error_safety import safe_error_label
 from backend.app.models.company import Company
 from backend.app.models.company_module import CompanyModule
 from backend.app.models.company_profile import CompanyProfile
@@ -38,6 +39,8 @@ def validate_config(
         validator(item_type, config or {})
         return True, None
     except ValueError as exc:
+        # Validators contain Xvond-authored configuration messages, not provider
+        # response bodies. Keep those actionable setup messages for Operations.
         return False, str(exc)
 
 
@@ -103,7 +106,7 @@ def _provider_runtime(
             agent.model,
         )
     except Exception as exc:
-        return [], str(exc)
+        return [], safe_error_label(exc)
     finally:
         set_quality_tier_cap(None)
     real = [selection for selection in selections if selection.provider != "mock"]
@@ -229,8 +232,6 @@ def company_readiness(db, company_id: int):
         runtime_tools = tool_executor.get_agent_tools(db=db, agent_id=agent.id)
         ready_action = any(item.get("name") == "action_request" for item in runtime_tools)
 
-        # Setup readiness is based on configured channels, not live channels.
-        # Live state is reported separately and is owned by channel activation.
         channels = (
             db.query(AgentChannel)
             .filter(AgentChannel.agent_id == agent.id)
@@ -286,7 +287,7 @@ def company_readiness(db, company_id: int):
         if not provider_ready:
             issues.append(
                 "No real routed AI provider/model is available"
-                + (f": {provider_error}" if provider_error else "")
+                + (f" ({provider_error})" if provider_error else "")
             )
         if not prompt_ready:
             issues.append("System prompt is empty")
@@ -377,9 +378,9 @@ def company_readiness(db, company_id: int):
     elif not setup_ready_agents:
         company_issues.append("No setup-ready AI employee")
     if not company.active:
-        company_warnings.append("Company is currently inactive")
+        company_warnings.append("Company runtime is currently stopped")
     elif not live_agents:
-        company_warnings.append("Company is active but no AI employee/channel is live for customers")
+        company_warnings.append("Company runtime is active but no AI employee/channel is live for customers")
 
     setup_ready = bool(
         company_profile_ready
@@ -419,6 +420,8 @@ def company_readiness(db, company_id: int):
             "id": company.id,
             "name": company.name,
             "active": company.active,
+            "lifecycle_status": company.lifecycle_status,
+            "lifecycle_updated_at": company.lifecycle_updated_at,
         },
         "company_profile_ready": company_profile_ready,
         "profile_ready": company_profile_ready,
