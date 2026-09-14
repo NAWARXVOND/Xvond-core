@@ -107,6 +107,21 @@ def _limit_warning_count(services: list[dict]) -> int:
 def _staff_overview(db, current_user: User, company: Company) -> dict:
     agents = db.query(AIAgent).filter(AIAgent.company_id == company.id).all()
     channels = db.query(AgentChannel).filter(AgentChannel.company_id == company.id).all()
+    conversation_count = (
+        db.query(func.count(AIConversation.id))
+        .filter(AIConversation.company_id == company.id)
+        .scalar()
+        or 0
+    )
+    active_handoffs = (
+        db.query(func.count(HumanHandoff.id))
+        .filter(
+            HumanHandoff.company_id == company.id,
+            HumanHandoff.status.in_(ACTIVE_HANDOFF_STATES),
+        )
+        .scalar()
+        or 0
+    )
     return {
         "company": {
             "id": company.id,
@@ -116,14 +131,20 @@ def _staff_overview(db, current_user: User, company: Company) -> dict:
         "services": [],
         "subscription": None,
         "portal": {
-            "access_level": "staff",
+            "access_level": "operator",
             "navigation": [
                 {
                     "id": "dashboard",
                     "label": "Overview",
                     "loader": "dashboard",
                     "group": "Workspace",
-                }
+                },
+                {
+                    "id": "conversations",
+                    "label": "Customer Inbox",
+                    "loader": "conversations",
+                    "group": "Operations",
+                },
             ],
             "active_services": [],
             "capabilities": [],
@@ -134,6 +155,8 @@ def _staff_overview(db, current_user: User, company: Company) -> dict:
             "active_agents": sum(1 for item in agents if item.enabled),
             "channels": len(channels),
             "active_channels": sum(1 for item in channels if item.enabled),
+            "conversations": int(conversation_count),
+            "active_handoffs": int(active_handoffs),
         },
         "channels": [],
         "integrations": [],
