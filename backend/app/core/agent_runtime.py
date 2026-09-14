@@ -11,6 +11,7 @@ from backend.app.core.ai.engine import ai_engine
 from backend.app.core.ai.provider_policy import runtime_selections
 from backend.app.core.config.settings import settings
 from backend.app.core.config_secrets import reveal_config
+from backend.app.core.error_safety import safe_error_label
 from backend.app.core.module_access import company_module_enabled
 from backend.app.models.company import Company
 from backend.app.models.company_module import CompanyModule
@@ -68,12 +69,6 @@ _TOOL_INTENT_TERMS = (
 
 
 def _message_may_need_tools(message: str, history: str = "") -> bool:
-    """Avoid sending large tool schemas for purely informational turns.
-
-    A short continuation can still need a tool, so inspect a small recent history window
-    in addition to the current message. This is deliberately conservative: a false
-    positive only keeps the old behavior, while a false negative could hide an action.
-    """
     current = " ".join(str(message or "").lower().split())
     recent = " ".join(str(history or "")[-1200:].lower().split())
     combined = f"{recent} {current}".strip()
@@ -185,11 +180,20 @@ class AgentRuntime:
             raise HTTPException(404, "Conversation not found")
         return conversation
 
-    def build_history(self, db, conversation_id: int) -> str:
+    def build_history(
+        self,
+        db,
+        conversation_id: int,
+        *,
+        exclude_message_id: int | None = None,
+    ) -> str:
+        query = db.query(AIMessage).filter(
+            AIMessage.conversation_id == conversation_id
+        )
+        if exclude_message_id is not None:
+            query = query.filter(AIMessage.id != exclude_message_id)
         messages = (
-            db.query(AIMessage)
-            .filter(AIMessage.conversation_id == conversation_id)
-            .order_by(AIMessage.id.desc())
+            query.order_by(AIMessage.id.desc())
             .limit(self.HISTORY_MAX_MESSAGES)
             .all()
         )
@@ -313,12 +317,17 @@ class AgentRuntime:
         channel_id: int | None = None,
         external_contact_id: str | None = None,
         system_prompt_override: str | None = None,
+        user_message_source_key: str | None = None,
     ) -> dict:
         message = (message or "").strip()
         if not message:
             raise HTTPException(400, "Message is required")
         if len(message) > 12000:
             raise HTTPException(413, "Message is too long")
+
+        source_key = str(user_message_source_key or "").strip() or None
+        if source_key and len(source_key) > 320:
+            raise HTTPException(400, "Message source identity is too long")
 
         end_to_end_started_at = perf_counter()
         stage_timings_ms: dict[str, int] = {}
@@ -327,7 +336,9 @@ class AgentRuntime:
         self.assert_company_runtime_access(db, company_id)
         limits_service.check_token_limit(db, company_id)
         agent = self.get_agent(db, company_id, agent_id)
-        stage_timings_ms["access_and_limits"] = int((perf_counter() - stage_started) * 1000)
+        stage_timings_ms["access_and_limits"] = int(
+            (perf_counter() - stage_started) * 1000
+        )
 
         stage_started = perf_counter()
         try:
@@ -339,7 +350,7 @@ class AgentRuntime:
                 message=message,
             )
         except ValueError as exc:
-            raise HTTPException(503, str(exc)) from exc
+            raise HTTPException(503, safe_error_label(exc)) from exc
         if not selections:
             raise HTTPException(503, "No eligible AI provider/model is available")
         stage_timings_ms["routing"] = int((perf_counter() - stage_started) * 1000)
@@ -352,20 +363,59 @@ class AgentRuntime:
             db, company_id, agent.id, conversation_id, message
         )
         if channel_type:
-            from backend.app.modules.channels.conversation_source import bind_conversation_source
+            from backend.app.modules.channels.conversation_source import (
+                bind_conversation_source,
+            )
+
             try:
                 bind_conversation_source(
-                    db, conversation_id=conversation.id, company_id=company_id,
-                    agent_id=agent.id, channel_type=channel_type,
-                    channel_id=channel_id, external_contact_id=external_contact_id,
+                    db,
+                    conversation_id=conversation.id,
+                    company_id=company_id,
+                    agent_id=agent.id,
+                    channel_type=channel_type,
+                    channel_id=channel_id,
+                    external_contact_id=external_contact_id,
                 )
             except ValueError as exc:
                 raise HTTPException(409, str(exc)) from exc
-        system_prompt = system_prompt_override if system_prompt_override is not None else self.build_runtime_system_prompt(db, agent, conversation)
-        history = self.build_history(db, conversation.id)
+
+        existing_user_message = None
+        if source_key:
+            existing_user_message = (
+                db.query(AIMessage)
+                .filter(
+                    AIMessage.source_key == source_key,
+                    AIMessage.conversation_id == conversation.id,
+                    AIMessage.role == "user",
+                )
+                .first()
+            )
+            if existing_user_message is not None and (
+                str(existing_user_message.content or "").strip() != message
+            ):
+                raise HTTPException(
+                    409,
+                    "Message source identity is already bound to different content",
+                )
+
+        system_prompt = (
+            system_prompt_override
+            if system_prompt_override is not None
+            else self.build_runtime_system_prompt(db, agent, conversation)
+        )
+        history = self.build_history(
+            db,
+            conversation.id,
+            exclude_message_id=(
+                existing_user_message.id if existing_user_message is not None else None
+            ),
+        )
         customer_memory = build_customer_memory(db, conversation)
         business_clock = self.build_business_clock(db, company_id)
-        stage_timings_ms["conversation_context"] = int((perf_counter() - stage_started) * 1000)
+        stage_timings_ms["conversation_context"] = int(
+            (perf_counter() - stage_started) * 1000
+        )
 
         stage_started = perf_counter()
         knowledge = ""
@@ -379,18 +429,24 @@ class AgentRuntime:
         available_tools = []
         tools_relevant = allow_tools and _message_may_need_tools(message, history)
         if tools_relevant and company_module_enabled(db, company_id, "tools"):
-            available_tools = tool_executor.get_agent_tools(db=db, agent_id=agent.id)
+            available_tools = tool_executor.get_agent_tools(
+                db=db,
+                agent_id=agent.id,
+            )
         tool_definitions = [
             {
                 "name": tool["name"],
                 "description": tool["description"],
                 "input_schema": tool.get(
-                    "input_schema", {"type": "object", "properties": {}}
+                    "input_schema",
+                    {"type": "object", "properties": {}},
                 ),
             }
             for tool in available_tools
         ]
-        stage_timings_ms["tool_discovery"] = int((perf_counter() - stage_started) * 1000)
+        stage_timings_ms["tool_discovery"] = int(
+            (perf_counter() - stage_started) * 1000
+        )
 
         context_parts = [GROUNDING_POLICY, business_clock]
         if knowledge:
@@ -418,13 +474,17 @@ class AgentRuntime:
         )
         runtime_message = "\n\n".join(context_parts)
 
-        user_message = AIMessage(
-            conversation_id=conversation.id,
-            role="user",
-            content=message,
-        )
-        db.add(user_message)
-        db.flush()
+        if existing_user_message is not None:
+            user_message = existing_user_message
+        else:
+            user_message = AIMessage(
+                conversation_id=conversation.id,
+                role="user",
+                content=message,
+                source_key=source_key,
+            )
+            db.add(user_message)
+            db.flush()
 
         tool_outputs = None
         continuation = None
@@ -458,7 +518,9 @@ class AgentRuntime:
                                 tool_outputs=None,
                                 continuation=None,
                             )
-                            attempt_ms = int((perf_counter() - attempt_started) * 1000)
+                            attempt_ms = int(
+                                (perf_counter() - attempt_started) * 1000
+                            )
                             total_model_ms += attempt_ms
                             routing_attempts.append(
                                 {
@@ -471,7 +533,9 @@ class AgentRuntime:
                             )
                             break
                         except Exception as exc:
-                            attempt_ms = int((perf_counter() - attempt_started) * 1000)
+                            attempt_ms = int(
+                                (perf_counter() - attempt_started) * 1000
+                            )
                             total_model_ms += attempt_ms
                             last_error = exc
                             routing_attempts.append(
@@ -481,7 +545,7 @@ class AgentRuntime:
                                     "reason": selection.reason,
                                     "success": False,
                                     "latency_ms": attempt_ms,
-                                    "error": str(exc)[:500],
+                                    "error": safe_error_label(exc),
                                 }
                             )
                     if result is None:
@@ -499,14 +563,20 @@ class AgentRuntime:
                         tool_outputs=tool_outputs,
                         continuation=continuation,
                     )
-                    attempt_ms = int((perf_counter() - attempt_started) * 1000)
+                    attempt_ms = int(
+                        (perf_counter() - attempt_started) * 1000
+                    )
                     total_model_ms += attempt_ms
             except Exception as exc:
-                provider_latency_ms = int((perf_counter() - provider_started_at) * 1000)
+                provider_latency_ms = int(
+                    (perf_counter() - provider_started_at) * 1000
+                )
                 stage_timings_ms["model"] = total_model_ms
                 stage_timings_ms["tool_execution"] = total_tool_execution_ms
-                end_to_end_latency_ms = int((perf_counter() - end_to_end_started_at) * 1000)
-                error_message = str(exc)[:2000]
+                end_to_end_latency_ms = int(
+                    (perf_counter() - end_to_end_started_at) * 1000
+                )
+                error_message = safe_error_label(exc)
                 if commit:
                     db.rollback()
                     self._record_failed_request(
@@ -566,7 +636,9 @@ class AgentRuntime:
                     arguments=call.arguments or {},
                     conversation_id=conversation.id,
                 )
-                tool_latency_ms = int((perf_counter() - tool_started) * 1000)
+                tool_latency_ms = int(
+                    (perf_counter() - tool_started) * 1000
+                )
                 total_tool_execution_ms += tool_latency_ms
                 output = ToolOutput(
                     call_id=call.id,
@@ -608,11 +680,15 @@ class AgentRuntime:
             )
 
         if not final_text:
-            final_text = "The agent completed its actions but did not return a final response."
+            final_text = (
+                "The agent completed its actions but did not return a final response."
+            )
 
         stage_timings_ms["model"] = total_model_ms
         stage_timings_ms["tool_execution"] = total_tool_execution_ms
-        provider_latency_ms = int((perf_counter() - provider_started_at) * 1000)
+        provider_latency_ms = int(
+            (perf_counter() - provider_started_at) * 1000
+        )
 
         persistence_started = perf_counter()
         assistant_message = AIMessage(
@@ -647,7 +723,9 @@ class AgentRuntime:
         stage_timings_ms["persistence_before_commit"] = int(
             (perf_counter() - persistence_started) * 1000
         )
-        end_to_end_latency_ms = int((perf_counter() - end_to_end_started_at) * 1000)
+        end_to_end_latency_ms = int(
+            (perf_counter() - end_to_end_started_at) * 1000
+        )
 
         audit_service.log(
             db=db,
@@ -677,7 +755,9 @@ class AgentRuntime:
             stage_timings_ms["commit_and_refresh"] = int(
                 (perf_counter() - commit_started) * 1000
             )
-            end_to_end_latency_ms = int((perf_counter() - end_to_end_started_at) * 1000)
+            end_to_end_latency_ms = int(
+                (perf_counter() - end_to_end_started_at) * 1000
+            )
 
         return {
             "conversation_id": conversation.id,
@@ -689,6 +769,7 @@ class AgentRuntime:
                 "id": user_message.id,
                 "role": user_message.role,
                 "content": user_message.content,
+                "source_key": user_message.source_key,
             },
             "response": {
                 "id": assistant_message.id,
