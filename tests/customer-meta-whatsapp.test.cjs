@@ -51,7 +51,7 @@ for (const sdkAlreadyLoaded of [false, true]) {
             config_id: config.config_id,
             response_type: 'code',
             override_default_response_type: true,
-            extras: {setup: {}}
+            extras: {setup: {}, version: 'v4'}
         }]);
         assert.deepEqual(calls.api, ['/customer/meta/whatsapp/embedded-signup/config?agent_id=7']);
         assert.equal(calls.scripts.length, sdkAlreadyLoaded ? 0 : 1);
@@ -68,6 +68,7 @@ for (const sdkAlreadyLoaded of [false, true]) {
             override_default_response_type: true,
             extras: {
                 setup: {},
+                version: 'v4',
                 featureType: 'whatsapp_business_app_onboarding',
                 sessionInfoVersion: '3'
             }
