@@ -72,8 +72,14 @@ async function loadDashboard(){
       api("/admin/operations/workers/whatsapp").catch(()=>({configured:false,worker_active:false,worker_lease_ttl_seconds:0,queued:0,processing:0,retrying:0,dead:0}))
     ]);
     const workerState=!worker.configured?"Not configured":worker.worker_active?"Online":"Offline";
+    const lifecycle=data.lifecycle_counts||{};
     const cards=[
       ["Companies",adminNumber(data.companies)],
+      ["Onboarding",adminNumber(lifecycle.onboarding)],
+      ["Testing",adminNumber(lifecycle.testing)],
+      ["Live",adminNumber(lifecycle.live)],
+      ["Paused",adminNumber(lifecycle.paused)],
+      ["Suspended",adminNumber(lifecycle.suspended)],
       ["Runtime Active",adminNumber(data.active_companies)],
       ["Active Employees",`${adminNumber(data.active_agents)} / ${adminNumber(data.agents)}`],
       ["Active Channels",adminNumber(data.active_channels)],
@@ -110,7 +116,7 @@ function openAddAIEmployee(companyId){simpleCompanyId=Number(companyId);openModa
 function openModal(title,body){document.getElementById("modal-title").textContent=title;document.getElementById("modal-body").innerHTML=body;document.getElementById("modal").classList.remove("hidden")}
 function closeModal(){document.getElementById("modal").classList.add("hidden")}
 
-function openAgentTestChat(companyId,agentId){agentTestConversationId=null;openModal("Test AI Employee",`<div id="agent-test-transcript" class="agent-test-transcript"><p class="meta">Internal test conversation. Real provider usage is recorded.</p></div><div class="form-group"><label>Message</label><textarea id="agent-test-message" placeholder="Type a test message"></textarea></div><button id="agent-test-send" class="modal-submit" onclick="sendAgentTestMessage(${companyId},${agentId})">Send Message</button>`)}
+function openAgentTestChat(companyId,agentId){agentTestConversationId=null;openModal("Test AI Employee",`<div id="agent-test-transcript" class="agent-test-transcript"><p class="meta">Internal test conversation. Real provider usage is recorded.</p></div><div class="form-group"><label>Message</label><textarea id="agent-test-message" placeholder="Type a message..."></textarea></div><button id="agent-test-send" class="modal-submit" onclick="sendAgentTestMessage(${companyId},${agentId})">Send Message</button>`)}
 async function sendAgentTestMessage(companyId,agentId){
   const input=document.getElementById("agent-test-message"),button=document.getElementById("agent-test-send"),transcript=document.getElementById("agent-test-transcript"),message=input.value.trim();if(!message){alert("Message is required.");return}button.disabled=true;button.textContent="Sending...";
   try{const result=await api(`/admin/companies/${companyId}/agents/${agentId}/test-chat`,{method:"POST",body:JSON.stringify({message,conversation_id:agentTestConversationId})});agentTestConversationId=result.conversation_id;transcript.innerHTML+=`<div class="test-message test-user"><strong>You</strong><div>${escapeAdmin(message)}</div></div><div class="test-message test-assistant"><strong>AI Employee</strong><div>${escapeAdmin(result.response?.content||"")}</div><small>${Number(result.usage?.total_tokens||0)} tokens · ${Number(result.usage?.latency_ms||0)} ms</small></div>`;input.value="";transcript.scrollTop=transcript.scrollHeight}catch(error){transcript.innerHTML+=`<div class="test-message test-error"><strong>Error</strong><div>${escapeAdmin(error.message)}</div></div>`}finally{button.disabled=false;button.textContent="Send Message"}
