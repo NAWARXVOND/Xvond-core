@@ -21,10 +21,14 @@ Repository: Nawar-Alsafadi-0/Xvond-core only. Baseline: 011eea9.
 | Frontend | Slow requests could repaint another selected conversation; polling erased drafts | Request sequence guards, selected-conversation check, preserve current draft |
 | Routing/cache | Core routes existed but no deployable shared-domain location map | Supply nginx include; no-store on authenticated responses and portal HTML; fingerprint changed frontend assets |
 | Secret handling | Raw Meta/network exception text reached APIs/logs | Safe Meta errors, class-only embedding/runtime/retry diagnostics |
+| Company lifecycle | Runtime/commercial state could be conflated | Canonical onboarding/testing/live/paused/suspended/cancelled/archived lifecycle with readiness-gated transitions and separate emergency runtime control |
+| Employee go-live | Customer-side controls could bypass delivery ownership | Xvond Delivery Readiness owns activation; customer managers may stop an employee but cannot self-activate production AI |
+| Support access | Support previously lacked a distinct least-privilege operations plane | Added authenticated read-only operator role, read-only operations UI, metadata-only company view, and tests that keep production mutations admin-only |
+| Production acceptance | Pre-live checker incorrectly required already-live runtime and omitted operational gates | Acceptance runner now supports pre-live and --require-live modes, checks worker/backups/unresolved operations/deliveries, and emits safe error labels |
 
 ## Production routing and release consistency
 
-`/admin-ui` already existed in FastAPI. Core code cannot override a reverse proxy
+`/admin-ui` already exists in FastAPI. Core code cannot override a reverse proxy
 that serves the landing page before the request reaches Core. Include
 `ops/nginx/core-locations.conf` in the existing xvond.com HTTPS server, adjust the
 loopback port if APP_PORT differs, run `nginx -t`, then reload nginx. This file
@@ -61,8 +65,7 @@ contracts. A WABA subscription does not prove that the application listens for
 `smb_message_echoes`. The implementation checks the active
 `whatsapp_business_account` subscription fields and verifies the app identity in
 the WABA subscription list. Never copy access tokens into screenshots, logs, or
-PRs. Meta SDK references: [application subscriptions](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/application.py),
-[WABA subscriptions](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/whatsappbusinessaccount.py).
+PRs.
 
 Use the existing Business App number and the intended Coexistence Embedded
 Signup configuration. Check Meta permissions, approved configuration, callback
@@ -77,50 +80,63 @@ human reply to the same number, and explicitly return to AI. Repeat the webhook
 and confirm no duplicate messages. Perform the check on the deployed image;
 local mocks cannot prove production Meta subscriptions or routing.
 
-## Limits that require explicit verification
+## Verified repository / CI gates
 
-- Production database, nginx/CDN and Meta state have not been changed or inferred.
+Exact-head CI run #884 for commit `e85fcbcab93f923fa22a74debbeeb4720eee47bf`
+completed successfully. It verified:
+
+- dependency consistency (`pip check`)
+- Python compilation
+- a fresh PostgreSQL 17 database upgraded through Alembic head
+- all admin/customer JavaScript syntax
+- all shell-script syntax
+- all 3 Meta Embedded Signup Node tests
+- production Compose validation
+- **516 Python tests passed**
+- production Docker image build completed successfully
+
+The repository also includes dedicated regression coverage for conversation
+identity, duplicate webhooks, delayed echoes, human takeover/return-to-AI,
+outbound delivery retries and unknown outcomes, lifecycle/readiness, customer
+role boundaries, Support read-only RBAC/UI, onboarding workflow, production
+acceptance, backup health, operations health, Meta Coexistence status, and
+customer dashboard/Inbox consistency.
+
+## Production-only acceptance gates
+
+The repository is now CI-clean; the remaining gates are environment facts that
+cannot be proven by repository CI and must be checked on the deployed production
+image:
+
+1. Deploy one reviewed commit/image to API and WhatsApp worker and verify their
+   image IDs match.
+2. Run Alembic to head against the real production database after a backup.
+3. Run `scripts/production_acceptance.py` for the target company/employee before
+   Go Live; optionally include `--live-ai` for a real provider health check.
+4. Apply/verify the nginx Core routes and confirm `/admin-ui`, `/customer-ui` and
+   `/health/ready` resolve to the intended Core origin.
+5. Verify real Meta Coexistence with an actual customer message, native Business
+   App reply, observed `smb_message_echoes`, AI suppression during human control,
+   portal human reply, explicit Return to AI and duplicate-webhook replay.
+6. Confirm backup freshness, worker health, zero unexplained unresolved external
+   operations and no unsafe `unknown` WhatsApp delivery resend.
+7. After Go Live, rerun production acceptance with `--require-live` and monitor
+   first-day queue/dead jobs, AI failures/latency, handoffs, actions and delivery
+   states.
+
+## Known limits / non-blocking follow-up
+
 - No safe source means no fabricated services; unresolved legacy source conflicts
-  remain for investigation instead of overwriting customer history.
-- Meta accepting a send followed by a process crash before database commit is an
-  external-delivery ambiguity. This patch does not claim exactly-once delivery
-  across the database and Meta API. A durable outbound reconciliation design is
-  still needed for that guarantee.
-- Queue recovery currently assumes a single active worker. Multi-worker leases
-  and worker heartbeat readiness require further validation before scaling.
-- The audit is broad but is not a claim that every unknown defect is eliminated.
-  Final test/CI results and outstanding review items must accompany the PR.
-
-## Review checkpoint (draft, not deployment-ready)
-
-Local verification: 452 Python tests, two Meta SDK Node tests, all admin/customer
-JavaScript syntax checks, Python compilation, pip dependency consistency,
-single Alembic head, and git diff whitespace checks passed. The local Docker
-daemon is unavailable, so PostgreSQL migration execution, Compose validation,
-and image build must be verified in CI. No dedicated lint or typecheck task is
-configured in this repository.
-
-Outstanding before considering this audit complete:
-
-1. Run the new migration on both a fresh PostgreSQL database and representative
-   legacy fixtures; test its safe downgrade guard and conflicting-source cases.
-2. Add real Redis/PostgreSQL concurrency tests for ingress markers, portal
-   claim/return races, retry atomicity and a takeover during AI generation.
-3. Review pending echo versus Return-to-AI ordering, duplicate old echo delivery,
-   Redis outage behavior after DB commit, and requeue-dead crash recovery.
-4. Validate successful Coexistence subscription payloads and echo activation;
-   minimize remote probe latency and show all readiness states in both portals.
-5. Reconcile customer dashboard counts/handoff endpoints with Inbox visibility
-   and per-employee access controls; the Inbox fix alone does not fix dashboards.
-6. Review queue worker leases/heartbeat health, webhook status/non-text events,
-   malformed nested message content, log exception redaction across the system,
-   and external-send acknowledgement/reconciliation gaps.
-7. Check website/voice concurrency, runtime failure commits, new source arguments
-   on every caller, and physical channel reconfiguration with existing history.
-8. Add browser regression coverage for stale request guards and drafts, including
-   logout and switching conversations during a pending human send.
-9. Complete the remaining security, RBAC, privacy, integrations, observability,
-   deployment-readiness and error-path review. Preserve Company -> Employee ->
-   Channel -> Conversation; human handoff changes control only.
-10. Check exact-head CI, update the PR/report with remaining findings, and do not
-    merge this draft merely because the existing checks are green.
+  remain visible for investigation rather than being overwritten.
+- Cross-system exactly-once delivery cannot be mathematically guaranteed when a
+  provider accepts a network request immediately before process failure. Durable
+  delivery state and explicit reconciliation prevent blind retry, but `unknown`
+  outcomes still require operator judgment.
+- Multi-worker horizontal scaling needs lease/heartbeat validation before more
+  than one active WhatsApp worker is intentionally deployed.
+- Python 3.14 CI reports deprecation warnings for legacy naive UTC timestamps and
+  upstream Starlette/httpx compatibility. They are not current test failures but
+  should be removed in a focused compatibility cleanup rather than mixed into the
+  production-integrity release.
+- Passing CI is not evidence of the external nginx/CDN/Meta/provider state; those
+  remain production acceptance checks above.
