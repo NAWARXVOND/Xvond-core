@@ -200,14 +200,20 @@ class WhatsAppJobQueue:
         if self.client is None:
             return {
                 "configured": False,
+                "worker_active": False,
+                "worker_lease_ttl_seconds": 0,
                 "queued": 0,
                 "processing": 0,
                 "retrying": 0,
                 "dead": 0,
             }
 
+        worker_owner = self.client.get(self.worker_lock_key)
+        lease_ttl = int(self.client.ttl(self.worker_lock_key)) if worker_owner else 0
         return {
             "configured": True,
+            "worker_active": bool(worker_owner and lease_ttl > 0),
+            "worker_lease_ttl_seconds": max(0, lease_ttl),
             "queued": int(
                 self.client.llen(self.queue_key)
             ),
