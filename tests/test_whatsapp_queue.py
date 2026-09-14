@@ -97,7 +97,7 @@ class FakeRedis:
         return len(self.sorted.setdefault(key, {}))
 
     def eval(self, _script, numkeys, *args):
-        if numkeys == 2:
+        if numkeys == 2 and len(args) == 4:
             retry_key, queue_key, now, limit = args
             due = [
                 (raw, score)
@@ -110,6 +110,23 @@ class FakeRedis:
                 del self.sorted[retry_key][raw]
                 self.lpush(queue_key, raw)
             return len(selected)
+
+        if numkeys == 2 and len(args) == 2:
+            dead_key, queue_key = args
+            raw = self.rpop(dead_key)
+            if raw is None:
+                return 0
+            try:
+                job = json.loads(raw)
+            except (TypeError, ValueError):
+                self.rpush(dead_key, raw)
+                return -1
+            job["attempts"] = 0
+            job.pop("last_error", None)
+            job.pop("last_failed_at", None)
+            job.pop("retry_after_seconds", None)
+            self.lpush(queue_key, json.dumps(job, separators=(",", ":")))
+            return 1
 
         if numkeys == 1 and len(args) == 2:
             key, expected = args
@@ -196,9 +213,7 @@ def test_failed_job_retries_then_moves_to_dead_letter():
     )
 
     assert status == "dead"
-    dead = json.loads(
-        queue.client.data[queue.dead_key][0]
-    )
+    dead = json.loads(queue.client.data[queue.dead_key][0])
     assert dead["attempts"] == 2
     assert dead["last_error"] == "RuntimeError"
 
@@ -260,7 +275,7 @@ def test_dead_job_view_never_exposes_body_or_signature():
     assert "signature" not in item
 
 
-def test_admin_retry_resets_attempts_and_requeues():
+def test_admin_retry_resets_attempts_and_requeues_atomically():
     queue = make_queue()
     queue.client.lpush(
         queue.dead_key,
@@ -271,17 +286,27 @@ def test_admin_retry_resets_attempts_and_requeues():
             "attempts": 5,
             "last_error": "delivery failed",
             "last_failed_at": "2026-08-24T12:00:00+00:00",
+            "retry_after_seconds": 600,
         }),
     )
 
     assert queue.requeue_dead(limit=1) == 1
 
-    queued = json.loads(
-        queue.client.data[queue.queue_key][0]
-    )
+    queued = json.loads(queue.client.data[queue.queue_key][0])
     assert queued["attempts"] == 0
     assert "last_error" not in queued
+    assert "last_failed_at" not in queued
+    assert "retry_after_seconds" not in queued
     assert queue.client.data[queue.dead_key] == []
+
+
+def test_invalid_dead_job_is_not_lost_during_requeue():
+    queue = make_queue()
+    queue.client.lpush(queue.dead_key, "not-json")
+
+    assert queue.requeue_dead(limit=1) == 0
+    assert queue.client.data[queue.dead_key] == ["not-json"]
+    assert queue.client.data.get(queue.queue_key, []) == []
 
 
 def test_retry_delay_increases_with_attempts():
@@ -314,11 +339,9 @@ def test_retry_delay_increases_with_attempts():
 
 def test_blocking_reserve_timeout_has_socket_margin():
     source = (
-        __import__(
-            "pathlib"
-        ).Path(
-            "backend/app/modules/channels/whatsapp_queue.py"
-        ).read_text(encoding="utf-8")
+        __import__("pathlib")
+        .Path("backend/app/modules/channels/whatsapp_queue.py")
+        .read_text(encoding="utf-8")
     )
     assert "socket_timeout=15" in source
     assert "def reserve(self, timeout: int = 5)" in source
