@@ -26,8 +26,8 @@ def test_customer_portal_loads_professional_and_canonical_assets_last():
     html = (ROOT / "frontend/customer/index.html").read_text(encoding="utf-8")
     assert "portal-pro.css?v=20260905-4" in html
     assert "manager-knowledge-controls.js?v=20260905-3" in html
-    assert "portal-canonical.js?v=20260905-4" in html
-    assert html.index("session-security.js?v=20260911-1") < html.index("portal-canonical.js?v=20260905-4")
+    assert "portal-canonical.js?v=20260914-1" in html
+    assert html.index("session-security.js?v=20260911-1") < html.index("portal-canonical.js?v=20260914-1")
 
 
 def test_canonical_portal_layer_does_not_store_bearer_tokens():
