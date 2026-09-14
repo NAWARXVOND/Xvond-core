@@ -1,6 +1,8 @@
 import re
 from datetime import datetime
 
+from redis.exceptions import RedisError
+
 
 _ARABIC_DIACRITICS = re.compile(r"[\u064b-\u065f\u0670]")
 _HUMAN_REQUEST_PATTERNS = (
@@ -94,5 +96,20 @@ def resume_ai(
     session.handoff_reason = None
     session.human_takeover_until = None
     session.ai_resumed_at = current
+
+    # Preserve the exact ingress echo that was pending when an operator chose
+    # Return-to-AI. If that old echo is processed later it may still be mirrored
+    # to the Inbox, but it must not undo the operator's newer control decision.
+    marker = None
+    phone_number_id = str(getattr(session, "phone_number_id", "") or "")
+    wa_id = str(getattr(session, "wa_id", "") or "")
+    if phone_number_id and wa_id:
+        try:
+            from backend.app.modules.channels.whatsapp_queue import whatsapp_job_queue
+
+            marker = whatsapp_job_queue.human_marker(phone_number_id, wa_id)
+        except RedisError:
+            marker = None
+    session.ai_resume_echo_id = marker
     session.updated_at = current
     return session
