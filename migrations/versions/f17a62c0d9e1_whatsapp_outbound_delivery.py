@@ -1,4 +1,4 @@
-"""Add durable WhatsApp outbound delivery lifecycle.
+"""Add durable WhatsApp transport and resumable inbound processing.
 
 Revision ID: f17a62c0d9e1
 Revises: c9e24a71d508
@@ -13,6 +13,27 @@ depends_on = None
 
 
 def upgrade():
+    op.add_column("ai_messages", sa.Column("source_key", sa.String(length=320), nullable=True))
+    op.create_index("ix_ai_messages_source_key", "ai_messages", ["source_key"], unique=True)
+
+    op.add_column(
+        "whatsapp_inbound_messages",
+        sa.Column("status", sa.String(length=30), nullable=False, server_default="processing"),
+    )
+    op.add_column(
+        "whatsapp_inbound_messages",
+        sa.Column("attempts", sa.Integer(), nullable=False, server_default="1"),
+    )
+    op.add_column(
+        "whatsapp_inbound_messages",
+        sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+    )
+    op.create_index(
+        "ix_whatsapp_inbound_messages_status",
+        "whatsapp_inbound_messages",
+        ["status"],
+    )
+
     op.create_table(
         "whatsapp_outbound_deliveries",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -51,8 +72,18 @@ def upgrade():
         "status",
         "provider_message_id",
     ):
-        op.create_index(f"ix_whatsapp_outbound_deliveries_{column}", "whatsapp_outbound_deliveries", [column])
+        op.create_index(
+            f"ix_whatsapp_outbound_deliveries_{column}",
+            "whatsapp_outbound_deliveries",
+            [column],
+        )
 
 
 def downgrade():
     op.drop_table("whatsapp_outbound_deliveries")
+    op.drop_index("ix_whatsapp_inbound_messages_status", table_name="whatsapp_inbound_messages")
+    op.drop_column("whatsapp_inbound_messages", "updated_at")
+    op.drop_column("whatsapp_inbound_messages", "attempts")
+    op.drop_column("whatsapp_inbound_messages", "status")
+    op.drop_index("ix_ai_messages_source_key", table_name="ai_messages")
+    op.drop_column("ai_messages", "source_key")
