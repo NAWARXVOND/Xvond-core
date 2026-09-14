@@ -10,7 +10,7 @@ from sqlalchemy import func
 
 from backend.app.core.config_secrets import reveal_config
 from backend.app.core.database.connection import SessionLocal
-from backend.app.core.dependencies import require_xvond_admin
+from backend.app.core.dependencies import require_xvond_admin, require_xvond_operator
 from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIUsage
@@ -115,7 +115,7 @@ def _delivery_metadata(item: WhatsAppOutboundDelivery) -> dict:
 
 
 @router.get("/backups/status")
-def backup_status(current_admin: User = Depends(require_xvond_admin)):
+def backup_status(current_admin: User = Depends(require_xvond_operator)):
     """Backup freshness only; repository locations and credentials stay private."""
     try:
         stale_after = int(os.getenv("BACKUP_STALE_AFTER_SECONDS", "129600"))
@@ -149,7 +149,7 @@ def backup_status(current_admin: User = Depends(require_xvond_admin)):
 
 
 @router.get("/companies/{company_id}/usage")
-def company_usage(company_id: int, current_admin: User = Depends(require_xvond_admin)):
+def company_usage(company_id: int, current_admin: User = Depends(require_xvond_operator)):
     """Operational usage/cost telemetry only; no prompts or conversation content."""
     db = SessionLocal()
     try:
@@ -195,7 +195,7 @@ def company_usage(company_id: int, current_admin: User = Depends(require_xvond_a
 
 
 @router.get("/subscriptions")
-def subscriptions(current_admin: User = Depends(require_xvond_admin)):
+def subscriptions(current_admin: User = Depends(require_xvond_operator)):
     """Canonical service subscriptions across all companies."""
     db = SessionLocal()
     try:
@@ -235,7 +235,7 @@ def subscriptions(current_admin: User = Depends(require_xvond_admin)):
 @router.get("/companies/{company_id}/external-unresolved")
 def unresolved_external_operations(
     company_id: int,
-    current_admin: User = Depends(require_xvond_admin),
+    current_admin: User = Depends(require_xvond_operator),
 ):
     """Expose only technical operation metadata needed for reconciliation."""
     db = SessionLocal()
@@ -257,7 +257,7 @@ def unresolved_external_operations(
 def unresolved_whatsapp_deliveries(
     company_id: int | None = None,
     limit: int = 100,
-    current_admin: User = Depends(require_xvond_admin),
+    current_admin: User = Depends(require_xvond_operator),
 ):
     """List unresolved transport state without tenant message/contact content."""
     db = SessionLocal()
@@ -437,7 +437,7 @@ def reconcile_external_operation(
 
 
 @router.get("/workers/whatsapp")
-def whatsapp_worker_status(current_admin: User = Depends(require_xvond_admin)):
+def whatsapp_worker_status(current_admin: User = Depends(require_xvond_operator)):
     try:
         return whatsapp_job_queue.stats()
     except RedisError as exc:
@@ -447,7 +447,7 @@ def whatsapp_worker_status(current_admin: User = Depends(require_xvond_admin)):
 @router.get("/workers/whatsapp/dead")
 def whatsapp_dead_jobs(
     limit: int = 50,
-    current_admin: User = Depends(require_xvond_admin),
+    current_admin: User = Depends(require_xvond_operator),
 ):
     try:
         return {"jobs": whatsapp_job_queue.dead_jobs(limit=limit)}
