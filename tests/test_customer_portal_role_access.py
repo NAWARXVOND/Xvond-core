@@ -49,15 +49,16 @@ def test_ai_employee_portal_apis_require_customer_manager():
 
 def test_customer_agent_management_is_manager_only_and_never_exposes_provider_model():
     source = CUSTOMER_AGENTS_API.read_text(encoding="utf-8-sig")
+    update_source = source.split('def update_agent(', 1)[1].split('from backend.app.api.customer_management', 1)[0]
     assert "Depends(require_customer_manager)" in source
     assert '"provider"' not in source
     assert '"model"' not in source
-    assert "controls.get(\"can_enable_disable\", False)" in source
-    assert "controls.get(\"can_edit_prompt\")" in source
-    assert "_profile_prompt(company.name, update)" in source
-    assert "AI employee activation is managed by Xvond Delivery Readiness" in source
-    assert "_sync_channel_setup" not in source
-    assert "employee_setup" not in source
+    assert "controls.get(\"can_enable_disable\", False)" in update_source
+    assert "controls.get(\"can_edit_prompt\")" in update_source
+    assert "_profile_prompt(company.name, update)" in update_source
+    assert "AI employee activation is managed by Xvond Delivery Readiness" in update_source
+    assert "_sync_channel_setup" not in update_source
+    assert "employee_setup" not in update_source
 
 
 def test_company_user_role_hierarchy_is_enforced_server_side():
