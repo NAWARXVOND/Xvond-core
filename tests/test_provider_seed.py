@@ -1,38 +1,29 @@
-from decimal import Decimal
+from pathlib import Path
 
-from xvond_seed_providers import MODELS, PROVIDERS
+from xvond_seed_providers import MODELS, PROVIDERS, RETIRED_PROVIDERS
 
 
-def test_provider_seed_has_unique_names():
+SOURCE = Path("xvond_seed_providers.py").read_text(encoding="utf-8")
+
+
+def test_provider_seed_has_unique_supported_names():
     names = [
         name
         for name, _display_name, _priority in PROVIDERS
     ]
     assert len(names) == len(set(names))
-    assert names.count("groq") == 1
+    assert "groq" not in names
+    assert "groq" in RETIRED_PROVIDERS
 
 
-def test_groq_seed_uses_current_production_models_and_prices():
-    models = {
-        model_name: (
-            input_price,
-            output_price,
-        )
-        for (
-            provider,
-            model_name,
-            _display_name,
-            input_price,
-            output_price,
-        ) in MODELS
-        if provider == "groq"
-    }
+def test_provider_seed_never_advertises_models_for_retired_providers():
+    assert all(provider not in RETIRED_PROVIDERS for provider, *_rest in MODELS)
 
-    assert models["openai/gpt-oss-20b"] == (
-        Decimal("0.075"),
-        Decimal("0.30"),
-    )
-    assert models["openai/gpt-oss-120b"] == (
-        Decimal("0.15"),
-        Decimal("0.60"),
-    )
+
+def test_existing_retired_provider_and_model_rows_are_disabled_not_deleted():
+    assert "def _disable_retired_provider_rows" in SOURCE
+    assert "AIProviderRecord.name.in_(RETIRED_PROVIDERS)" in SOURCE
+    assert "AIModelRecord.provider_name.in_(RETIRED_PROVIDERS)" in SOURCE
+    assert "AIProviderRecord.enabled: False" in SOURCE
+    assert "AIModelRecord.enabled: False" in SOURCE
+    assert "db.delete(" not in SOURCE
