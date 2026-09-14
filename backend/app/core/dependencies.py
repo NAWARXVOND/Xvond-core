@@ -27,6 +27,11 @@ XVOND_INTERNAL_ROLES = {
     "support",
 }
 
+XVOND_OPERATOR_ROLES = {
+    "super_admin",
+    "xvond_admin",
+    "support",
+}
 
 CUSTOMER_ROLES = {
     "owner",
@@ -140,6 +145,19 @@ def require_customer_admin(
             status_code=403,
             detail="Company owner or admin required",
         )
+    return current_user
+
+
+def require_xvond_operator(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Allow Xvond operational read access without granting mutation rights.
+
+    Support can inspect platform health and incident metadata, while every
+    production-changing endpoint continues to require ``require_xvond_admin``.
+    """
+    if current_user.role not in XVOND_OPERATOR_ROLES:
+        raise HTTPException(status_code=403, detail="Xvond operations access required")
     return current_user
 
 
