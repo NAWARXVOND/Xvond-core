@@ -17,7 +17,6 @@ from backend.app.models.company import Company
 from backend.app.models.company_module import CompanyModule
 from backend.app.models.user import User
 from backend.app.modules.audit.service import audit_service
-from backend.app.modules.billing.models import Plan, Subscription
 
 router = APIRouter(prefix="/admin", tags=["Xvond Admin"])
 
@@ -56,6 +55,12 @@ def workflow_engine_status(current_admin: User = Depends(require_xvond_admin)):
 
 @router.post("/companies")
 def create_company(data: CompanyCreate, current_admin: User = Depends(require_xvond_admin)):
+    """Create an inactive tenant shell.
+
+    Commercial entitlements are assigned only through the canonical per-service
+    billing API. The legacy ``plans/subscriptions`` tables remain readable for
+    historical compatibility but receive no new onboarding writes.
+    """
     name = data.name.strip()
     owner_email = data.owner_email.strip().lower()
     owner_full_name = data.owner_full_name.strip()
@@ -86,14 +91,13 @@ def create_company(data: CompanyCreate, current_admin: User = Depends(require_xv
             role="owner",
         )
         db.add(owner)
-        db.add(CompanyModule(company_id=company.id, module_name="ai_agent", enabled=True))
-        onboarding_plan = (
-            db.query(Plan)
-            .filter(Plan.name == "Onboarding", Plan.enabled.is_(True))
-            .first()
+        db.add(
+            CompanyModule(
+                company_id=company.id,
+                module_name="ai_agent",
+                enabled=True,
+            )
         )
-        if onboarding_plan is not None:
-            db.add(Subscription(company_id=company.id, plan_id=onboarding_plan.id, status="active"))
         audit_service.log(
             db=db,
             action="company.created",
@@ -101,13 +105,20 @@ def create_company(data: CompanyCreate, current_admin: User = Depends(require_xv
             resource_id=company.id,
             user_id=current_admin.id,
             company_id=company.id,
-            details={"initial_state": "inactive"},
+            details={
+                "initial_state": "inactive",
+                "billing_source": "service_subscriptions",
+            },
         )
         db.commit()
         db.refresh(company)
         db.refresh(owner)
         return {
-            "company": {"id": company.id, "name": company.name, "active": company.active},
+            "company": {
+                "id": company.id,
+                "name": company.name,
+                "active": company.active,
+            },
             "owner": {
                 "id": owner.id,
                 "company_id": owner.company_id,
@@ -133,10 +144,11 @@ def update_company_status(
     data: CompanyStatusUpdate,
     current_admin: User = Depends(require_xvond_admin),
 ):
-    """Canonical company lifecycle switch.
+    """Canonical emergency runtime switch.
 
-    Activation is readiness-gated. Deactivation is an emergency stop and disables
-    every AI employee; employees must pass their own Go Live gate again later.
+    Activation is readiness-gated. Deactivation disables runtime execution and
+    every AI employee; commercial lifecycle state is managed separately and is
+    not inferred from this boolean.
     """
     db = SessionLocal()
     try:
@@ -181,7 +193,11 @@ def update_company_status(
         db.refresh(company)
         return {
             "status": "updated",
-            "company": {"id": company.id, "name": company.name, "active": company.active},
+            "company": {
+                "id": company.id,
+                "name": company.name,
+                "active": company.active,
+            },
         }
     except HTTPException:
         db.rollback()
