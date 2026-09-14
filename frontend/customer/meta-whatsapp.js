@@ -43,7 +43,7 @@ function xvondCustomerLoadMetaSdk(appId, graphVersion) {
 }
 
 function xvondCustomerMetaLoginOptions(config) {
-    const extras = {setup: {}, version: "v4"};
+    const extras = {setup: {}};
     if (config.feature_type) extras.featureType = config.feature_type;
     if (config.session_info_version) extras.sessionInfoVersion = String(config.session_info_version);
     return {
