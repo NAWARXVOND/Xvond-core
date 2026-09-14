@@ -18,7 +18,7 @@ async function loadCustomerLifecycleBanner(){
   const dashboard=document.getElementById('page-dashboard');
   if(!dashboard||dashboard.classList.contains('hidden'))return;
   try{
-    const overview=await api('/customer/overview');
+    const overview=portalOverview||await api('/customer/overview');
     const company=overview.company||{};
     const status=String(company.lifecycle_status||'onboarding').toLowerCase();
     const copy=XVOND_CUSTOMER_LIFECYCLE_COPY[status]||XVOND_CUSTOMER_LIFECYCLE_COPY.onboarding;
@@ -35,11 +35,11 @@ async function loadCustomerLifecycleBanner(){
       <div style="display:flex;justify-content:space-between;gap:18px;align-items:flex-start;flex-wrap:wrap">
         <div>
           <div class="muted" style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em">Company status</div>
-          <h2 style="margin:6px 0 8px">${escapeHtml(copy.title)}</h2>
-          <p class="muted" style="margin:0">${escapeHtml(copy.body)}</p>
+          <h2 style="margin:6px 0 8px">${safe(copy.title)}</h2>
+          <p class="muted" style="margin:0">${safe(copy.body)}</p>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <span class="status ${xvondCustomerLifecycleKind(status)}">${escapeHtml(copy.label)}</span>
+          <span class="status ${xvondCustomerLifecycleKind(status)}">${safe(copy.label)}</span>
           <span class="status ${runtime?'status-active':'status-inactive'}">AI Runtime ${runtime?'Running':'Stopped'}</span>
         </div>
       </div>`;
