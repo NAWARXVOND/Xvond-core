@@ -22,6 +22,7 @@ from backend.app.models.company_profile import CompanyProfile
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.ai_agent.profile_models import AIAgentProfile
+from backend.app.modules.audit.service import audit_service
 from backend.app.modules.knowledge.models import (
     AgentKnowledge,
     KnowledgeChunk,
@@ -127,13 +128,9 @@ def _validate_working_hours(value: dict | None) -> dict:
             start_time = datetime.strptime(start, "%H:%M")
             end_time = datetime.strptime(end, "%H:%M")
         except ValueError as exc:
-            raise ValueError(
-                f"Working hours for {day} must use HH:MM"
-            ) from exc
+            raise ValueError(f"Working hours for {day} must use HH:MM") from exc
         if end_time <= start_time:
-            raise ValueError(
-                f"Working hours for {day} must end after they start"
-            )
+            raise ValueError(f"Working hours for {day} must end after they start")
         result[day] = {"enabled": True, "start": start, "end": end}
     return result
 
@@ -208,9 +205,7 @@ def _business_knowledge_content(company: Company, row: CompanyProfile) -> str:
         if value:
             blocks.append(f"{label}: {value}")
     if row.additional_languages:
-        blocks.append(
-            "Additional Languages: " + ", ".join(row.additional_languages)
-        )
+        blocks.append("Additional Languages: " + ", ".join(row.additional_languages))
 
     structured = [
         ("Working Hours", row.working_hours),
@@ -222,9 +217,7 @@ def _business_knowledge_content(company: Company, row: CompanyProfile) -> str:
     ]
     for label, value in structured:
         if value:
-            blocks.append(
-                f"{label}:\n{json.dumps(value, ensure_ascii=False, indent=2)}"
-            )
+            blocks.append(f"{label}:\n{json.dumps(value, ensure_ascii=False, indent=2)}")
     return "\n\n".join(blocks).strip()
 
 
@@ -349,6 +342,9 @@ def update_company_profile(
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
+        changed_fields = []
+        if company.name != company_name:
+            changed_fields.append("company_name")
         company.name = company_name
         row = (
             db.query(CompanyProfile)
@@ -358,6 +354,11 @@ def update_company_profile(
         if row is None:
             row = CompanyProfile(company_id=company_id)
             db.add(row)
+            changed_fields.extend(normalized.keys())
+        else:
+            for key, value in normalized.items():
+                if getattr(row, key, None) != value:
+                    changed_fields.append(key)
 
         for key, value in normalized.items():
             setattr(row, key, value)
@@ -373,6 +374,16 @@ def update_company_profile(
             profile.business_type = row.business_type
 
         document = sync_company_business_knowledge(db, company, row)
+        if changed_fields:
+            audit_service.log(
+                db=db,
+                action="company_profile.updated",
+                resource_type="company_profile",
+                resource_id=row.id,
+                user_id=current_admin.id,
+                company_id=company_id,
+                details={"changed_fields": sorted(set(changed_fields))},
+            )
         db.commit()
         result = _serialize(company, row)
         result.update(
