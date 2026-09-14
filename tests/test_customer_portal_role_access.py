@@ -27,6 +27,10 @@ def test_manager_overview_gets_users_navigation_and_management_access_level():
     assert '"access_level": "manager"' in source
     assert '"id": "users"' in source
     assert '"loader": "users"' in source
+    assert '"open_operations"' in source
+    assert '"active_handoffs"' in source
+    assert '"unread_notifications"' in source
+    assert '"failed_ai_requests_24h"' in source
 
 
 def test_ai_employee_portal_apis_require_customer_manager():
@@ -49,20 +53,29 @@ def test_customer_agent_management_is_manager_only_and_never_exposes_provider_mo
     assert "_sync_channel_setup" in source
 
 
-def test_company_manager_can_create_only_staff_or_manager_accounts():
+def test_company_user_role_hierarchy_is_enforced_server_side():
     source = USERS_API.read_text(encoding="utf-8-sig")
     assert "Depends(require_customer_manager)" in source
-    assert 'role not in {"manager", "employee"}' in source
-    assert "User.company_id == current_user.company_id" in source
+    assert "def _allowed_created_roles" in source
+    assert 'return {"employee"}' in source
+    assert 'return {"manager", "employee"}' in source
+    assert "Managers can create Staff accounts only" in source
+    assert "def _assert_can_manage_target" in source
     assert 'target.role in {"owner", "admin"}' in source
+    assert 'current_user.role == "manager" and target.role != "employee"' in source
+    assert "User.company_id == current_user.company_id" in source
     assert "You cannot disable your own account" in source
 
 
-def test_customer_manager_ui_exposes_simple_behavior_and_user_controls():
+def test_customer_manager_ui_matches_server_role_hierarchy():
     source = MANAGER_UI.read_text(encoding="utf-8-sig")
     assert "customerManagerAccess" in source
     assert "Staff — Overview only" in source
     assert "Manager — Management access" in source
+    assert "customerAssignableRoleOptions" in source
+    assert 'currentUser?.role === "manager"' in source
+    assert "Managers can add Staff accounts only." in source
+    assert "customerCanManageUser" in source
     assert "/customer/agents/${agentId}" in source
     assert 'customerSelect("ca-length"' in source
     assert 'customerSelect("ca-clarification"' in source
