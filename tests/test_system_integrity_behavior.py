@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import json
+from datetime import timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -61,8 +62,10 @@ def database(monkeypatch):
     engine.dispose()
 
 
-def process(message_id="incoming-1", text="Hello", *, echo=False):
+def process(message_id="incoming-1", text="Hello", *, echo=False, timestamp=None):
     message = {"id":message_id, "type":"text", "text":{"body":text}, "to" if echo else "from":"contact-1"}
+    if timestamp is not None:
+        message["timestamp"] = str(timestamp)
     payload = {"object":"whatsapp_business_account", "entry":[{"changes":[{"field":"smb_message_echoes" if echo else "messages", "value":{"metadata":{"phone_number_id":"phone-1"}, "message_echoes" if echo else "messages":[message]}}]}]}
     body = json.dumps(payload).encode()
     signature = "sha256=" + hmac.new(b"test-signing-secret", body, hashlib.sha256).hexdigest()
@@ -88,6 +91,31 @@ def test_second_message_and_echo_keep_one_employee_channel_conversation(database
         assert db.query(AIMessage).filter_by(role="human").count() == 1
         assert db.query(AIMessage).filter_by(role="assistant").count() == 2
         assert db.query(WhatsAppSession).one().automation_state == "human"
+
+
+def test_delayed_old_echo_cannot_undo_explicit_return_to_ai(database):
+    conversation_id = process()["processed"][0]["conversation_id"]
+    inbox.take_over_conversation(conversation_id, user())
+    inbox.return_conversation_to_ai(conversation_id, user())
+
+    with database() as db:
+        resumed_at = db.query(WhatsAppSession).one().ai_resumed_at
+        assert resumed_at is not None
+
+    old_timestamp = int((resumed_at - timedelta(seconds=10)).timestamp())
+    stale = process("manual-old", "Old delayed reply", echo=True, timestamp=old_timestamp)
+    assert stale["processed"][0]["status"] == "stale_echo_mirrored"
+    with database() as db:
+        session = db.query(WhatsAppSession).one()
+        assert session.automation_state == "ai"
+        assert db.query(AIMessage).filter_by(role="human").count() == 1
+
+    new_timestamp = int((resumed_at + timedelta(seconds=2)).timestamp())
+    fresh = process("manual-new", "New human reply", echo=True, timestamp=new_timestamp)
+    assert fresh["processed"][0]["status"] == "human_active"
+    with database() as db:
+        assert db.query(WhatsAppSession).one().automation_state == "human"
+        assert db.query(AIMessage).filter_by(role="human").count() == 2
 
 
 def test_delivery_failure_rolls_back_claim_and_messages_then_retries(database, monkeypatch):
