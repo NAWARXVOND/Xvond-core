@@ -165,13 +165,34 @@ def _business_app_echo_created_at(echo: dict) -> datetime | None:
         return None
 
 
+def _echo_precedes_explicit_ai_resume(
+    session: WhatsAppSession,
+    *,
+    message_id: str,
+    created_at: datetime | None,
+) -> bool:
+    resumed_at = session.ai_resumed_at
+    if resumed_at is None:
+        return False
+
+    # Meta timestamps have one-second precision while our resume timestamp has
+    # microseconds. Exact ingress identity resolves same-second ambiguity; older
+    # whole-second echoes are safely stale.
+    if session.ai_resume_echo_id and session.ai_resume_echo_id == message_id:
+        return True
+    if created_at is not None and created_at < resumed_at.replace(microsecond=0):
+        return True
+    return False
+
+
 def process_business_app_echo(db, channel: AgentChannel, value: dict) -> list[dict]:
     """Mirror WhatsApp Business App replies into the Xvond conversation inbox.
 
     smb_message_echoes are emitted by Meta Coexistence when a staff member
     sends from the WhatsApp Business app or a linked device. Every echo is
-    deduplicated by its WhatsApp message id, recorded in the same conversation,
-    and places that conversation under explicit human control.
+    deduplicated by its WhatsApp message id and mirrored into the same
+    conversation. A delayed echo that predates a newer explicit Return-to-AI is
+    historical evidence only and must not reverse that operator decision.
     """
     processed = []
     phone_number_id = str((value.get("metadata") or {}).get("phone_number_id") or "")
@@ -202,22 +223,37 @@ def process_business_app_echo(db, channel: AgentChannel, value: dict) -> list[di
                 db=db, channel=channel, wa_id=wa_id,
                 phone_number_id=phone_number_id, incoming_text=content,
             )
-
-            activate_human_handoff(session, reason="business_app_reply", human_message=True)
-            _ensure_handoff_record(
-                db,
-                channel=channel,
-                conversation_id=session.conversation_id,
-                reason="business_app_reply",
-                status="in_progress",
+            created_at = _business_app_echo_created_at(echo)
+            stale_after_resume = _echo_precedes_explicit_ai_resume(
+                session,
+                message_id=message_id,
+                created_at=created_at,
             )
+
+            if not stale_after_resume:
+                activate_human_handoff(
+                    session,
+                    reason="business_app_reply",
+                    now=created_at,
+                    human_message=True,
+                )
+                _ensure_handoff_record(
+                    db,
+                    channel=channel,
+                    conversation_id=session.conversation_id,
+                    reason="business_app_reply",
+                    status="in_progress",
+                )
+            elif session.ai_resume_echo_id == message_id:
+                # The exact delayed marker has now been consumed. The durable
+                # resume timestamp continues protecting any older queued echoes.
+                session.ai_resume_echo_id = None
 
             message_kwargs = {
                 "conversation_id": session.conversation_id,
                 "role": "human",
                 "content": content,
             }
-            created_at = _business_app_echo_created_at(echo)
             if created_at is not None:
                 message_kwargs["created_at"] = created_at
             db.add(AIMessage(**message_kwargs))
@@ -243,13 +279,15 @@ def process_business_app_echo(db, channel: AgentChannel, value: dict) -> list[di
                     "source": "whatsapp_business_app",
                     "message_type": str(echo.get("type") or "unknown"),
                     "mirrored_to_inbox": True,
+                    "human_control_activated": not stale_after_resume,
+                    "stale_after_ai_resume": stale_after_resume,
                 },
             )
             db.commit()
             processed.append({
                 "message_id": message_id,
                 "conversation_id": session.conversation_id,
-                "status": "human_active",
+                "status": "stale_echo_mirrored" if stale_after_resume else "human_active",
                 "mirrored": True,
             })
         except Exception:
