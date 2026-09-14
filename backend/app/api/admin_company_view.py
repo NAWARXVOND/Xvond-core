@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 
 from backend.app.core.database.connection import SessionLocal
-from backend.app.core.dependencies import require_xvond_admin
+from backend.app.core.dependencies import require_xvond_operator
 from backend.app.models.company import Company
 from backend.app.models.company_module import CompanyModule
 from backend.app.models.user import User
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/admin/company-view", tags=["Xvond Admin - Company Vi
 
 
 @router.get("/{company_id}")
-def company_full_view(company_id: int, current_admin: User = Depends(require_xvond_admin)):
+def company_full_view(company_id: int, current_admin: User = Depends(require_xvond_operator)):
     db = SessionLocal()
     try:
         company = db.query(Company).filter(Company.id == company_id).first()
