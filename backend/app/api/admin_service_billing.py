@@ -9,6 +9,7 @@ from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.company import Company
 from backend.app.models.user import User
+from backend.app.modules.audit.service import audit_service
 from backend.app.modules.billing.cycle import _add_month
 from backend.app.modules.billing.service_limits import service_limits
 from backend.app.modules.billing.service_models import ServicePlan, ServiceSubscription
@@ -24,6 +25,14 @@ class ServicePlanInput(BaseModel):
     monthly_price: Decimal = Field(ge=0)
     currency: str = "OMR"
     limits: dict = Field(default_factory=dict)
+
+
+class ServicePlanUpdate(BaseModel):
+    name: str | None = None
+    monthly_price: Decimal | None = Field(default=None, ge=0)
+    currency: str | None = None
+    limits: dict | None = None
+    enabled: bool | None = None
 
 
 class ServiceSubscriptionInput(BaseModel):
@@ -92,6 +101,27 @@ def _effective_status(item: ServiceSubscription) -> str:
     return item.status
 
 
+def _audit_billing(
+    db,
+    admin: User,
+    action: str,
+    *,
+    company_id: int | None = None,
+    resource_type: str,
+    resource_id: int,
+    details: dict,
+) -> None:
+    audit_service.log(
+        db=db,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        user_id=admin.id,
+        company_id=company_id,
+        details=details,
+    )
+
+
 @router.get("/plans")
 def list_plans(current_admin: User = Depends(require_xvond_admin)):
     db = SessionLocal()
@@ -135,9 +165,80 @@ def create_plan(data: ServicePlanInput, current_admin: User = Depends(require_xv
             enabled=True,
         )
         db.add(item)
+        db.flush()
+        _audit_billing(
+            db,
+            current_admin,
+            "service_plan.created",
+            resource_type="service_plan",
+            resource_id=item.id,
+            details={"service_code": service_code, "tier": tier, "enabled": True},
+        )
         db.commit()
         db.refresh(item)
         return plan_data(item)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@router.patch("/plans/{plan_id}")
+def update_plan(
+    plan_id: int,
+    data: ServicePlanUpdate,
+    current_admin: User = Depends(require_xvond_admin),
+):
+    db = SessionLocal()
+    try:
+        item = db.get(ServicePlan, plan_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Service plan not found")
+
+        changes = data.model_dump(exclude_unset=True)
+        if "name" in changes:
+            name = str(changes["name"] or "").strip()
+            if not name:
+                raise HTTPException(400, "Service plan name is required")
+            item.name = name
+        if "monthly_price" in changes:
+            item.monthly_price = changes["monthly_price"]
+        if "currency" in changes:
+            try:
+                item.currency = normalize_currency(changes["currency"]) or item.currency
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+        if "limits" in changes:
+            item.limits = _validated_limits(changes["limits"])
+        if "enabled" in changes:
+            item.enabled = bool(changes["enabled"])
+
+        _audit_billing(
+            db,
+            current_admin,
+            "service_plan.updated",
+            resource_type="service_plan",
+            resource_id=item.id,
+            details={
+                "service_code": item.service_code,
+                "tier": item.tier,
+                "changed_fields": sorted(changes),
+                "enabled": item.enabled,
+            },
+        )
+        db.commit()
+        db.refresh(item)
+        return plan_data(item)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -169,6 +270,7 @@ def subscribe_service(
             ServiceSubscription.company_id == company_id,
             ServiceSubscription.service_code == service_code,
         ).first()
+        previous_plan_id = item.plan_id if item else None
         if item is None:
             item = ServiceSubscription(
                 company_id=company_id,
@@ -179,21 +281,40 @@ def subscribe_service(
                 current_period_end=_add_month(now),
             )
             db.add(item)
+            db.flush()
         else:
-            previous_plan_id = item.plan_id
             previous_status = item.status
             period_expired = item.current_period_end <= now
             plan_changed = previous_plan_id != plan.id
             item.plan_id = plan.id
             item.status = "active"
-            # Changing plan starts the new plan immediately with a clean billing period.
-            # Saving the same plan does NOT silently renew/reset usage. Renewal must be explicit.
             if plan_changed or data.renew or period_expired or previous_status == "cancelled":
                 item.current_period_start = now
                 item.current_period_end = _add_month(now)
+
+        _audit_billing(
+            db,
+            current_admin,
+            "service_subscription.assigned",
+            company_id=company_id,
+            resource_type="service_subscription",
+            resource_id=item.id,
+            details={
+                "service_code": service_code,
+                "plan_id": plan.id,
+                "previous_plan_id": previous_plan_id,
+                "renew": bool(data.renew),
+            },
+        )
         db.commit()
         db.refresh(item)
         return company_service_data(db, item, plan)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -224,9 +345,24 @@ def renew_service(
         item.status = "active"
         item.current_period_start = now
         item.current_period_end = _add_month(now)
+        _audit_billing(
+            db,
+            current_admin,
+            "service_subscription.renewed",
+            company_id=company_id,
+            resource_type="service_subscription",
+            resource_id=item.id,
+            details={"service_code": service_code, "plan_id": item.plan_id},
+        )
         db.commit()
         db.refresh(item)
         return company_service_data(db, item, plan)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -278,6 +414,7 @@ def set_service_status(
     data: ServiceStatusInput,
     current_admin: User = Depends(require_xvond_admin),
 ):
+    normalized_service_code = service_code.strip().lower()
     status = data.status.strip().lower()
     if status not in {"active", "paused", "cancelled"}:
         raise HTTPException(400, "Invalid service subscription status")
@@ -285,10 +422,11 @@ def set_service_status(
     try:
         item = db.query(ServiceSubscription).filter(
             ServiceSubscription.company_id == company_id,
-            ServiceSubscription.service_code == service_code.strip().lower(),
+            ServiceSubscription.service_code == normalized_service_code,
         ).first()
         if item is None:
             raise HTTPException(status_code=404, detail="Service subscription not found")
+        previous_status = item.status
         if status == "active":
             plan = db.query(ServicePlan).filter(
                 ServicePlan.id == item.plan_id,
@@ -301,6 +439,20 @@ def set_service_status(
                 item.current_period_start = now
                 item.current_period_end = _add_month(now)
         item.status = status
+        if previous_status != status:
+            _audit_billing(
+                db,
+                current_admin,
+                "service_subscription.status_changed",
+                company_id=company_id,
+                resource_type="service_subscription",
+                resource_id=item.id,
+                details={
+                    "service_code": normalized_service_code,
+                    "previous_status": previous_status,
+                    "status": status,
+                },
+            )
         db.commit()
         db.refresh(item)
         return company_service_data(db, item)

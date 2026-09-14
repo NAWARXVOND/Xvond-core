@@ -7,6 +7,7 @@ from backend.app.core.password_policy import validate_password
 from backend.app.core.security import hash_password
 from backend.app.models.company import Company
 from backend.app.models.user import User
+from backend.app.modules.audit.service import audit_service
 
 router = APIRouter(prefix="/admin/company-users", tags=["Xvond Admin - Company Users"])
 
@@ -83,12 +84,25 @@ def create_company_user(
             active=True,
         )
         db.add(user)
+        db.flush()
+        audit_service.log(
+            db=db,
+            action="company_user.created",
+            resource_type="user",
+            resource_id=user.id,
+            user_id=current_admin.id,
+            company_id=company_id,
+            details={"role": role, "active": True},
+        )
         db.commit()
         db.refresh(user)
         result = _serialize(user)
         result["status"] = "created"
         return result
     except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
         db.rollback()
         raise
     finally:
@@ -108,14 +122,28 @@ def update_company_user_status(
             raise HTTPException(404, "Company user not found")
         if user.role == "owner" and data.active is False:
             raise HTTPException(409, "Company owner cannot be disabled")
+        changed = user.active != data.active
         user.active = data.active
-        if not data.active:
+        if changed and not data.active:
             user.token_version += 1
+        if changed:
+            audit_service.log(
+                db=db,
+                action="company_user.activated" if data.active else "company_user.deactivated",
+                resource_type="user",
+                resource_id=user.id,
+                user_id=current_admin.id,
+                company_id=user.company_id,
+                details={"role": user.role, "active": data.active},
+            )
         db.commit()
         result = _serialize(user)
         result["status"] = "activated" if user.active else "deactivated"
         return result
     except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
         db.rollback()
         raise
     finally:

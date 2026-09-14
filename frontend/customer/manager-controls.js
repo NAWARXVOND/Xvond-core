@@ -3,7 +3,26 @@ function customerManagerAccess() {
 }
 
 function customerRoleLabel(role) {
-    return role === "employee" ? "Staff" : "Manager";
+    if (role === "employee") return "Staff";
+    if (role === "manager") return "Manager";
+    if (role === "owner") return "Owner";
+    if (role === "admin") return "Company Admin";
+    return role || "User";
+}
+
+function customerCanManageUser(user) {
+    if (!user || user.id === currentUser?.id) return false;
+    if (["owner", "admin"].includes(user.role)) return false;
+    if (currentUser?.role === "manager") return user.role === "employee";
+    return ["owner", "admin"].includes(currentUser?.role) && ["manager", "employee"].includes(user.role);
+}
+
+function customerAssignableRoleOptions() {
+    const options = [["employee", "Staff — Overview only"]];
+    if (["owner", "admin"].includes(currentUser?.role)) {
+        options.push(["manager", "Manager — Company management access"]);
+    }
+    return options;
 }
 
 const customerBaseFallbackNavigation = fallbackPortalNavigation;
@@ -122,30 +141,32 @@ async function loadCompanyUsers() {
     try {
         const result = await api("/users/");
         const users = result.users || [];
+        const roleOptions = customerAssignableRoleOptions();
         target.innerHTML = `
             <div class="panel" style="margin-bottom:20px">
-                <h2>Company Users</h2>
-                <p class="muted">Staff sees Overview only. Manager can access the authorized management areas.</p>
+                <h2>Team Access</h2>
+                <p class="muted">Control who can sign in to this company workspace. Staff sees Overview only. Managers can manage company workspaces and Staff accounts, but not Owner or Company Admin accounts.</p>
                 <div id="company-user-list">
                     ${users.map(user => `
                         <div class="agent">
                             <div class="service-card-head">
-                                <div><strong>${safe(user.full_name || user.email)}</strong><p>${safe(user.email)} · ${customerRoleLabel(user.role)}</p></div>
+                                <div><strong>${safe(user.full_name || user.email)}</strong><p>${safe(user.email)} · ${safe(customerRoleLabel(user.role))}</p></div>
                                 <span class="status">${user.active ? "Active" : "Inactive"}</span>
                             </div>
-                            ${user.id !== currentUser?.id && !["owner","admin"].includes(user.role) ? `<button onclick="setCompanyUserStatus(${Number(user.id)}, ${user.active ? "false" : "true"})">${user.active ? "Disable" : "Activate"}</button>` : ""}
+                            ${customerCanManageUser(user) ? `<button onclick="setCompanyUserStatus(${Number(user.id)}, ${user.active ? "false" : "true"})">${user.active ? "Disable" : "Activate"}</button>` : ""}
                         </div>
                     `).join("") || '<p>No users found.</p>'}
                 </div>
             </div>
             <div class="panel">
-                <h2>Add User</h2>
-                <div class="form-group"><label>Full Name</label><input id="cu-name"></div>
-                <div class="form-group"><label>Email</label><input id="cu-email" type="email"></div>
-                <div class="form-group"><label>Temporary Password</label><input id="cu-password" type="password"></div>
-                <div class="form-group"><label>Access</label><select id="cu-role"><option value="employee">Staff — Overview only</option><option value="manager">Manager — Management access</option></select></div>
+                <h2>Add Team Member</h2>
+                <p class="muted">${currentUser?.role === "manager" ? "Managers can add Staff accounts only." : "Owners and Company Admins can add Staff or Manager accounts."} Set an initial password and share it securely; the user can change it from Account & Security after signing in.</p>
+                <div class="form-group"><label>Full Name</label><input id="cu-name" autocomplete="name"></div>
+                <div class="form-group"><label>Email</label><input id="cu-email" type="email" autocomplete="email"></div>
+                <div class="form-group"><label>Initial Password</label><input id="cu-password" type="password" autocomplete="new-password"></div>
+                <div class="form-group"><label>Workspace Access</label><select id="cu-role">${roleOptions.map(([value,label]) => `<option value="${value}">${safe(label)}</option>`).join("")}</select></div>
                 <div id="cu-message" class="error"></div>
-                <button onclick="createCompanyUser()">Add User</button>
+                <button onclick="createCompanyUser()">Add Team Member</button>
             </div>
         `;
     } catch (err) {

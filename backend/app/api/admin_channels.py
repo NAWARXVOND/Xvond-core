@@ -2,16 +2,22 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.app.core.ai.provider_policy import runtime_selections
+from backend.app.core.config_secrets import (
+    configured_secret_fields,
+    merge_config,
+    public_config,
+    reveal_config,
+)
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
-from backend.app.core.config_secrets import configured_secret_fields, merge_config, public_config, reveal_config
 from backend.app.models.company import Company
 from backend.app.models.company_module import CompanyModule
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
+from backend.app.modules.audit.service import audit_service
 from backend.app.modules.billing.limits import limits_service
-from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.channels.catalog import get_channel_definition, validate_channel_config
+from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.channels.whatsapp_connection import whatsapp_connection_state
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeDocument
 
@@ -34,8 +40,8 @@ class WhatsAppConfigUpdate(BaseModel):
     verify_token: str | None = None
     app_secret: str | None = None
     graph_api_version: str | None = None
-    # Legacy metadata kept for backward compatibility only. AI Employee profile
-    # is authoritative for language/dialect.
+    # Accepted only so older clients do not break. These fields are ignored:
+    # AI Employee profile is the single source of truth for language/dialect.
     language: str | None = None
     dialect: str | None = None
     tone: str | None = None
@@ -45,7 +51,10 @@ class WhatsAppConfigUpdate(BaseModel):
     channel_instructions: str | None = None
 
 
-def _channel_configured(channel: AgentChannel, channel_config: dict | None = None) -> bool:
+def _channel_configured(
+    channel: AgentChannel,
+    channel_config: dict | None = None,
+) -> bool:
     try:
         validate_channel_config(
             channel.channel_type,
@@ -56,7 +65,35 @@ def _channel_configured(channel: AgentChannel, channel_config: dict | None = Non
         return False
 
 
-def serialize_channel(channel: AgentChannel, *, verify_connection: bool = False) -> dict:
+def _assert_unique_whatsapp_phone_number_id(
+    db,
+    phone_number_id: str | None,
+    *,
+    exclude_channel_id: int | None = None,
+) -> None:
+    """Guarantee deterministic WhatsApp routing across the whole platform."""
+    target = str(phone_number_id or "").strip()
+    if not target:
+        return
+
+    query = db.query(AgentChannel).filter(AgentChannel.channel_type == "whatsapp")
+    if exclude_channel_id is not None:
+        query = query.filter(AgentChannel.id != exclude_channel_id)
+
+    for existing in query.all():
+        config = reveal_config(existing.config) or {}
+        if str(config.get("phone_number_id") or "").strip() == target:
+            raise HTTPException(
+                409,
+                "This WhatsApp phone number is already assigned to another AI Employee",
+            )
+
+
+def serialize_channel(
+    channel: AgentChannel,
+    *,
+    verify_connection: bool = False,
+) -> dict:
     channel_config = reveal_config(channel.config)
     configured = _channel_configured(channel, channel_config)
     if channel.channel_type == "whatsapp":
@@ -69,7 +106,9 @@ def serialize_channel(channel: AgentChannel, *, verify_connection: bool = False)
             "connected": configured,
             "meta_onboarding_complete": False,
             "connection_status": "connected" if configured else "incomplete",
-            "connection_issue": None if configured else "Channel configuration is incomplete.",
+            "connection_issue": (
+                None if configured else "Channel configuration is incomplete."
+            ),
             "connection_checked_at": None,
             "meta_error_code": None,
         }
@@ -96,18 +135,55 @@ def _ensure_channels_module(db, company_id: int):
         CompanyModule.module_name == "channels",
     ).first()
     if module is None:
-        module = CompanyModule(company_id=company_id, module_name="channels", enabled=True)
+        module = CompanyModule(
+            company_id=company_id,
+            module_name="channels",
+            enabled=True,
+        )
         db.add(module)
     else:
         module.enabled = True
     return module
 
 
-def _has_real_runtime_provider(db, company_id: int, agent: AIAgent | None) -> bool:
+def _audit_channel(
+    db,
+    admin: User,
+    channel: AgentChannel,
+    action: str,
+    *,
+    details: dict | None = None,
+) -> None:
+    audit_service.log(
+        db=db,
+        action=action,
+        resource_type="channel",
+        resource_id=channel.id,
+        user_id=admin.id,
+        company_id=channel.company_id,
+        details={
+            "agent_id": channel.agent_id,
+            "channel_type": channel.channel_type,
+            "enabled": channel.enabled,
+            **(details or {}),
+        },
+    )
+
+
+def _has_real_runtime_provider(
+    db,
+    company_id: int,
+    agent: AIAgent | None,
+) -> bool:
     if agent is None:
         return False
     try:
-        selections = runtime_selections(db, company_id, agent.provider, agent.model)
+        selections = runtime_selections(
+            db,
+            company_id,
+            agent.provider,
+            agent.model,
+        )
     except Exception:
         return False
     return any(item.provider != "mock" for item in selections)
@@ -142,9 +218,27 @@ def _activation_blockers(db, channel: AgentChannel) -> list[str]:
     if agent is None or not agent.enabled:
         blockers.append("AI employee must be active")
     elif not _has_real_runtime_provider(db, channel.company_id, agent):
-        blockers.append("At least one real AI provider/model must be enabled and configured")
-    if not _channel_configured(channel):
-        blockers.append(f"{channel.channel_type.title()} channel configuration is incomplete")
+        blockers.append(
+            "At least one real AI provider/model must be enabled and configured"
+        )
+
+    channel_config = reveal_config(channel.config)
+    configured = _channel_configured(channel, channel_config)
+    if not configured:
+        blockers.append(
+            f"{channel.channel_type.title()} channel configuration is incomplete"
+        )
+    elif channel.channel_type == "whatsapp":
+        connection = whatsapp_connection_state(
+            channel_config,
+            verify_remote=True,
+        )
+        if connection["connected"] is not True:
+            blockers.append(
+                connection.get("connection_issue")
+                or "WhatsApp must be connected and verified with Meta"
+            )
+
     docs = (
         db.query(KnowledgeDocument)
         .join(AgentKnowledge, AgentKnowledge.document_id == KnowledgeDocument.id)
@@ -162,7 +256,11 @@ def _activation_blockers(db, channel: AgentChannel) -> list[str]:
 
 
 @router.post("/agents/{agent_id}")
-def create_channel(agent_id: int, data: ChannelCreate, current_admin: User = Depends(require_xvond_admin)):
+def create_channel(
+    agent_id: int,
+    data: ChannelCreate,
+    current_admin: User = Depends(require_xvond_admin),
+):
     db = SessionLocal()
     try:
         agent = db.query(AIAgent).filter(AIAgent.id == agent_id).first()
@@ -177,9 +275,15 @@ def create_channel(agent_id: int, data: ChannelCreate, current_admin: User = Dep
             AgentChannel.agent_id == agent.id,
             AgentChannel.channel_type == channel_type,
         ).first() is not None:
-            raise HTTPException(409, "This channel type is already assigned to the agent")
-        # Creation is configuration only and starts disabled. Commercial channel
-        # capacity is consumed only when a channel is actually activated.
+            raise HTTPException(
+                409,
+                "This channel type is already assigned to the agent",
+            )
+        if channel_type == "whatsapp":
+            _assert_unique_whatsapp_phone_number_id(
+                db,
+                data.config.get("phone_number_id"),
+            )
         channel = AgentChannel(
             company_id=agent.company_id,
             agent_id=agent.id,
@@ -188,18 +292,29 @@ def create_channel(agent_id: int, data: ChannelCreate, current_admin: User = Dep
             enabled=False,
         )
         db.add(channel)
+        db.flush()
         _ensure_channels_module(db, agent.company_id)
+        _audit_channel(db, current_admin, channel, "channel.created")
         db.commit()
         db.refresh(channel)
         result = serialize_channel(channel)
         result["status"] = "created"
         return result
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
 
 @router.get("/companies/{company_id}")
-def list_company_channels(company_id: int, current_admin: User = Depends(require_xvond_admin)):
+def list_company_channels(
+    company_id: int,
+    current_admin: User = Depends(require_xvond_admin),
+):
     db = SessionLocal()
     try:
         items = db.query(AgentChannel).filter(
@@ -220,37 +335,79 @@ def list_company_channels(company_id: int, current_admin: User = Depends(require
 
 
 @router.get("/{channel_id}/readiness")
-def channel_readiness(channel_id: int, current_admin: User = Depends(require_xvond_admin)):
+def channel_readiness(
+    channel_id: int,
+    current_admin: User = Depends(require_xvond_admin),
+):
     db = SessionLocal()
     try:
-        channel = db.query(AgentChannel).filter(AgentChannel.id == channel_id).first()
+        channel = db.query(AgentChannel).filter(
+            AgentChannel.id == channel_id
+        ).first()
         if channel is None:
             raise HTTPException(404, "Channel not found")
         blockers = _activation_blockers(db, channel)
-        return {"channel_id": channel.id, "ready": not blockers, "blockers": blockers}
+        return {
+            "channel_id": channel.id,
+            "ready": not blockers,
+            "blockers": blockers,
+        }
     finally:
         db.close()
 
 
 @router.put("/{channel_id}")
-def update_channel(channel_id: int, data: ChannelUpdate, current_admin: User = Depends(require_xvond_admin)):
+def update_channel(
+    channel_id: int,
+    data: ChannelUpdate,
+    current_admin: User = Depends(require_xvond_admin),
+):
     db = SessionLocal()
     try:
-        channel = db.query(AgentChannel).filter(AgentChannel.id == channel_id).first()
+        channel = db.query(AgentChannel).filter(
+            AgentChannel.id == channel_id
+        ).first()
         if channel is None:
             raise HTTPException(404, "Channel not found")
+        changed_fields = []
+        previous_enabled = channel.enabled
         if data.config is not None:
-            channel.config = merge_config(channel.config, data.config)
+            new_config = merge_config(channel.config, data.config)
+            if channel.channel_type == "whatsapp":
+                plain = reveal_config(new_config) or {}
+                _assert_unique_whatsapp_phone_number_id(
+                    db,
+                    plain.get("phone_number_id"),
+                    exclude_channel_id=channel.id,
+                )
+            channel.config = new_config
+            changed_fields.append("config")
             db.flush()
         if data.enabled is True and channel.enabled is False:
             limits_service.check_channel_limit(db, channel.company_id)
             blockers = _activation_blockers(db, channel)
             if blockers:
-                raise HTTPException(409, "Channel is not ready: " + "; ".join(blockers))
+                raise HTTPException(
+                    409,
+                    "Channel is not ready: " + "; ".join(blockers),
+                )
             _ensure_channels_module(db, channel.company_id)
             channel.enabled = True
-        elif data.enabled is False:
+            changed_fields.append("enabled")
+        elif data.enabled is False and channel.enabled is not False:
             channel.enabled = False
+            changed_fields.append("enabled")
+        if changed_fields:
+            _audit_channel(
+                db,
+                current_admin,
+                channel,
+                "channel.updated",
+                details={
+                    "changed_fields": changed_fields,
+                    "previous_enabled": previous_enabled,
+                },
+            )
         db.commit()
         db.refresh(channel)
         result = serialize_channel(channel)
@@ -267,7 +424,11 @@ def update_channel(channel_id: int, data: ChannelUpdate, current_admin: User = D
 
 
 @router.put("/{channel_id}/whatsapp-config")
-def configure_whatsapp(channel_id: int, data: WhatsAppConfigUpdate, current_admin: User = Depends(require_xvond_admin)):
+def configure_whatsapp(
+    channel_id: int,
+    data: WhatsAppConfigUpdate,
+    current_admin: User = Depends(require_xvond_admin),
+):
     db = SessionLocal()
     try:
         channel = db.query(AgentChannel).filter(
@@ -282,20 +443,46 @@ def configure_whatsapp(channel_id: int, data: WhatsAppConfigUpdate, current_admi
             for key, value in data.model_dump().items()
             if value is not None
         }
+        incoming.pop("language", None)
+        incoming.pop("dialect", None)
         new_config = merge_config(channel.config, incoming)
+        plain_config = reveal_config(new_config)
         try:
-            validate_channel_config("whatsapp", reveal_config(new_config))
+            validate_channel_config("whatsapp", plain_config)
         except ValueError as exc:
             raise HTTPException(400, detail=str(exc)) from exc
+        _assert_unique_whatsapp_phone_number_id(
+            db,
+            plain_config.get("phone_number_id"),
+            exclude_channel_id=channel.id,
+        )
 
+        previous_enabled = channel.enabled
         channel.config = new_config
         channel.enabled = False
         _ensure_channels_module(db, channel.company_id)
+        _audit_channel(
+            db,
+            current_admin,
+            channel,
+            "channel.whatsapp_configured",
+            details={
+                "changed_fields": sorted(incoming),
+                "previous_enabled": previous_enabled,
+                "configured_secret_fields": sorted(configured_secret_fields(new_config)),
+            },
+        )
         db.commit()
         db.refresh(channel)
         blockers = _activation_blockers(db, channel)
         result = serialize_channel(channel)
-        result.update({"status": "configured", "ready": not blockers, "blockers": blockers})
+        result.update(
+            {
+                "status": "configured",
+                "ready": not blockers,
+                "blockers": blockers,
+            }
+        )
         return result
     except HTTPException:
         db.rollback()
@@ -308,14 +495,26 @@ def configure_whatsapp(channel_id: int, data: WhatsAppConfigUpdate, current_admi
 
 
 @router.delete("/{channel_id}")
-def delete_channel(channel_id: int, current_admin: User = Depends(require_xvond_admin)):
+def delete_channel(
+    channel_id: int,
+    current_admin: User = Depends(require_xvond_admin),
+):
     db = SessionLocal()
     try:
-        channel = db.query(AgentChannel).filter(AgentChannel.id == channel_id).first()
+        channel = db.query(AgentChannel).filter(
+            AgentChannel.id == channel_id
+        ).first()
         if channel is None:
             raise HTTPException(404, "Channel not found")
+        _audit_channel(db, current_admin, channel, "channel.deleted")
         db.delete(channel)
         db.commit()
         return {"status": "deleted", "channel_id": channel_id}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

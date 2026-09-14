@@ -8,6 +8,14 @@ function inboxModeBadge(mode) {
     return `<span class="inbox-badge ${human ? "handoff-human" : "handoff-ai"}"><span class="mode-dot"></span>${human ? "Human active" : "AI active"}</span>`;
 }
 
+function inboxAssignmentBadge(conversation) {
+    if (String(conversation.mode || "ai").toLowerCase() !== "human") return "";
+    if (conversation.handoff_assigned_to_me === true) return inboxBadge("Assigned to you", "handoff-human");
+    if (conversation.handoff_claimable === true) return inboxBadge("Needs owner", "handoff-human");
+    if (conversation.handoff_assigned_user_id) return inboxBadge("Owned by teammate", "handoff-human");
+    return "";
+}
+
 function inboxChannelIcon(channelType) {
     const type = String(channelType || "unknown").toLowerCase();
     if (type === "whatsapp") return "WA";
@@ -37,6 +45,12 @@ function inboxThreadFingerprint(result) {
     return [
         conversation.id || "",
         conversation.mode || "ai",
+        conversation.handoff_supported ? "handoff" : "monitor",
+        conversation.human_reply_supported ? "reply" : "readonly",
+        conversation.handoff_assigned_user_id || "unassigned",
+        conversation.handoff_assigned_to_me ? "mine" : "not-mine",
+        conversation.handoff_claimable ? "claimable" : "claimed",
+        conversation.handoff_can_return_ai ? "can-return" : "cannot-return",
         conversation.message_count ?? messages.length,
         last?.id || 0,
         last?.role || ""
@@ -84,7 +98,7 @@ ensureInboxMarkup = function() {
             <div class="inbox-v2-toolbar">
                 <div>
                     <h2>Customer Inbox</h2>
-                    <p>Monitor AI conversations and take over whenever a human response is needed.</p>
+                    <p>One operating queue for every supported channel. Human conversations are claimed by one teammate at a time to prevent duplicate replies.</p>
                 </div>
                 <button class="inbox-refresh-button" onclick="loadConversations()">Refresh</button>
             </div>
@@ -112,7 +126,7 @@ ensureInboxMarkup = function() {
                     <div class="inbox-v2-empty">
                         <div class="inbox-v2-empty-icon">↗</div>
                         <strong>Select a conversation</strong>
-                        <p>Messages, AI status and human takeover controls will appear here.</p>
+                        <p>Messages, AI status, ownership and available human controls will appear here.</p>
                     </div>
                 </section>
             </div>
@@ -124,7 +138,7 @@ async function customerTakeOverConversation(conversationId) {
     const button = document.getElementById("takeover-button");
     if (button) {
         button.disabled = true;
-        button.textContent = "Taking over...";
+        button.textContent = "Claiming...";
     }
     try {
         await api(`/customer/inbox/${conversationId}/take-over`, {method: "POST", body: "{}"});
@@ -229,6 +243,7 @@ loadConversations = async function(options = {}) {
                             ${inboxBadge(item.agent_name, "agent-badge")}
                             ${inboxBadge(item.channel_label, `channel-${item.channel_type || "unknown"}`)}
                             ${inboxModeBadge(item.mode)}
+                            ${inboxAssignmentBadge(item)}
                         </div>
                     </div>
                 </button>
@@ -247,6 +262,136 @@ loadConversations = async function(options = {}) {
         }
     }
 };
+
+function handoffControls(conversation, conversationId) {
+    const human = String(conversation.mode || "ai").toLowerCase() === "human";
+    const supported = conversation.handoff_supported === true;
+    const assignedToMe = conversation.handoff_assigned_to_me === true;
+    const claimable = conversation.handoff_claimable === true;
+    const canReturn = conversation.handoff_can_return_ai === true;
+
+    if (human && claimable) {
+        return `
+            <div class="handoff-controls human-active">
+                <div class="handoff-copy">
+                    <span class="handoff-kicker">Human requested</span>
+                    <strong>This conversation needs a teammate</strong>
+                    <p>The AI employee is paused. Claim the conversation before replying so two teammates cannot answer the same customer.</p>
+                </div>
+                <button id="takeover-button" class="takeover-button" onclick="customerTakeOverConversation(${conversationId})">Claim Conversation</button>
+            </div>
+        `;
+    }
+
+    if (human && assignedToMe) {
+        return `
+            <div class="handoff-controls human-active">
+                <div class="handoff-copy">
+                    <span class="handoff-kicker">Your conversation</span>
+                    <strong>You own this human handoff</strong>
+                    <p>The AI employee remains paused while you reply from this workspace.</p>
+                </div>
+                ${canReturn ? `<button id="return-ai-button" class="secondary-button" onclick="customerReturnConversationToAI(${conversationId})">Return to AI</button>` : ""}
+            </div>
+        `;
+    }
+
+    if (human) {
+        return `
+            <div class="handoff-controls human-active">
+                <div class="handoff-copy">
+                    <span class="handoff-kicker">Owned by teammate</span>
+                    <strong>Another teammate is handling this conversation</strong>
+                    <p>You can monitor the thread, but Xvond locks the composer to prevent duplicate replies.</p>
+                </div>
+                ${canReturn ? `<button id="return-ai-button" class="secondary-button" onclick="customerReturnConversationToAI(${conversationId})">Manager: Return to AI</button>` : ""}
+            </div>
+        `;
+    }
+
+    if (supported) {
+        return `
+            <div class="handoff-controls ai-active">
+                <div class="handoff-copy">
+                    <span class="handoff-kicker">AI control</span>
+                    <strong>AI employee is handling this conversation</strong>
+                    <p>Claim it when a human response is required. AI stays paused until control is explicitly returned.</p>
+                </div>
+                <button id="takeover-button" class="takeover-button" onclick="customerTakeOverConversation(${conversationId})">Take Over</button>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="handoff-controls ai-active">
+            <div class="handoff-copy">
+                <span class="handoff-kicker">Monitor only</span>
+                <strong>AI employee is handling this conversation</strong>
+                <p>Live human takeover is not connected for ${safe(conversation.channel_label || "this channel")} yet. Xvond will not show a fake reply control.</p>
+            </div>
+        </div>
+    `;
+}
+
+function handoffComposer(conversation, conversationId) {
+    const human = String(conversation.mode || "ai").toLowerCase() === "human";
+    const takeoverSupported = conversation.handoff_supported === true;
+    const replySupported = conversation.human_reply_supported === true;
+    const assignedToMe = conversation.handoff_assigned_to_me === true;
+    const claimable = conversation.handoff_claimable === true;
+
+    if (human && replySupported && assignedToMe) {
+        return `
+            <div class="human-reply-box">
+                <textarea id="human-reply-message" rows="2" maxlength="12000" placeholder="Type your reply..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();customerSendHumanReply(${conversationId})}"></textarea>
+                <div class="human-reply-actions">
+                    <span>Enter to send · Shift+Enter for new line</span>
+                    <button id="human-reply-send" onclick="customerSendHumanReply(${conversationId})">Send</button>
+                </div>
+            </div>
+        `;
+    }
+
+    if (human && claimable && replySupported) {
+        return `
+            <div class="ai-reply-lock">
+                <span>A human response is required. Claim this conversation before replying.</span>
+                <button onclick="customerTakeOverConversation(${conversationId})">Claim conversation</button>
+            </div>
+        `;
+    }
+
+    if (human && replySupported) {
+        return `
+            <div class="ai-reply-lock">
+                <span>This conversation is assigned to another teammate. The composer is locked to prevent duplicate replies.</span>
+            </div>
+        `;
+    }
+
+    if (human) {
+        return `
+            <div class="ai-reply-lock">
+                <span>This conversation is under human control, but Xvond has no live reply adapter for this channel. Return control to AI or continue in the channel's native operator tool.</span>
+            </div>
+        `;
+    }
+
+    if (takeoverSupported && replySupported) {
+        return `
+            <div class="ai-reply-lock">
+                <span>AI is currently responding automatically.</span>
+                <button onclick="customerTakeOverConversation(${conversationId})">Take over to reply</button>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="ai-reply-lock">
+            <span>Conversation monitoring is available. Live human reply is not connected for this channel.</span>
+        </div>
+    `;
+}
 
 loadInboxConversation = async function(conversationId, button = null, options = {}) {
     activeInboxConversationId = conversationId;
@@ -267,45 +412,9 @@ loadInboxConversation = async function(conversationId, button = null, options = 
 
         const conversation = result.conversation || {};
         const messages = result.messages || [];
-        const human = String(conversation.mode || "ai").toLowerCase() === "human";
         const contact = conversation.external_contact_id || conversation.title || `Conversation ${conversationId}`;
         const previousList = target.querySelector(".inbox-message-list");
         const keepBottom = !previousList || (previousList.scrollHeight - previousList.scrollTop - previousList.clientHeight < 80);
-
-        const controls = human ? `
-            <div class="handoff-controls human-active">
-                <div class="handoff-copy">
-                    <span class="handoff-kicker">Human control</span>
-                    <strong>You are replying to this customer</strong>
-                    <p>The AI employee remains paused until you return control.</p>
-                </div>
-                <button id="return-ai-button" class="secondary-button" onclick="customerReturnConversationToAI(${conversationId})">Return to AI</button>
-            </div>
-        ` : `
-            <div class="handoff-controls ai-active">
-                <div class="handoff-copy">
-                    <span class="handoff-kicker">AI control</span>
-                    <strong>AI employee is handling this conversation</strong>
-                    <p>Take over only when a human response is required.</p>
-                </div>
-                <button id="takeover-button" class="takeover-button" onclick="customerTakeOverConversation(${conversationId})">Take Over</button>
-            </div>
-        `;
-
-        const composer = human ? `
-            <div class="human-reply-box">
-                <textarea id="human-reply-message" rows="2" maxlength="12000" placeholder="Type your reply..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();customerSendHumanReply(${conversationId})}"></textarea>
-                <div class="human-reply-actions">
-                    <span>Enter to send · Shift+Enter for new line</span>
-                    <button id="human-reply-send" onclick="customerSendHumanReply(${conversationId})">Send</button>
-                </div>
-            </div>
-        ` : `
-            <div class="ai-reply-lock">
-                <span>AI is currently responding automatically.</span>
-                <button onclick="customerTakeOverConversation(${conversationId})">Take over to reply</button>
-            </div>
-        `;
 
         target.innerHTML = `
             <div class="inbox-thread-head">
@@ -317,12 +426,13 @@ loadInboxConversation = async function(conversationId, button = null, options = 
                             ${inboxBadge(conversation.agent_name, "agent-badge")}
                             ${inboxBadge(conversation.channel_label, `channel-${conversation.channel_type || "unknown"}`)}
                             ${inboxModeBadge(conversation.mode)}
+                            ${inboxAssignmentBadge(conversation)}
                         </div>
                     </div>
                 </div>
                 <div class="inbox-thread-meta">${safe(conversation.message_count || messages.length)} messages</div>
             </div>
-            ${controls}
+            ${handoffControls(conversation, conversationId)}
             <div class="inbox-message-list">
                 ${messages.length ? messages.map(message => `
                     <div class="inbox-message-row ${safe(inboxMessageClass(message.role))}">
@@ -334,7 +444,7 @@ loadInboxConversation = async function(conversationId, button = null, options = 
                     </div>
                 `).join("") : '<div class="empty-state">No messages in this conversation.</div>'}
             </div>
-            ${composer}
+            ${handoffComposer(conversation, conversationId)}
         `;
         const messageList = target.querySelector(".inbox-message-list");
         if (messageList && keepBottom) messageList.scrollTop = messageList.scrollHeight;

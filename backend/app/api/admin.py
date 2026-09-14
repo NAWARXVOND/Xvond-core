@@ -1,17 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from backend.app.core.company_lifecycle import (
+    CompanyNotFound,
+    CompanyNotReady,
+    activate_company,
+    deactivate_company,
+)
 from backend.app.core.config.settings import settings
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.core.n8n_gateway import n8n_gateway
 from backend.app.core.password_policy import validate_password
-from backend.app.core.readiness import company_readiness
 from backend.app.core.security import hash_password
 from backend.app.models.company import Company
 from backend.app.models.company_module import CompanyModule
 from backend.app.models.user import User
-from backend.app.modules.ai_agent.models import AIAgent
+from backend.app.modules.audit.service import audit_service
 from backend.app.modules.billing.models import Plan, Subscription
 
 router = APIRouter(prefix="/admin", tags=["Xvond Admin"])
@@ -63,7 +68,7 @@ def create_company(data: CompanyCreate, current_admin: User = Depends(require_xv
     try:
         validate_password(data.owner_password)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     db = SessionLocal()
     try:
@@ -89,6 +94,15 @@ def create_company(data: CompanyCreate, current_admin: User = Depends(require_xv
         )
         if onboarding_plan is not None:
             db.add(Subscription(company_id=company.id, plan_id=onboarding_plan.id, status="active"))
+        audit_service.log(
+            db=db,
+            action="company.created",
+            resource_type="company",
+            resource_id=company.id,
+            user_id=current_admin.id,
+            company_id=company.id,
+            details={"initial_state": "inactive"},
+        )
         db.commit()
         db.refresh(company)
         db.refresh(owner)
@@ -126,32 +140,43 @@ def update_company_status(
     """
     db = SessionLocal()
     try:
-        company = db.query(Company).filter(Company.id == company_id).first()
-        if company is None:
-            raise HTTPException(status_code=404, detail="Company not found")
+        try:
+            if data.active:
+                company, readiness = activate_company(db, company_id)
+                action = "company.activated"
+                details = {
+                    "readiness_status": readiness.get("status"),
+                    "ready_agents": [
+                        item.get("id")
+                        for item in readiness.get("agents", [])
+                        if item.get("ready")
+                    ],
+                }
+            else:
+                company = deactivate_company(db, company_id)
+                action = "company.deactivated"
+                details = {"emergency_stop": True}
+        except CompanyNotFound as exc:
+            raise HTTPException(status_code=404, detail="Company not found") from exc
+        except CompanyNotReady as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Company is not ready to activate",
+                    "issues": exc.readiness["issues"],
+                    "agents": exc.readiness["agents"],
+                },
+            ) from exc
 
-        if data.active:
-            readiness = company_readiness(db, company_id)
-            if readiness is None:
-                raise HTTPException(status_code=404, detail="Company not found")
-            if not readiness["ready"]:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "message": "Company is not ready to activate",
-                        "issues": readiness["issues"],
-                        "agents": readiness["agents"],
-                    },
-                )
-            company.active = True
-        else:
-            company.active = False
-            (
-                db.query(AIAgent)
-                .filter(AIAgent.company_id == company_id)
-                .update({AIAgent.enabled: False}, synchronize_session=False)
-            )
-
+        audit_service.log(
+            db=db,
+            action=action,
+            resource_type="company",
+            resource_id=company.id,
+            user_id=current_admin.id,
+            company_id=company.id,
+            details=details,
+        )
         db.commit()
         db.refresh(company)
         return {

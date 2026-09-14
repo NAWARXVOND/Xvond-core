@@ -8,7 +8,12 @@ from pydantic import BaseModel
 
 from backend.app.core.config.settings import settings
 from backend.app.core.database.connection import SessionLocal
-from backend.app.core.dependencies import get_current_user, SESSION_COOKIE_NAME
+from backend.app.core.dependencies import (
+    CUSTOMER_ROLES,
+    SESSION_COOKIE_NAME,
+    get_current_user,
+    require_customer_user,
+)
 from backend.app.core.mail import send_password_reset_code
 from backend.app.core.password_policy import validate_password
 from backend.app.core.security import (
@@ -151,7 +156,7 @@ def customer_forgot_password(data: ForgotPasswordRequest):
         if (
             user is None
             or user.company_id is None
-            or user.role in ("super_admin", "xvond_admin")
+            or user.role not in CUSTOMER_ROLES
         ):
             return generic_response
 
@@ -211,7 +216,7 @@ def customer_reset_password(data: ResetPasswordRequest, response: Response):
         if (
             user is None
             or user.company_id is None
-            or user.role in ("super_admin", "xvond_admin")
+            or user.role not in CUSTOMER_ROLES
         ):
             raise HTTPException(status_code=400, detail="Invalid or expired code")
 
@@ -248,14 +253,8 @@ def customer_reset_password(data: ResetPasswordRequest, response: Response):
 def customer_change_password(
     data: ChangePasswordRequest,
     response: Response,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_customer_user),
 ):
-    if current_user.company_id is None or current_user.role in (
-        "super_admin",
-        "xvond_admin",
-    ):
-        raise HTTPException(status_code=403, detail="Customer account required")
-
     _validate_new_password(data.new_password)
     if data.current_password == data.new_password:
         raise HTTPException(status_code=400, detail="New password must be different")

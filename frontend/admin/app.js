@@ -11,6 +11,8 @@ function escapeAdmin(value){return String(value??"").replaceAll("&","&amp;").rep
 function escapeProduction(value){return escapeAdmin(value)}
 function authHeaders(){return {"Content-Type":"application/json"}}
 function clearAdminSession(){token=null;document.getElementById("app")?.classList.add("hidden");document.getElementById("login-screen")?.classList.remove("hidden")}
+function adminNumber(value){const n=Number(value||0);return Number.isFinite(n)?n.toLocaleString():String(value??0)}
+function adminMoney(value){const n=Number(value||0);return Number.isFinite(n)?n.toFixed(3):"0.000"}
 
 async function api(url,options={}){
   const response=await fetch(API+url,{...options,credentials:"same-origin",headers:{...(options.headers||{}),"Content-Type":"application/json"}});
@@ -54,8 +56,34 @@ async function showPage(name,button=null){
   if(name==="dashboard")await loadDashboard();if(name==="companies")await loadCompanies();
 }
 
+function renderAdminAttention(data){
+  const target=document.getElementById("dashboard-attention");if(!target)return;
+  const items=data.attention_items||[];
+  if(!items.length){target.innerHTML='<div class="status status-active" style="display:inline-block">No operational incidents require review</div>';return}
+  target.innerHTML=`<div class="operation-list">${items.map(item=>`<div class="request-card"><div class="request-card-head"><div><strong>${escapeAdmin(item.company_name||`Company #${item.company_id}`)}</strong><div class="meta">${escapeAdmin(item.title||item.type)} · ${adminNumber(item.count)} event${Number(item.count)===1?'':'s'}</div></div><span class="status ${item.severity==='critical'?'status-inactive':'status-active'}">${escapeAdmin(item.severity||'review')}</span></div><button class="table-button" onclick="loadCompanyControlCenter(${Number(item.company_id)},'${escapeAdmin(item.tab||'overview')}')">Open Workspace</button></div>`).join('')}</div>`;
+}
+
 async function loadDashboard(){
-  try{const data=await api("/admin/dashboard/summary");const cards=[["Companies",data.companies],["Active Companies",data.active_companies],["Users",data.users],["AI Employees",data.agents],["Active Employees",data.active_agents],["Conversations",data.conversations],["AI Requests",data.ai_requests],["Tokens",data.total_tokens],["AI Provider Cost",data.provider_cost],["Active Services",data.active_subscriptions]];document.getElementById("dashboard-cards").innerHTML=cards.map(([label,value])=>`<div class="card"><div class="card-label">${escapeAdmin(label)}</div><div class="card-value">${value??0}</div></div>`).join("")}catch(e){console.error(e)}
+  try{
+    const data=await api("/admin/dashboard/summary");
+    const cards=[
+      ["Companies",adminNumber(data.companies)],
+      ["Active Companies",adminNumber(data.active_companies)],
+      ["Active Employees",`${adminNumber(data.active_agents)} / ${adminNumber(data.agents)}`],
+      ["Active Channels",adminNumber(data.active_channels)],
+      ["Active Services",adminNumber(data.active_subscriptions)],
+      ["AI Requests · 24h",adminNumber(data.ai_requests_24h)],
+      ["AI Failures · 24h",adminNumber(data.failed_ai_requests_24h)],
+      ["External Ops Pending",adminNumber(data.unresolved_external_operations)],
+      ["Provider Cost · 30d",adminMoney(data.provider_cost_30d)],
+      ["Total Tokens",adminNumber(data.total_tokens)]
+    ];
+    document.getElementById("dashboard-cards").innerHTML=cards.map(([label,value])=>`<div class="card"><div class="card-label">${escapeAdmin(label)}</div><div class="card-value">${escapeAdmin(value)}</div></div>`).join("");
+    renderAdminAttention(data);
+  }catch(e){
+    console.error(e);
+    const attention=document.getElementById("dashboard-attention");if(attention)attention.innerHTML=`<div class="error">${escapeAdmin(e.message)}</div>`;
+  }
 }
 
 async function loadCompanies(){

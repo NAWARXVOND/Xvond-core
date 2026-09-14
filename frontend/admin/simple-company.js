@@ -5,11 +5,8 @@ function businessTypeOptions(selected=""){const types=["Salon / Beauty","Restaur
 
 async function setSimpleChannelStatus(c,id,en){try{await api(`/admin/channels/${id}`,{method:"PUT",body:JSON.stringify({enabled:en})});await openSimpleCompany(c)}catch(e){alert(e.message)}}
 
-async function takeOverConversation(c,conversationId,a){try{await api(`/admin/handoff/companies/${c}/conversations/${conversationId}/take-over`,{method:"POST"});await openHumanTakeover(c,a)}catch(e){alert(e.message)}}
-async function returnConversationToAI(c,conversationId,a){try{await api(`/admin/handoff/companies/${c}/conversations/${conversationId}/return-ai`,{method:"POST"});await openHumanTakeover(c,a)}catch(e){alert(e.message)}}
-
 function openPDFKnowledge(c,a){simpleCompanyId=+c;openModal("Add PDF Knowledge",`<p>Upload a menu, price list, services catalog, scanned PDF or company document.</p><div class="form-group"><label>PDF File</label><input id="simple-pdf-file" type="file" accept="application/pdf,.pdf"></div><button class="modal-submit" onclick="uploadPDFKnowledge(${a})">Upload & Learn</button>`)}
-async function uploadPDFKnowledge(a){const input=document.getElementById("simple-pdf-file"),file=input.files&&input.files[0];if(!file){alert("Choose a PDF file first.");return}const fd=new FormData();fd.append("file",file);try{const token=localStorage.getItem("xvond_admin_token")||localStorage.getItem("token");const res=await fetch(`/admin/ai-employees/companies/${simpleCompanyId}/${a}/knowledge/pdf`,{method:"POST",headers:token?{Authorization:`Bearer ${token}`}:{},body:fd});const data=await res.json().catch(()=>({}));if(!res.ok)throw new Error(data.detail||"PDF upload failed");await openKnowledgeManager(simpleCompanyId,a)}catch(e){alert(e.message)}}
+async function uploadPDFKnowledge(a){const input=document.getElementById("simple-pdf-file"),file=input?.files?.[0];if(!file){alert("Choose a PDF file first.");return}const fd=new FormData();fd.append("file",file);try{const res=await fetch(`/admin/ai-employees/companies/${simpleCompanyId}/${a}/knowledge/pdf`,{method:"POST",credentials:"same-origin",body:fd});const data=await res.json().catch(()=>({}));if(!res.ok)throw new Error(typeof data.detail==="string"?data.detail:(data.detail?.message||"PDF upload failed"));await openKnowledgeManager(simpleCompanyId,a)}catch(e){alert(e.message)}}
 
 async function openWhatsAppSetup(a,c){
   try{
@@ -21,14 +18,11 @@ async function openWhatsAppSetup(a,c){
     <div class="form-group"><label>Phone Number ID</label><input id="simple-wa-phone-id" value="${f(cfg.phone_number_id||'')}"></div>
     <div class="form-grid two"><div class="form-group"><label>Access Token</label><input id="simple-wa-access-token" type="password" placeholder="${secrets.has('access_token')?'Already configured — leave blank to keep':'Required'}"></div><div class="form-group"><label>Verify Token</label><input id="simple-wa-verify-token" type="password" placeholder="${secrets.has('verify_token')?'Already configured — leave blank to keep':'Required'}"></div></div>
     <div class="form-grid two"><div class="form-group"><label>App Secret</label><input id="simple-wa-app-secret" type="password" placeholder="${secrets.has('app_secret')?'Already configured — leave blank to keep':'Required'}"></div><div class="form-group"><label>Graph API Version</label><input id="simple-wa-version" value="${f(cfg.graph_api_version||'v23.0')}"></div></div>
-    <div class="modal-intro"><strong>WhatsApp behavior</strong><p>These settings apply only to text conversations on WhatsApp.</p></div>
-    <div class="form-grid two"><div class="form-group"><label>Language</label><select id="simple-wa-language"><option value="auto">Automatic</option><option value="ar">Arabic</option><option value="en">English</option></select></div><div class="form-group"><label>Dialect</label><select id="simple-wa-dialect"><option value="auto">Automatic</option><option value="omani">Omani Arabic</option><option value="gulf">Gulf Arabic</option><option value="levantine">Levantine Arabic</option><option value="egyptian">Egyptian Arabic</option><option value="msa">Modern Standard Arabic</option></select></div></div>
-    <div class="form-grid two"><div class="form-group"><label>Tone</label><select id="simple-wa-tone"><option value="professional_friendly">Professional & Friendly</option><option value="professional">Professional</option><option value="warm">Warm</option><option value="concise">Concise</option></select></div><div class="form-group"><label>Response Length</label><select id="simple-wa-length"><option value="concise">Concise</option><option value="short">Short</option><option value="balanced">Balanced</option><option value="detailed">Detailed</option></select></div></div>
+    <div class="modal-intro"><strong>WhatsApp presentation</strong><p>Reply language and dialect come from the AI Employee profile. Configure only WhatsApp-specific presentation here.</p></div>
+    <div class="form-grid two"><div class="form-group"><label>Tone Override</label><select id="simple-wa-tone"><option value="professional_friendly">Professional & Friendly</option><option value="professional">Professional</option><option value="warm">Warm</option><option value="concise">Concise</option></select><small>Use only when WhatsApp should feel different from the employee's general style.</small></div><div class="form-group"><label>Response Length</label><select id="simple-wa-length"><option value="concise">Concise</option><option value="short">Short</option><option value="balanced">Balanced</option><option value="detailed">Detailed</option></select></div></div>
     <div class="form-grid two"><div class="form-group"><label>Response Style</label><select id="simple-wa-style"><option value="conversational">Conversational</option><option value="professional">Professional</option><option value="direct">Direct</option></select></div><div class="form-group"><label>Emoji Style</label><select id="simple-wa-emoji"><option value="minimal">Minimal</option><option value="none">None</option><option value="natural">Natural</option></select></div></div>
-    <div class="form-group"><label>WhatsApp-only Instructions</label><textarea id="simple-wa-instructions" placeholder="Behavior rules for WhatsApp only">${f(cfg.channel_instructions||'')}</textarea></div>
+    <div class="form-group"><label>WhatsApp-only Instructions</label><textarea id="simple-wa-instructions" placeholder="Only rules specific to WhatsApp. Do not repeat company facts or employee language settings.">${f(cfg.channel_instructions||'')}</textarea></div>
     <button class="modal-submit" onclick="saveSimpleWhatsApp(${c})">Save WhatsApp Settings</button>`);
-    document.getElementById('simple-wa-language').value=cfg.language||'auto';
-    document.getElementById('simple-wa-dialect').value=cfg.dialect||'auto';
     document.getElementById('simple-wa-tone').value=cfg.tone||'professional_friendly';
     document.getElementById('simple-wa-length').value=cfg.response_length||'concise';
     document.getElementById('simple-wa-style').value=cfg.response_style||'conversational';
@@ -45,8 +39,6 @@ async function saveSimpleWhatsApp(c){
       verify_token:value("simple-wa-verify-token")||null,
       app_secret:value("simple-wa-app-secret")||null,
       graph_api_version:value("simple-wa-version")||"v23.0",
-      language:document.getElementById("simple-wa-language")?.value||"auto",
-      dialect:document.getElementById("simple-wa-dialect")?.value||"auto",
       tone:document.getElementById("simple-wa-tone")?.value||"professional_friendly",
       response_style:document.getElementById("simple-wa-style")?.value||"conversational",
       response_length:document.getElementById("simple-wa-length")?.value||"concise",

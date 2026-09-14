@@ -1,5 +1,4 @@
 CHANNEL_CATALOG = {
-
     "whatsapp": {
         "name": "WhatsApp",
         "description": "WhatsApp Business Cloud API",
@@ -8,17 +7,14 @@ CHANNEL_CATALOG = {
             {"name": "access_token", "label": "Access Token", "required": True, "secret": True},
             {"name": "verify_token", "label": "Verify Token", "required": True, "secret": True},
             {"name": "app_secret", "label": "App Secret", "required": True, "secret": True},
-            {"name": "graph_api_version", "label": "Graph API Version", "required": True, "secret": False, "default": "v23.0"},
-            {"name": "language", "label": "Language", "required": False, "secret": False, "default": "auto"},
-            {"name": "dialect", "label": "Dialect", "required": False, "secret": False, "default": "auto"},
-            {"name": "tone", "label": "Tone", "required": False, "secret": False, "default": "professional_friendly"},
+            {"name": "graph_api_version", "label": "Graph API Version", "required": True, "secret": False, "default": "v26.0"},
+            {"name": "tone", "label": "Tone Override", "required": False, "secret": False, "default": "professional_friendly"},
             {"name": "response_style", "label": "Response Style", "required": False, "secret": False, "default": "conversational"},
             {"name": "response_length", "label": "Response Length", "required": False, "secret": False, "default": "concise"},
             {"name": "emoji_style", "label": "Emoji Style", "required": False, "secret": False, "default": "minimal"},
-            {"name": "channel_instructions", "label": "WhatsApp Instructions", "required": False, "secret": False},
+            {"name": "channel_instructions", "label": "WhatsApp-only Instructions", "required": False, "secret": False},
         ],
     },
-
     "website": {
         "name": "Website Chat",
         "description": "AI chat widget for customer websites",
@@ -32,7 +28,6 @@ CHANNEL_CATALOG = {
             {"name": "contact_url", "label": "Contact / Booking URL", "required": False, "secret": False},
         ],
     },
-
     "voice": {
         "name": "Voice",
         "description": "AI voice channel",
@@ -43,7 +38,6 @@ CHANNEL_CATALOG = {
             {"name": "auth_token", "label": "Auth Token", "required": False, "secret": True},
         ],
     },
-
     "telegram": {
         "name": "Telegram",
         "description": "Telegram Bot channel",
@@ -51,7 +45,6 @@ CHANNEL_CATALOG = {
             {"name": "bot_token", "label": "Bot Token", "required": True, "secret": True},
         ],
     },
-
     "custom": {
         "name": "Custom Channel",
         "description": "Custom customer communication channel",

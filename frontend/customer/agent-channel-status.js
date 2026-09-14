@@ -11,16 +11,17 @@ function xvondCustomerChannelStatusMarkup(agentId){
     if(!channels.length){
         return `
             <div class="xvond-agent-channels" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(148,163,184,.25)">
-                <strong>القنوات المرتبطة</strong>
-                <p class="muted" style="margin:6px 0 0">لا توجد قنوات مرتبطة بهذا الموظف حاليًا.</p>
+                <strong>Customer Channels</strong>
+                <p class="muted" style="margin:6px 0 0">No customer channel is assigned to this AI Employee yet.</p>
             </div>
         `;
     }
     return `
         <div class="xvond-agent-channels" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(148,163,184,.25)">
-            <strong>القنوات المرتبطة بهذا الموظف</strong>
+            <strong>Customer Channels</strong>
+            <p class="muted" style="margin:6px 0 0">The same employee identity, knowledge and allowed actions are used across these channels.</p>
             <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:9px">
-                ${channels.map(channel=>`<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid rgba(148,163,184,.28);font-size:13px;font-weight:700"><span style="width:8px;height:8px;border-radius:50%;background:${channel.enabled?'#16a34a':'#94a3b8'}"></span>${safe(xvondCustomerChannelLabel(channel.type))} · ${channel.enabled?'مفعّلة':'غير مفعّلة'}</span>`).join('')}
+                ${channels.map(channel=>`<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid rgba(148,163,184,.28);font-size:13px;font-weight:700"><span style="width:8px;height:8px;border-radius:50%;background:${channel.enabled?'#16a34a':'#94a3b8'}"></span>${safe(xvondCustomerChannelLabel(channel.type))} · ${channel.enabled?'Live':'Inactive'}</span>`).join('')}
             </div>
         </div>
     `;

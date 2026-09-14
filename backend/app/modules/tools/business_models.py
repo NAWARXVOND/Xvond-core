@@ -67,8 +67,21 @@ class HumanHandoff(Base):
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), nullable=False, index=True)
     agent_id: Mapped[int] = mapped_column(ForeignKey("ai_agents.id"), nullable=False, index=True)
     conversation_id: Mapped[int | None] = mapped_column(ForeignKey("ai_conversations.id"), nullable=True)
+    assigned_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=True,
+        index=True,
+    )
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     priority: Mapped[str] = mapped_column(String(50), default="normal", nullable=False)
     department: Mapped[str] = mapped_column(String(100), default="customer_service", nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
+    taken_over_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )

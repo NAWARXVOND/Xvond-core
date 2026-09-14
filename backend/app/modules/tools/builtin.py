@@ -1,12 +1,17 @@
 from datetime import date, time
 
 from backend.app.core.http_security import safe_http_request, validate_public_http_url
+from backend.app.modules.ai_agent.models import AIConversation
 from backend.app.modules.tools.base import AgentTool, ToolResult
 from backend.app.modules.tools.business_models import Lead, Booking, Order, HumanHandoff, ActionRequest
 from backend.app.modules.channels.whatsapp_models import WhatsAppSession
 from backend.app.modules.channels.handoff import activate_human_handoff
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeDocument
 from backend.app.modules.knowledge.service import knowledge_service
+
+
+LIVE_HUMAN_HANDOFF_CHANNELS = {"whatsapp", "website"}
+ACTIVE_HANDOFF_STATUSES = {"pending", "in_progress"}
 
 
 def _fact_tokens(value: str) -> set[str]:
@@ -83,14 +88,29 @@ class OrderTool(AgentTool):
         return ToolResult(success=True,data={"action":"order_created","order_id":request.id,"request_id":request.id,"status":"new","details":details})
 
 class HumanHandoffTool(AgentTool):
-    name="human_handoff";description="Escalate a conversation to a human employee when the customer explicitly requests a human or configured policy requires escalation. Do not use this merely because a normal internal order or booking is being created."
+    name="human_handoff";description="Escalate a live text conversation to a human employee when the customer explicitly requests a human or configured policy requires escalation. Use only when Xvond has a real same-channel handoff path; never claim a transfer on unsupported channels."
     input_schema={"type":"object","properties":{"reason":{"type":"string"},"priority":{"type":"string","enum":["low","normal","high","urgent"]},"department":{"type":"string"}},"additionalProperties":False}
     def execute(self,arguments,context):
-        db=context["db"];conversation_id=context.get("conversation_id");reason=arguments.get("reason") or "ai_handoff";handoff=HumanHandoff(company_id=context["company_id"],agent_id=context["agent_id"],conversation_id=conversation_id,reason=reason,priority=arguments.get("priority","normal"),department=arguments.get("department",context.get("config",{}).get("department","customer_service")));db.add(handoff);db.flush();session=None
-        if conversation_id is not None:
-            session=db.query(WhatsAppSession).filter(WhatsAppSession.company_id==context["company_id"],WhatsAppSession.agent_id==context["agent_id"],WhatsAppSession.conversation_id==conversation_id).first()
-            if session is not None:activate_human_handoff(session,reason=reason)
-        return ToolResult(success=True,data={"action":"human_handoff_created","handoff_id":handoff.id,"status":handoff.status,"ai_paused":session is not None})
+        db=context["db"];conversation_id=context.get("conversation_id");cid=context["company_id"];aid=context["agent_id"]
+        if conversation_id is None:return ToolResult(success=False,error="Human handoff requires a live customer conversation")
+        conversation=db.query(AIConversation).filter(AIConversation.id==conversation_id,AIConversation.company_id==cid,AIConversation.agent_id==aid).first()
+        if conversation is None:return ToolResult(success=False,error="Conversation not found for human handoff")
+        channel_type=str(conversation.channel_type or "").strip().lower()
+        if channel_type not in LIVE_HUMAN_HANDOFF_CHANNELS:return ToolResult(success=False,error=f"Live human handoff is not available on {channel_type or 'this'} channel yet",data={"action":"human_handoff_unavailable","channel_type":channel_type or None})
+        session=None
+        if channel_type=="whatsapp":
+            session=db.query(WhatsAppSession).filter(WhatsAppSession.company_id==cid,WhatsAppSession.agent_id==aid,WhatsAppSession.conversation_id==conversation_id).first()
+            if session is None:return ToolResult(success=False,error="WhatsApp session is unavailable for live human handoff")
+        reason=arguments.get("reason") or "ai_handoff";priority=arguments.get("priority","normal");department=arguments.get("department",context.get("config",{}).get("department","customer_service"))
+        handoff=db.query(HumanHandoff).filter(HumanHandoff.company_id==cid,HumanHandoff.conversation_id==conversation_id,HumanHandoff.status.in_(ACTIVE_HANDOFF_STATUSES)).order_by(HumanHandoff.id.desc()).first()
+        if handoff is None:
+            handoff=HumanHandoff(company_id=cid,agent_id=aid,conversation_id=conversation_id,reason=reason,priority=priority,department=department,status="pending");db.add(handoff);db.flush()
+        else:
+            handoff.reason=handoff.reason or reason;handoff.priority=priority;handoff.department=department
+        if session is not None:activate_human_handoff(session,reason=reason)
+        # Website runtime treats the active handoff row itself as the AI pause.
+        db.flush()
+        return ToolResult(success=True,data={"action":"human_handoff_created","handoff_id":handoff.id,"status":handoff.status,"ai_paused":True,"claim_required":handoff.assigned_user_id is None,"channel_type":channel_type})
 
 class WebhookTool(AgentTool):
     name="webhook";description="Send data to an external webhook.";input_schema={"type":"object","properties":{"payload":{"type":"object"}},"additionalProperties":True}

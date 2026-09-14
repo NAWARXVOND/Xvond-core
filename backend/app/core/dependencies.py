@@ -34,6 +34,16 @@ CUSTOMER_ROLES = {
     "employee",
 }
 
+# Operators may work customer conversations without receiving company-management
+# permissions. Keep this explicit so future staff roles can be added without
+# accidentally opening billing, business configuration or user administration.
+CUSTOMER_OPERATOR_ROLES = {
+    "owner",
+    "admin",
+    "manager",
+    "employee",
+}
+
 
 def get_db():
     db = SessionLocal()
@@ -99,6 +109,17 @@ def require_customer_user(
 ) -> User:
     if current_user.role not in CUSTOMER_ROLES:
         raise HTTPException(status_code=403, detail="Customer access required")
+    return current_user
+
+
+def require_customer_operator(
+    current_user: User = Depends(require_customer_user),
+) -> User:
+    if current_user.role not in CUSTOMER_OPERATOR_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail="Company operator access required",
+        )
     return current_user
 
 

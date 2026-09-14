@@ -24,9 +24,11 @@ def test_whatsapp_behavior_is_channel_specific():
         },
     )
     assert "WHATSAPP CHANNEL BEHAVIOR" in prompt
-    assert "Language: ar" in prompt
-    assert "Dialect: omani" in prompt
-    assert "Tone: warm" in prompt
+    assert "AI Employee profile is authoritative for reply language, dialect" in prompt
+    assert "Language: ar" not in prompt
+    assert "Dialect: omani" not in prompt
+    assert "Tone override: warm" in prompt
+    assert "Emoji style: minimal" in prompt
     assert "Never over-explain" in prompt
 
 

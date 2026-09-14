@@ -3,7 +3,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from backend.app.api.admin_channels import _activation_blockers, _ensure_channels_module
+from backend.app.api.admin_channels import (
+    _activation_blockers,
+    _assert_unique_whatsapp_phone_number_id,
+    _ensure_channels_module,
+)
 from backend.app.api.admin_meta_whatsapp import (
     WHATSAPP_BEHAVIOR_DEFAULTS,
     _ensure_meta_configured,
@@ -59,7 +63,10 @@ def _customer_agent(db, current_user: User, agent_id: int) -> AIAgent:
     return agent
 
 
-def _meta_channel_connected(channel: AgentChannel | None, channel_config: dict) -> bool:
+def _meta_channel_connected(
+    channel: AgentChannel | None,
+    channel_config: dict,
+) -> bool:
     return channel is not None and whatsapp_meta_onboarding_complete(channel_config)
 
 
@@ -83,7 +90,9 @@ def embedded_signup_config(
             )
             .first()
         )
-        channel_config = reveal_config(channel.config) if channel is not None else {}
+        channel_config = (
+            reveal_config(channel.config) if channel is not None else {}
+        )
         configured = False
         if channel is not None:
             try:
@@ -91,9 +100,16 @@ def embedded_signup_config(
                 configured = True
             except ValueError:
                 pass
-        connection = whatsapp_connection_state(channel_config, verify_remote=True)
+        connection = whatsapp_connection_state(
+            channel_config,
+            verify_remote=True,
+        )
         connected = channel is not None and connection["connected"]
-        blockers = _activation_blockers(db, channel) if channel is not None else []
+        blockers = (
+            _activation_blockers(db, channel)
+            if channel is not None
+            else []
+        )
         enabled = bool(channel.enabled) if channel is not None else False
         return {
             "ready": ready,
@@ -135,9 +151,15 @@ def complete_embedded_signup(
     requested_phone_number_id = str(data.phone_number_id or "").strip() or None
     connection_mode = str(data.connection_mode or "embedded_signup").strip()
     if connection_mode not in {"embedded_signup", "coexistence"}:
-        raise HTTPException(status_code=400, detail="Invalid WhatsApp connection mode")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid WhatsApp connection mode",
+        )
     if not code or not waba_id:
-        raise HTTPException(status_code=400, detail="code and waba_id are required")
+        raise HTTPException(
+            status_code=400,
+            detail="code and waba_id are required",
+        )
 
     # Validate tenant ownership before exchanging any Meta authorization code.
     db = SessionLocal()
@@ -157,7 +179,10 @@ def complete_embedded_signup(
     )
     phone_number_id = str(phone.get("id") or "").strip()
     if not phone_number_id:
-        raise HTTPException(status_code=502, detail="Meta did not return a usable phone number ID")
+        raise HTTPException(
+            status_code=502,
+            detail="Meta did not return a usable phone number ID",
+        )
 
     _subscribe_app_to_waba(
         waba_id=waba_id,
@@ -170,7 +195,10 @@ def complete_embedded_signup(
         # Re-check ownership in case the account changed while Meta signup was open.
         agent = _customer_agent(db, current_user, agent_id)
         if agent.company_id != company_id:
-            raise HTTPException(status_code=409, detail="AI Employee company changed during WhatsApp setup")
+            raise HTTPException(
+                status_code=409,
+                detail="AI Employee company changed during WhatsApp setup",
+            )
 
         channel = (
             db.query(AgentChannel)
@@ -180,6 +208,11 @@ def complete_embedded_signup(
                 AgentChannel.channel_type == "whatsapp",
             )
             .first()
+        )
+        _assert_unique_whatsapp_phone_number_id(
+            db,
+            phone_number_id,
+            exclude_channel_id=channel.id if channel is not None else None,
         )
         method = (
             "meta_embedded_signup_coexistence"
@@ -244,7 +277,9 @@ def complete_embedded_signup(
         db.commit()
         db.refresh(channel)
         return {
-            "status": "connected" if not blockers else "connected_needs_setup",
+            "status": (
+                "connected" if not blockers else "connected_needs_setup"
+            ),
             "channel_id": channel.id,
             "company_id": company_id,
             "agent_id": agent.id,

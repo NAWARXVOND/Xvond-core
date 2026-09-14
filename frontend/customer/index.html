@@ -51,7 +51,7 @@
 
     <main class="main">
         <header class="topbar">
-            <div><h1 id="page-title">Overview</h1><p>AI employees, operations and business workspace</p></div>
+            <div><h1 id="page-title">Overview</h1><p>AI employees, customer operations and business workspace</p></div>
             <div id="user-email"></div>
         </header>
 
@@ -59,31 +59,27 @@
             <div id="dashboard-cards" class="cards"></div>
             <div class="panel" style="margin-bottom:22px">
                 <h2>My Services</h2>
+                <p class="muted">Your active Xvond services, packages and current service status.</p>
                 <div id="dashboard-services" class="service-grid"></div>
             </div>
+        </section>
+
+        <section id="page-business-profile" class="page hidden">
             <div class="panel">
-                <h2>Account</h2>
-                <div id="account-info"></div>
-                <hr style="margin:25px 0">
-                <h3>Security</h3>
-                <p>Change your account password.</p>
-                <div style="max-width:420px;display:grid;gap:10px">
-                    <input id="current-password" type="password" autocomplete="current-password" placeholder="Current Password">
-                    <input id="new-password" type="password" autocomplete="new-password" placeholder="New Password">
-                    <input id="confirm-new-password" type="password" autocomplete="new-password" placeholder="Confirm New Password">
-                    <button onclick="changeCustomerPassword()">Change Password</button>
-                    <div id="change-password-message" class="error"></div>
-                </div>
+                <h2>Business Profile</h2>
+                <p class="muted">The single source of truth for company facts shared with every AI employee. Keep services, hours, branches, contact details and policies here—not inside employee instructions.</p>
+                <div id="customer-business-profile-content"></div>
             </div>
         </section>
 
         <section id="page-agents" class="page hidden">
-            <div class="panel"><h2>My AI Employees</h2><p class="muted">Manage the approved behavior, business information and knowledge for your company.</p><div id="agents-list"></div></div>
+            <div class="panel"><h2>My AI Employees</h2><p class="muted">Manage each employee's behavior and employee-specific knowledge. Company facts are managed once in Business Profile.</p><div id="agents-list"></div></div>
         </section>
 
         <section id="page-chat" class="page hidden">
             <div class="panel">
                 <h2>Test AI Employee</h2>
+                <p class="muted">Test the employee before using it with live customer channels.</p>
                 <label>AI Employee</label>
                 <select id="chat-agent"></select>
                 <div id="chat-box" class="chat-box"></div>
@@ -97,7 +93,7 @@
         <section id="page-conversations" class="page hidden">
             <div class="panel">
                 <h2>Inbox</h2>
-                <p class="muted">Loading unified conversation inbox...</p>
+                <p class="muted">Unified customer conversations and human handoff workspace.</p>
             </div>
         </section>
 
@@ -124,6 +120,25 @@
             <div id="customer-integrations-content"></div>
         </section>
 
+        <section id="page-account" class="page hidden">
+            <div class="panel">
+                <h2>Account</h2>
+                <p class="muted">Your portal identity and company access.</p>
+                <div id="account-info"></div>
+            </div>
+            <div class="panel" style="margin-top:20px">
+                <h2>Security</h2>
+                <p class="muted">Change the password for this portal account.</p>
+                <div style="max-width:420px;display:grid;gap:10px">
+                    <input id="current-password" type="password" autocomplete="current-password" placeholder="Current Password">
+                    <input id="new-password" type="password" autocomplete="new-password" placeholder="New Password">
+                    <input id="confirm-new-password" type="password" autocomplete="new-password" placeholder="Confirm New Password">
+                    <button onclick="changeCustomerPassword()">Change Password</button>
+                    <div id="change-password-message" class="error"></div>
+                </div>
+            </div>
+        </section>
+
         <section id="page-billing" class="page hidden">
             <div id="customer-billing-content"></div>
         </section>
@@ -140,7 +155,9 @@
 <script src="/static/customer/session-security.js?v=20260911-1"></script>
 <script src="/static/customer/handoff-inbox.js?v=20260911-1"></script>
 <script src="/static/customer/portal-canonical.js?v=20260905-4"></script>
-<script src="/static/customer/meta-whatsapp.js?v=20260914-1"></script>
+<script src="/static/customer/customer-operations.js?v=20260914-2"></script>
+<script src="/static/customer/meta-whatsapp.js?v=20260914-2"></script>
 <script src="/static/customer/agent-channel-status.js?v=20260913-1"></script>
+<script src="/static/customer/portal-information-architecture.js?v=20260914-1"></script>
 </body>
 </html>

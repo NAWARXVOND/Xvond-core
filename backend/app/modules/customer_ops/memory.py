@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from backend.app.modules.ai_agent.models import AIConversation, AIMessage
 from backend.app.modules.customer_ops.models import CustomerRecord
+from backend.app.modules.customer_ops.service import identity_key, normalize_phone
 
 
 CUSTOMER_MEMORY_MAX_MESSAGES = 32
@@ -13,53 +14,80 @@ def _clean(value):
     return text or None
 
 
-def _identity_for_external(external_contact_id: str) -> str:
-    return "external:" + external_contact_id.strip().lower()
-
-
 def get_or_touch_customer(db, conversation: AIConversation) -> CustomerRecord | None:
     external = _clean(conversation.external_contact_id)
     if not external:
+        return None
+
+    channel = _clean(conversation.channel_type)
+    is_whatsapp = str(channel or "").lower() == "whatsapp"
+    phone = normalize_phone(external) if is_whatsapp else None
+    canonical_key = identity_key(
+        phone=phone,
+        external=external,
+        channel=channel,
+    )
+    if not canonical_key:
         return None
 
     row = (
         db.query(CustomerRecord)
         .filter(
             CustomerRecord.company_id == conversation.company_id,
-            CustomerRecord.external_contact_id == external,
+            CustomerRecord.identity_key == canonical_key,
         )
         .first()
     )
     if row is None:
-        identity_key = _identity_for_external(external)
         row = (
             db.query(CustomerRecord)
             .filter(
                 CustomerRecord.company_id == conversation.company_id,
-                CustomerRecord.identity_key == identity_key,
+                CustomerRecord.external_contact_id == external,
+            )
+            .first()
+        )
+    if row is None and phone:
+        row = (
+            db.query(CustomerRecord)
+            .filter(
+                CustomerRecord.company_id == conversation.company_id,
+                CustomerRecord.phone == phone,
             )
             .first()
         )
 
-    now = datetime.utcnow()
+    now = datetime.now(UTC).replace(tzinfo=None)
     if row is None:
         row = CustomerRecord(
             company_id=conversation.company_id,
-            identity_key=_identity_for_external(external),
+            identity_key=canonical_key,
             external_contact_id=external,
-            channel=_clean(conversation.channel_type),
-            phone=external if str(conversation.channel_type or "").lower() == "whatsapp" else None,
+            channel=channel,
+            phone=phone,
             first_seen_at=now,
             last_seen_at=now,
         )
         db.add(row)
         db.flush()
     else:
+        if row.identity_key != canonical_key:
+            key_owner = (
+                db.query(CustomerRecord)
+                .filter(
+                    CustomerRecord.company_id == conversation.company_id,
+                    CustomerRecord.identity_key == canonical_key,
+                    CustomerRecord.id != row.id,
+                )
+                .first()
+            )
+            if key_owner is None:
+                row.identity_key = canonical_key
         row.external_contact_id = external
-        if _clean(conversation.channel_type):
-            row.channel = _clean(conversation.channel_type)
-        if str(conversation.channel_type or "").lower() == "whatsapp" and not row.phone:
-            row.phone = external
+        if channel:
+            row.channel = channel
+        if phone:
+            row.phone = phone
         row.last_seen_at = now
 
     return row
