@@ -57,12 +57,14 @@ function xvondCustomerMetaLoginOptions(config) {
 function xvondCustomerWhatsAppStatus(config) {
     if (!config.connected) {
         const needsReconnect = config.configured || config.connection_status === "invalid_token";
+        const connectionIssue = String(config.connection_issue || "").trim();
+        const fallbackDetail = needsReconnect
+            ? "أعد تأكيد الحساب والرقم حتى يعود الموظف للعمل على واتساب."
+            : "اربط رقم WhatsApp Business الخاص بشركتك بالموظف. ستُفتح نافذة آمنة لتأكيد ملكية الحساب والرقم.";
         return {
-            title: needsReconnect ? "اتصال واتساب يحتاج إعادة ربط" : "اربط رقم واتساب",
-            detail: needsReconnect
-                ? "أعد تأكيد الحساب والرقم حتى يعود الموظف للعمل على واتساب."
-                : "اربط رقم WhatsApp Business الخاص بشركتك بالموظف. ستُفتح نافذة آمنة لتأكيد ملكية الحساب والرقم.",
-            label: needsReconnect ? "إعادة ربط الرقم" : "ربط رقم واتساب",
+            title: needsReconnect ? "اتصال WhatsApp يحتاج إعادة ربط" : "ربط WhatsApp Business",
+            detail: connectionIssue ? safe(connectionIssue) : fallbackDetail,
+            label: needsReconnect ? "إعادة ربط WhatsApp" : "ربط WhatsApp",
         };
     }
 
@@ -81,7 +83,7 @@ function xvondCustomerWhatsAppStatus(config) {
     return {
         title: `تم ربط الرقم · ${phone}${name}`,
         detail: "الرقم مربوط بنجاح. يحتاج الموظف إلى إكمال بعض إعدادات الخدمة من Xvond قبل بدء الرد على العملاء.",
-        label: "إعادة ربط الرقم",
+        label: "إعادة ربط WhatsApp",
     };
 }
 
@@ -98,7 +100,7 @@ function xvondCustomerWhatsAppBlockers(config) {
 function xvondCustomerWhatsAppIntro() {
     return `
         <div class="xvond-managed-whatsapp-note" style="margin:0 0 12px;padding:12px;border:1px solid rgba(148,163,184,.25);border-radius:10px">
-            <strong>خدمة واتساب مُدارة من Xvond</strong>
+            <strong>خدمة WhatsApp مُدارة من Xvond</strong>
             <p class="muted" style="margin:6px 0 0">
                 اشتراك الموظف وإدارته يتمان عبر Xvond. نافذة الربط مخصصة لتأكيد ملكية حساب ورقم واتساب وربطه بالموظف.
             </p>
@@ -205,7 +207,7 @@ async function xvondDecorateCustomerAgentsWithWhatsApp() {
         box.style.marginTop = "14px";
         box.style.paddingTop = "12px";
         box.style.borderTop = "1px solid rgba(148,163,184,.25)";
-        box.innerHTML = `<p class="muted" style="margin:0">جاري فحص اتصال واتساب...</p>`;
+        box.innerHTML = `<p class="muted" style="margin:0">جاري فحص اتصال WhatsApp...</p>`;
         card.appendChild(box);
 
         try {
@@ -217,10 +219,10 @@ async function xvondDecorateCustomerAgentsWithWhatsApp() {
                 <p class="muted" style="margin:0 0 8px">${status.detail}</p>
                 ${xvondCustomerWhatsAppBlockers(config)}
                 <button type="button" style="margin-top:10px" onclick="openCustomerMetaWhatsAppConnect(${Number(agent.id)})" ${config.ready ? "" : "disabled"}>${status.label}</button>
-                ${config.ready ? "" : `<p class="muted" style="margin:8px 0 0">ربط واتساب يحتاج تفعيلًا من فريق Xvond.</p>`}
+                ${config.ready ? "" : `<p class="muted" style="margin:8px 0 0">ربط WhatsApp يحتاج تفعيلًا من فريق Xvond.</p>`}
             `;
         } catch (error) {
-            box.innerHTML = `<p class="muted" style="margin:0">تعذر فحص اتصال واتساب. تواصل مع Xvond إذا استمرت المشكلة.</p>`;
+            box.innerHTML = `<p class="muted" style="margin:0">تعذر فحص اتصال WhatsApp. تواصل مع Xvond إذا استمرت المشكلة.</p>`;
         }
     }));
 }
