@@ -11,18 +11,17 @@ from redis.exceptions import RedisError
 from starlette.concurrency import run_in_threadpool
 
 from backend.app.api.admin_meta_whatsapp import _meta_settings
-from backend.app.core.config_secrets import reveal_config, merge_config
+from backend.app.core.agent_runtime import agent_runtime
+from backend.app.core.config_secrets import merge_config, reveal_config
 from backend.app.core.customer_runtime_policy import (
     human_handoff_acknowledgement,
     is_service_access_error,
     safe_service_unavailable_message,
 )
-from backend.app.models.company_module import CompanyModule
-from backend.app.core.agent_runtime import agent_runtime
 from backend.app.core.database.connection import SessionLocal
+from backend.app.models.company_module import CompanyModule
 from backend.app.modules.ai_agent.models import AIMessage
 from backend.app.modules.audit.service import audit_service
-from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.channels.conversation_source import bind_conversation_source
 from backend.app.modules.channels.handoff import (
     activate_human_handoff,
@@ -31,18 +30,23 @@ from backend.app.modules.channels.handoff import (
     human_handoff_active,
     requests_human,
 )
+from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.channels.whatsapp_delivery import (
     apply_provider_status,
     attempt_delivery,
     ensure_delivery,
     retry_delivery_for_inbound,
 )
-from backend.app.modules.channels.whatsapp_models import WhatsAppInboundMessage, WhatsAppSession
+from backend.app.modules.channels.whatsapp_models import (
+    WhatsAppInboundMessage,
+    WhatsAppSession,
+)
 from backend.app.modules.channels.whatsapp_queue import whatsapp_job_queue
 from backend.app.modules.tools.business_models import HumanHandoff
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["WhatsApp Webhook"])
 ACTIVE_HANDOFF_STATUSES = ["pending", "in_progress"]
+TERMINAL_INBOUND_STATUSES = {"processed", "ignored"}
 logger = logging.getLogger(__name__)
 
 
@@ -75,17 +79,33 @@ def verify_signature(raw_body: bytes, signature: str | None, app_secret: str | N
     if not app_secret or not signature:
         return False
     expected = "sha256=" + hmac.new(
-        app_secret.encode("utf-8"), raw_body, hashlib.sha256
+        app_secret.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
     ).hexdigest()
     return hmac.compare_digest(expected, signature)
 
 
-def claim_message(db, message_id: str, company_id: int, agent_id: int, wa_id: str) -> bool:
+def claim_message(
+    db,
+    message_id: str,
+    company_id: int,
+    agent_id: int,
+    wa_id: str,
+) -> bool:
+    """Claim or resume a signed inbound event.
+
+    ``processing`` is resumable because a business action can intentionally
+    commit durable side-effect state inside the turn. ``processed``/``ignored``
+    are terminal. Scope mismatches are never treated as benign duplicates.
+    """
     item = WhatsAppInboundMessage(
         external_message_id=message_id,
         company_id=company_id,
         agent_id=agent_id,
         wa_id=wa_id,
+        status="processing",
+        attempts=1,
     )
     try:
         with db.begin_nested():
@@ -93,10 +113,48 @@ def claim_message(db, message_id: str, company_id: int, agent_id: int, wa_id: st
             db.flush()
         return True
     except IntegrityError:
-        return False
+        existing = (
+            db.query(WhatsAppInboundMessage)
+            .filter(WhatsAppInboundMessage.external_message_id == message_id)
+            .with_for_update()
+            .first()
+        )
+        if existing is None:
+            raise
+        if (
+            existing.company_id != company_id
+            or existing.agent_id != agent_id
+            or existing.wa_id != wa_id
+        ):
+            raise RuntimeError("WhatsApp inbound message identity scope conflict")
+        if existing.status in TERMINAL_INBOUND_STATUSES:
+            return False
+        existing.status = "processing"
+        existing.attempts = int(existing.attempts or 0) + 1
+        existing.updated_at = datetime.utcnow()
+        db.flush()
+        return True
+
+
+def complete_message_claim(db, message_id: str, *, status: str = "processed") -> None:
+    if status not in TERMINAL_INBOUND_STATUSES:
+        raise ValueError("Invalid terminal WhatsApp inbound status")
+    row = (
+        db.query(WhatsAppInboundMessage)
+        .filter(WhatsAppInboundMessage.external_message_id == message_id)
+        .with_for_update()
+        .first()
+    )
+    if row is None:
+        raise RuntimeError("WhatsApp inbound claim is missing")
+    row.status = status
+    row.updated_at = datetime.utcnow()
+    db.flush()
 
 
 def release_message_claim(db, message_id: str):
+    # Roll back only the current transaction. If a business action already made
+    # the processing row durable, the next queue attempt will resume it.
     db.rollback()
 
 
@@ -133,7 +191,9 @@ def _ensure_handoff_record(
             agent_id=channel.agent_id,
             conversation_id=conversation_id,
             reason=reason,
-            priority="high" if reason == "service_limit_or_entitlement" else "normal",
+            priority=(
+                "high" if reason == "service_limit_or_entitlement" else "normal"
+            ),
             department="customer_service",
             status=status,
         )
@@ -201,7 +261,11 @@ def _echo_precedes_explicit_ai_resume(
     return False
 
 
-def process_business_app_echo(db, channel: AgentChannel, value: dict) -> list[dict]:
+def process_business_app_echo(
+    db,
+    channel: AgentChannel,
+    value: dict,
+) -> list[dict]:
     processed = []
     phone_number_id = str(
         (value.get("metadata") or {}).get("phone_number_id") or ""
@@ -214,16 +278,16 @@ def process_business_app_echo(db, channel: AgentChannel, value: dict) -> list[di
                 {"message_id": message_id, "status": "ignored_invalid_echo"}
             )
             continue
-        claimed = claim_message(
+        if not claim_message(
             db=db,
             message_id=message_id,
             company_id=channel.company_id,
             agent_id=channel.agent_id,
             wa_id=wa_id,
-        )
-        if not claimed:
+        ):
             processed.append({"message_id": message_id, "status": "duplicate"})
             continue
+
         content = _business_app_echo_content(echo)
         try:
             lock_contact(db, channel.agent_id, wa_id)
@@ -257,14 +321,23 @@ def process_business_app_echo(db, channel: AgentChannel, value: dict) -> list[di
             elif session.ai_resume_echo_id == message_id:
                 session.ai_resume_echo_id = None
 
-            message_kwargs = {
-                "conversation_id": session.conversation_id,
-                "role": "human",
-                "content": content,
-            }
-            if created_at is not None:
-                message_kwargs["created_at"] = created_at
-            db.add(AIMessage(**message_kwargs))
+            source_key = f"whatsapp-echo:{message_id}"
+            mirrored = (
+                db.query(AIMessage)
+                .filter(AIMessage.source_key == source_key)
+                .first()
+            )
+            if mirrored is None:
+                message_kwargs = {
+                    "conversation_id": session.conversation_id,
+                    "role": "human",
+                    "content": content,
+                    "source_key": source_key,
+                }
+                if created_at is not None:
+                    message_kwargs["created_at"] = created_at
+                db.add(AIMessage(**message_kwargs))
+
             config = reveal_config(channel.config) or {}
             if config.get("coexistence") is True:
                 channel.config = merge_config(
@@ -300,6 +373,7 @@ def process_business_app_echo(db, channel: AgentChannel, value: dict) -> list[di
                     "stale_after_ai_resume": stale_after_resume,
                 },
             )
+            complete_message_claim(db, message_id)
             db.commit()
             processed.append(
                 {
@@ -376,7 +450,11 @@ def _delivery_outcome_status(result: dict) -> str:
     return "delivery_retry"
 
 
-def _process_delivery_statuses(db, channel: AgentChannel, value: dict) -> list[dict]:
+def _process_delivery_statuses(
+    db,
+    channel: AgentChannel,
+    value: dict,
+) -> list[dict]:
     processed = []
     for status_event in value.get("statuses", []) or []:
         row = apply_provider_status(db, status_event)
@@ -422,7 +500,11 @@ def _service_access_fallback(
     db.rollback()
     lock_contact(db, channel.agent_id, wa_id)
     if not claim_message(
-        db, message_id, channel.company_id, channel.agent_id, wa_id
+        db,
+        message_id,
+        channel.company_id,
+        channel.agent_id,
+        wa_id,
     ):
         retry = retry_delivery_for_inbound(
             db,
@@ -432,7 +514,11 @@ def _service_access_fallback(
         return None, retry
 
     session = _get_or_create_whatsapp_session(
-        db, channel, wa_id, phone_number_id, incoming_text
+        db,
+        channel,
+        wa_id,
+        phone_number_id,
+        incoming_text,
     )
     agent = agent_runtime.get_agent(db, channel.company_id, channel.agent_id)
     activate_human_handoff(session, reason="service_limit_or_entitlement")
@@ -443,19 +529,26 @@ def _service_access_fallback(
         reason="service_limit_or_entitlement",
     )
     reply_text = safe_service_unavailable_message(
-        agent.system_prompt or "", incoming_text
+        agent.system_prompt or "",
+        incoming_text,
     )
-    user_message = AIMessage(
-        conversation_id=session.conversation_id,
-        role="user",
-        content=incoming_text,
+    source_key = f"whatsapp:{message_id}"
+    user_message = (
+        db.query(AIMessage).filter(AIMessage.source_key == source_key).first()
     )
+    if user_message is None:
+        user_message = AIMessage(
+            conversation_id=session.conversation_id,
+            role="user",
+            content=incoming_text,
+            source_key=source_key,
+        )
+        db.add(user_message)
     reply_message = AIMessage(
         conversation_id=session.conversation_id,
         role="assistant",
         content=reply_text,
     )
-    db.add(user_message)
     db.add(reply_message)
     db.flush()
     delivery = ensure_delivery(
@@ -482,7 +575,7 @@ def _service_access_fallback(
             "internal_status": error.status_code,
         },
     )
-    # Business state and the outbound intent are durable before the network call.
+    complete_message_claim(db, message_id)
     db.commit()
     delivery_result = attempt_delivery(
         db,
@@ -504,7 +597,8 @@ def verify_webhook(
         raise HTTPException(status_code=403, detail="Verify token required")
     platform_token = str(_meta_settings().get("verify_token") or "")
     if platform_token and hmac.compare_digest(
-        platform_token, str(verify_token)
+        platform_token,
+        str(verify_token),
     ):
         return int(challenge or "0")
 
@@ -514,7 +608,8 @@ def verify_webhook(
             config = reveal_config(channel.config)
             stored_token = str(config.get("verify_token", ""))
             if stored_token and hmac.compare_digest(
-                stored_token, str(verify_token)
+                stored_token,
+                str(verify_token),
             ):
                 return int(challenge or "0")
         raise HTTPException(status_code=403, detail="Invalid verify token")
@@ -575,7 +670,8 @@ def _validate_payload_shape(payload):
             raise ValueError
         for entry in entries:
             if not isinstance(entry, dict) or not isinstance(
-                entry.get("changes", []), list
+                entry.get("changes", []),
+                list,
             ):
                 raise ValueError
             for change in entry.get("changes", []):
@@ -583,7 +679,8 @@ def _validate_payload_shape(payload):
                     raise ValueError
                 value = change.get("value") or {}
                 if not isinstance(value, dict) or not isinstance(
-                    value.get("metadata", {}), dict
+                    value.get("metadata", {}),
+                    dict,
                 ):
                     raise ValueError
                 for key in ("messages", "message_echoes", "statuses"):
@@ -649,23 +746,23 @@ def _mark_incoming_echoes(payload):
                     continue
                 value = change.get("value") or {}
                 phone = str(
-                    (value.get("metadata") or {}).get("phone_number_id")
-                    or ""
+                    (value.get("metadata") or {}).get("phone_number_id") or ""
                 )
                 if find_channel_by_phone_number_id(db, phone) is None:
                     continue
                 for echo in value.get("message_echoes", []):
                     recipient = echo_recipient(echo)
                     event_id = str(echo.get("id") or "")
-                    if (
-                        recipient
-                        and event_id
-                        and not db.query(WhatsAppInboundMessage.id)
+                    existing = (
+                        db.query(WhatsAppInboundMessage)
                         .filter(
-                            WhatsAppInboundMessage.external_message_id
-                            == event_id
+                            WhatsAppInboundMessage.external_message_id == event_id
                         )
                         .first()
+                    )
+                    if recipient and event_id and (
+                        existing is None
+                        or existing.status not in TERMINAL_INBOUND_STATUSES
                     ):
                         whatsapp_job_queue.mark_human(
                             phone,
@@ -723,6 +820,38 @@ def _handle_existing_inbound_delivery(
     if delivery_result.get("retryable"):
         raise RuntimeError("WhatsApp delivery retry failed")
     return True
+
+
+def _persist_inbound_user_message(
+    db,
+    *,
+    conversation_id: int,
+    message_id: str,
+    content: str,
+) -> AIMessage:
+    source_key = f"whatsapp:{message_id}"
+    existing = (
+        db.query(AIMessage)
+        .filter(AIMessage.source_key == source_key)
+        .first()
+    )
+    if existing is not None:
+        if (
+            existing.conversation_id != conversation_id
+            or existing.role != "user"
+            or str(existing.content or "").strip() != str(content or "").strip()
+        ):
+            raise RuntimeError("WhatsApp message source identity conflict")
+        return existing
+    row = AIMessage(
+        conversation_id=conversation_id,
+        role="user",
+        content=content,
+        source_key=source_key,
+    )
+    db.add(row)
+    db.flush()
+    return row
 
 
 def process_webhook_payload(raw_body: bytes, signature: str | None):
@@ -786,11 +915,7 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                 )
                 if value.get("statuses"):
                     processed.extend(
-                        _process_delivery_statuses(
-                            db,
-                            channel,
-                            value,
-                        )
+                        _process_delivery_statuses(db, channel, value)
                     )
                 if field == "smb_message_echoes":
                     processed.extend(
@@ -815,14 +940,13 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                     wa_id = str(message.get("from") or "").strip()
                     if not message_id or not wa_id:
                         continue
-                    claimed = claim_message(
+                    if not claim_message(
                         db=db,
                         message_id=message_id,
                         company_id=channel.company_id,
                         agent_id=channel.agent_id,
                         wa_id=wa_id,
-                    )
-                    if not claimed:
+                    ):
                         _handle_existing_inbound_delivery(
                             db,
                             message_id=message_id,
@@ -832,6 +956,7 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                         continue
 
                     if message.get("type") != "text":
+                        complete_message_claim(db, message_id, status="ignored")
                         db.commit()
                         processed.append(
                             {
@@ -844,6 +969,7 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                         (message.get("text", {}) or {}).get("body", "")
                     ).strip()
                     if not incoming_text:
+                        complete_message_claim(db, message_id, status="ignored")
                         db.commit()
                         processed.append(
                             {
@@ -907,9 +1033,10 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                                 conversation_id=session.conversation_id,
                                 reason="customer_request",
                             )
-                            user_message = AIMessage(
+                            _persist_inbound_user_message(
+                                db,
                                 conversation_id=session.conversation_id,
-                                role="user",
+                                message_id=message_id,
                                 content=incoming_text,
                             )
                             acknowledgement = AIMessage(
@@ -920,7 +1047,6 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                                     incoming_text,
                                 ),
                             )
-                            db.add(user_message)
                             db.add(acknowledgement)
                             db.flush()
                             delivery = ensure_delivery(
@@ -948,14 +1074,12 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                                     "delivery_id": delivery.id,
                                 },
                             )
+                            complete_message_claim(db, message_id)
                             db.commit()
                             delivery_result = attempt_delivery(
                                 db,
                                 delivery_id=delivery.id,
                                 config=config,
-                            )
-                            outcome = _delivery_outcome_status(
-                                delivery_result
                             )
                             processed.append(
                                 {
@@ -964,7 +1088,9 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                                     "status": (
                                         "waiting_for_human"
                                         if delivery_result.get("success")
-                                        else outcome
+                                        else _delivery_outcome_status(
+                                            delivery_result
+                                        )
                                     ),
                                     "delivery_id": delivery.id,
                                 }
@@ -982,16 +1108,14 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                                 channel=channel,
                                 conversation_id=session.conversation_id,
                                 reason=(
-                                    session.handoff_reason
-                                    or "human_active"
+                                    session.handoff_reason or "human_active"
                                 ),
                             )
-                            db.add(
-                                AIMessage(
-                                    conversation_id=session.conversation_id,
-                                    role="user",
-                                    content=incoming_text,
-                                )
+                            _persist_inbound_user_message(
+                                db,
+                                conversation_id=session.conversation_id,
+                                message_id=message_id,
+                                content=incoming_text,
                             )
                             audit_service.log(
                                 db=db,
@@ -1005,6 +1129,7 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                                     "wa_id": wa_id,
                                 },
                             )
+                            complete_message_claim(db, message_id)
                             db.commit()
                             processed.append(
                                 {
@@ -1022,6 +1147,7 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                             message=incoming_text,
                             conversation_id=session.conversation_id,
                             commit=False,
+                            user_message_source_key=f"whatsapp:{message_id}",
                         )
                     except HTTPException as exc:
                         if is_service_access_error(exc):
@@ -1123,13 +1249,13 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                                 conversation_id=session.conversation_id,
                                 reason=session.handoff_reason,
                             )
-                            db.add(
-                                AIMessage(
-                                    conversation_id=session.conversation_id,
-                                    role="user",
-                                    content=incoming_text,
-                                )
+                            _persist_inbound_user_message(
+                                db,
+                                conversation_id=session.conversation_id,
+                                message_id=message_id,
+                                content=incoming_text,
                             )
+                            complete_message_claim(db, message_id)
                             db.commit()
                         processed.append(
                             {
@@ -1139,9 +1265,6 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                         )
                         continue
 
-                    # Persist the full business result and outbound intent before
-                    # touching Meta. Retrying delivery never reruns the AI turn or
-                    # an already executed booking/order/integration action.
                     delivery = ensure_delivery(
                         db,
                         idempotency_key=f"wa-in:{message_id}:ai-reply-v1",
@@ -1165,6 +1288,7 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                             "delivery_id": delivery.id,
                         },
                     )
+                    complete_message_claim(db, message_id)
                     db.commit()
 
                     delivery_result = attempt_delivery(
@@ -1215,9 +1339,7 @@ def process_webhook_payload(raw_body: bytes, signature: str | None):
                         resource_id=channel.id,
                         details={
                             "message_id": message_id,
-                            "conversation_id": result[
-                                "conversation_id"
-                            ],
+                            "conversation_id": result["conversation_id"],
                             "delivery_id": delivery.id,
                             "delivery_status": delivery_result.get("status"),
                             "retryable": delivery_result.get("retryable"),
