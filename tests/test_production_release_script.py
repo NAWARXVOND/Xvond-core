@@ -26,14 +26,32 @@ def test_release_stops_worker_before_app_and_recreates_same_image_afterwards():
     assert stop_worker < recreate_app < recreate_worker < image_check
 
 
-def test_release_starts_workflow_profile_when_production_setting_requires_it():
-    app_ready = SOURCE.index("wait_healthy xvond-core")
+def test_release_preflights_workflow_before_runtime_cutover_when_required():
+    build = SOURCE.index("compose build app")
     workflow_setting = SOURCE.index("settings.N8N_ENABLED")
-    workflow_start = SOURCE.index('--profile workflow up -d workflow-postgres workflow-engine')
+    workflow_db_start = SOURCE.index('--profile workflow up -d workflow-postgres')
     workflow_db_ready = SOURCE.index("wait_healthy xvond-workflow-postgres")
+    workflow_start = SOURCE.index('--profile workflow up -d --no-deps workflow-engine')
     workflow_ready = SOURCE.index("wait_healthy xvond-workflow-engine")
+    workflow_probe = SOURCE.index("probe_workflow_contract")
+    stop_worker = SOURCE.index("compose stop whatsapp-worker")
+    recreate_app = SOURCE.index("--force-recreate app")
     acceptance = SOURCE.index("scripts/production_acceptance.py")
-    assert app_ready < workflow_setting < workflow_start < workflow_db_ready < workflow_ready < acceptance
+    assert (
+        build
+        < workflow_setting
+        < workflow_db_start
+        < workflow_db_ready
+        < workflow_start
+        < workflow_ready
+        < stop_worker
+        < recreate_app
+        < acceptance
+    )
+    assert "Workflow contract probe failed" in SOURCE
+    assert 'action: "health_check"' in SOURCE
+    assert workflow_probe < workflow_db_start
+    assert SOURCE.index("    probe_workflow_contract", workflow_ready) < stop_worker
 
 
 def test_workflow_engine_has_real_http_healthcheck_before_release_continues():

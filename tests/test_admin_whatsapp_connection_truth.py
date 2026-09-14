@@ -35,17 +35,21 @@ def test_company_readiness_uses_verified_whatsapp_connection_truth():
     assert 'connection["connected"] is True' in readiness
     assert '"connection_status"' in readiness
     assert '"connection_issue"' in readiness
+    assert 'connection.get("coexistence_ready") is True' in readiness
 
 
-def test_delivery_readiness_never_counts_onboarding_only_as_live_whatsapp():
+def test_delivery_readiness_separates_live_transport_from_customer_acceptance():
     delivery = source("backend/app/api/admin_delivery_readiness.py")
     assert "from backend.app.modules.channels.whatsapp_connection import whatsapp_connection_state" in delivery
     assert "whatsapp_meta_onboarding_complete" not in delivery
-    channel_state = delivery.split("def _channel_state", 1)[1].split("def _delivery_state", 1)[0]
+    channel_state = delivery.split("def _channel_state", 1)[1].split("def _assert_workflow_runtime_ready", 1)[0]
     assert 'row.channel_type == "whatsapp"' in channel_state
     assert "whatsapp_connection_state(config, verify_remote=True)" in channel_state
-    assert '["connected"]' in channel_state
-    assert "if row.enabled and connected" in channel_state
+    assert 'connection["connected"]' in channel_state
+    assert "_channel_customer_accepted" in channel_state
+    assert 'if connected:' in channel_state
+    assert 'if accepted:' in channel_state
+    assert '"customer_ready": fully_customer_ready' in channel_state
 
 
 def test_admin_ui_separates_configuration_activation_and_meta_connection():

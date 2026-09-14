@@ -37,6 +37,7 @@ def test_company_setup_readiness_uses_configured_not_live_channels():
     assert ".filter(AgentChannel.agent_id == agent.id)" in READINESS
     assert "configured_channels =" in READINESS
     assert "live_channels =" in READINESS
+    assert "unaccepted_enabled_channels =" in READINESS
     assert '"setup_ready": setup_ready' in READINESS
     assert '"ready_for_customer": ready_for_customer' in READINESS
     assert "and configured_channels" in READINESS
@@ -45,7 +46,8 @@ def test_company_setup_readiness_uses_configured_not_live_channels():
 def test_employee_go_live_requires_active_company_and_customer_ready_requires_all_gates():
     assert "Activate the company before the AI employee goes live" in DELIVERY
     assert '"company_active": bool(company.active)' in DELIVERY
-    assert "company.active and agent.enabled and setup_ready and channels[\"live\"]" in DELIVERY
+    assert 'and channels["customer_ready"]' in DELIVERY
+    assert "Complete live channel acceptance before customer handover" in DELIVERY
 
 
 def test_delivery_readiness_is_only_registered_at_its_canonical_prefix():

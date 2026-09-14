@@ -1,11 +1,12 @@
 # Xvond Core
 
-Xvond Core is a modular AI business platform built with FastAPI, SQLAlchemy, PostgreSQL, and Alembic.
+Xvond Core is a modular managed AI operations platform built with FastAPI, SQLAlchemy, PostgreSQL, Redis and an optional self-hosted Workflow Engine for business side effects.
 
 ## Requirements
 
 - Python 3.14
 - PostgreSQL 17
+- Redis for production queue/runtime services
 
 ## Local setup
 
@@ -16,7 +17,7 @@ Xvond Core is a modular AI business platform built with FastAPI, SQLAlchemy, Pos
    pip install -r requirements.txt
    ```
 
-3. Copy `.env.example` to `.env` and replace every placeholder.
+3. Copy `.env.example` to `.env` and replace every placeholder required by the services you intend to run.
 4. Start PostgreSQL:
 
    ```powershell
@@ -49,39 +50,46 @@ Open `http://127.0.0.1:8000/health`, `/admin-ui`, or `/customer-ui`.
 pytest -q
 ```
 
-GitHub CI also builds a completely fresh PostgreSQL database with Alembic before running tests.
+GitHub CI also builds a completely fresh PostgreSQL database through Alembic, checks frontend/shell syntax, validates production Compose and builds the production Docker image.
 
-## Production checklist
+## Production principles
 
 - Set `APP_ENV=production`.
 - Use a unique JWT secret of at least 32 random characters.
-- Configure a real AI provider; mock is development-only.
+- Configure at least one real AI provider; Mock is development-only.
+- Keep the provider catalog aligned with adapters actually registered by `AIEngine`.
 - Configure SMTP before enabling password reset.
 - Put the API behind HTTPS and a trusted reverse proxy.
-- Run `alembic upgrade head` before starting the new release.
-- Use Redis-backed runtime services before running multiple API workers.
-- Keep `.env`, database backups, logs, and provider credentials out of Git.
+- Use Redis-backed runtime services in production.
+- Keep `.env`, database backups, logs and provider/customer credentials out of Git.
 - Keep an encrypted off-server database backup in storage approved for the deployment's data-residency requirements.
+- Do not expose a business action as live unless the Workflow Engine and its intended execution target have passed acceptance.
 
-## Deployment flow
+## Canonical production deployment
 
-`VS Code -> GitHub -> server`. Commit and push reviewed changes, pull the tagged release on the server, apply migrations, and restart the service.
-
-## First customer acceptance
-
-After deployment and migrations, seed the current provider/model catalog:
+Production releases must use the reviewed repository state and the release script rather than an improvised sequence of Docker commands:
 
 ```bash
-python -m xvond_seed_providers
+./scripts/deploy_production.sh
 ```
 
-Run the non-billable production gate for the customer:
+The release script validates the Git working tree and production Compose, brings database/Redis up, takes a fresh database backup before replacing application containers, stops the previous WhatsApp worker, builds one application image, recreates the API and worker from that same image, waits for service health, starts and verifies the Workflow Engine when enabled, verifies API/worker image identity and checks `/health/ready`.
+
+The application entrypoint applies Alembic migrations and safe startup tasks before starting the API. The WhatsApp worker intentionally uses the already-migrated application image and does not run the application entrypoint independently.
+
+For a customer-specific release, configure the acceptance environment values supported by `scripts/deploy_production.sh` so production acceptance runs as part of the release.
+
+## Customer acceptance
+
+Run the pre-live production gate for the target customer/employee:
 
 ```bash
-python -m scripts.production_acceptance --company-id COMPANY_ID
+python -m scripts.production_acceptance \
+  --company-id COMPANY_ID \
+  --agent-id AGENT_ID
 ```
 
-Then perform one explicit billable provider health check using the employee's resolved production route. This call does not create a customer conversation and does not run customer tools:
+Optionally perform one explicit billable provider health check using the employee's resolved production route. This does not create a customer conversation or execute customer tools:
 
 ```bash
 python -m scripts.production_acceptance \
@@ -90,8 +98,27 @@ python -m scripts.production_acceptance \
   --live-ai
 ```
 
-Do not activate customer traffic unless the report returns
-`"overall_ok": true`.
+For an employee with enabled business actions, production acceptance verifies the canonical Workflow Engine `health_check`. Delivery Readiness also repeats that live workflow health check immediately before Go Live; a configured n8n URL/secret alone is not enough.
+
+After pre-live checks pass, use the controlled production activation sequence documented in `docs/customer-onboarding-runbook.md`: activate only the intended Company/AI Employee/channel, immediately perform real external-channel acceptance, and stop/deactivate the runtime if that acceptance fails. Do not call the service commercially launched merely because configuration or CI is green.
+
+After successful external acceptance, run the post-live gate:
+
+```bash
+python -m scripts.production_acceptance \
+  --company-id COMPANY_ID \
+  --agent-id AGENT_ID \
+  --require-live
+```
+
+## WhatsApp Coexistence truth
+
+A WhatsApp Coexistence channel keeps two separate facts:
+
+- `connected`: the Meta transport is usable and the required app/WABA/webhook subscriptions are present.
+- `coexistence_ready`: a real `smb_message_echoes` event has been observed, proving native WhatsApp Business App human takeover in practice.
+
+A correctly subscribed new Coexistence connection may serve AI traffic before the first native human reply. That first real Business App reply supplies the echo evidence and switches the conversation to human control.
 
 ## Encrypted off-server PostgreSQL backups
 
@@ -99,7 +126,7 @@ Local PostgreSQL dumps are created first in the `xvond_backups` volume. The opti
 
 Configure `RESTIC_REPOSITORY` and `RESTIC_PASSWORD` in `.env`. For S3-compatible repositories, also configure the required AWS-style credentials and region. Choose a repository location that satisfies the deployment's data-residency requirements.
 
-Start production with encrypted offsite backup enabled:
+Start encrypted offsite backup when it is part of the deployment:
 
 ```bash
 docker compose -f docker-compose.production.yml \
