@@ -81,6 +81,21 @@ class WhatsAppSession(Base):
         nullable=True,
     )
 
+    # Durable ordering guard for delayed Coexistence echoes. An explicit
+    # Return-to-AI wins over any business-app echo sent at or before this time.
+    ai_resumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+    # Fallback when an echo is missing/has an invalid timestamp. The ingress
+    # marker present at Return-to-AI is remembered so that exact delayed event
+    # can be mirrored without re-activating human control.
+    ai_resume_echo_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
