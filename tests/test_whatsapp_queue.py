@@ -12,17 +12,41 @@ class FakeRedis:
 
     def pipeline(self, transaction=True):
         parent = self
+
         class Pipeline:
             def __init__(self):
                 self.commands = []
+
             def __getattr__(self, name):
                 def queue(*args, **kwargs):
                     self.commands.append((name, args, kwargs))
                     return self
+
                 return queue
+
             def execute(self):
-                return [getattr(parent, name)(*args, **kwargs) for name, args, kwargs in self.commands]
+                return [
+                    getattr(parent, name)(*args, **kwargs)
+                    for name, args, kwargs in self.commands
+                ]
+
         return Pipeline()
+
+    def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.data:
+            return False
+        self.data[key] = value
+        return True
+
+    def get(self, key):
+        value = self.data.get(key)
+        return value if not isinstance(value, list) else None
+
+    def delete(self, key):
+        return 1 if self.data.pop(key, None) is not None else 0
+
+    def expire(self, key, _ttl):
+        return 1 if key in self.data else 0
 
     def lpush(self, key, value):
         self.data.setdefault(key, []).insert(0, value)
@@ -58,19 +82,34 @@ class FakeRedis:
     def zcard(self, key):
         return len(self.sorted.setdefault(key, {}))
 
-    def eval(self, _script, _numkeys, retry_key, queue_key, now, limit):
-        due = [
-            (raw, score)
-            for raw, score
-            in self.sorted.setdefault(retry_key, {}).items()
-            if score <= float(now)
-        ]
-        due.sort(key=lambda item: item[1])
-        selected = due[:int(limit)]
-        for raw, _score in selected:
-            del self.sorted[retry_key][raw]
-            self.lpush(queue_key, raw)
-        return len(selected)
+    def eval(self, _script, numkeys, *args):
+        if numkeys == 2:
+            retry_key, queue_key, now, limit = args
+            due = [
+                (raw, score)
+                for raw, score in self.sorted.setdefault(retry_key, {}).items()
+                if score <= float(now)
+            ]
+            due.sort(key=lambda item: item[1])
+            selected = due[: int(limit)]
+            for raw, _score in selected:
+                del self.sorted[retry_key][raw]
+                self.lpush(queue_key, raw)
+            return len(selected)
+
+        if numkeys == 1 and len(args) == 2:
+            key, expected = args
+            if self.get(key) != expected:
+                return 0
+            return self.delete(key)
+
+        if numkeys == 1 and len(args) == 3:
+            key, expected, ttl = args
+            if self.get(key) != expected:
+                return 0
+            return self.expire(key, ttl)
+
+        raise AssertionError("Unexpected Lua invocation")
 
     def lrem(self, key, count, value):
         items = self.data.setdefault(key, [])
@@ -85,6 +124,19 @@ def make_queue():
     queue = WhatsAppJobQueue(redis_url="")
     queue.client = FakeRedis()
     return queue
+
+
+def test_worker_lease_allows_one_owner_and_protects_release():
+    queue = make_queue()
+
+    assert queue.acquire_worker_lock("worker-a", 30) is True
+    assert queue.acquire_worker_lock("worker-b", 30) is False
+    assert queue.refresh_worker_lock("worker-a", 30) is True
+    assert queue.refresh_worker_lock("worker-b", 30) is False
+    assert queue.release_worker_lock("worker-b") is False
+    assert queue.human_marker("missing", "missing") is None
+    assert queue.release_worker_lock("worker-a") is True
+    assert queue.acquire_worker_lock("worker-b", 30) is True
 
 
 def test_job_is_reserved_and_acknowledged():
@@ -146,7 +198,6 @@ def test_interrupted_jobs_are_recovered_on_worker_start():
     assert queue.recover_interrupted() == 1
     assert queue.client.data[queue.processing_key] == []
     assert len(queue.client.data[queue.queue_key]) == 1
-
 
 
 def test_stats_report_queue_depths():
