@@ -16,6 +16,14 @@ depends_on = None
 
 
 def upgrade():
+    op.add_column(
+        "whatsapp_sessions",
+        sa.Column("ai_resumed_at", sa.DateTime(), nullable=True),
+    )
+    op.add_column(
+        "whatsapp_sessions",
+        sa.Column("ai_resume_echo_id", sa.String(length=255), nullable=True),
+    )
     op.drop_constraint("uq_whatsapp_agent_contact", "whatsapp_sessions", type_="unique")
     op.create_unique_constraint(
         "uq_whatsapp_channel_contact", "whatsapp_sessions",
@@ -82,4 +90,6 @@ def downgrade():
         raise RuntimeError("Cannot downgrade: multiple phone sessions exist for a contact")
     op.drop_constraint("uq_whatsapp_channel_contact", "whatsapp_sessions", type_="unique")
     op.create_unique_constraint("uq_whatsapp_agent_contact", "whatsapp_sessions", ["agent_id", "wa_id"])
+    op.drop_column("whatsapp_sessions", "ai_resume_echo_id")
+    op.drop_column("whatsapp_sessions", "ai_resumed_at")
     # Proven source repairs and recovered business facts are retained.
