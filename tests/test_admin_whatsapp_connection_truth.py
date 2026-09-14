@@ -26,6 +26,28 @@ def test_whatsapp_activation_requires_verified_meta_connection_not_just_config()
     assert 'connection.get("connection_issue")' in blockers
 
 
+def test_company_readiness_uses_verified_whatsapp_connection_truth():
+    readiness = source("backend/app/core/readiness.py")
+    assert "from backend.app.modules.channels.whatsapp_connection import whatsapp_connection_state" in readiness
+    assert "whatsapp_meta_onboarding_complete" not in readiness
+    assert "whatsapp_connection_state(" in readiness
+    assert "verify_remote=True" in readiness
+    assert 'connection["connected"] is True' in readiness
+    assert '"connection_status"' in readiness
+    assert '"connection_issue"' in readiness
+
+
+def test_delivery_readiness_never_counts_onboarding_only_as_live_whatsapp():
+    delivery = source("backend/app/api/admin_delivery_readiness.py")
+    assert "from backend.app.modules.channels.whatsapp_connection import whatsapp_connection_state" in delivery
+    assert "whatsapp_meta_onboarding_complete" not in delivery
+    channel_state = delivery.split("def _channel_state", 1)[1].split("def _delivery_state", 1)[0]
+    assert 'row.channel_type == "whatsapp"' in channel_state
+    assert "whatsapp_connection_state(config, verify_remote=True)" in channel_state
+    assert '["connected"]' in channel_state
+    assert "if row.enabled and connected" in channel_state
+
+
 def test_admin_ui_separates_configuration_activation_and_meta_connection():
     ui = source("frontend/admin/company-control-center.js")
     assert "Disconnected · Invalid token" in ui
