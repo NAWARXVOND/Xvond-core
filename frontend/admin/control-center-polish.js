@@ -106,6 +106,47 @@
     }
   }
 
+  function patchBillingScope(){
+    if(xvondWorkspace?.tab!=='billing')return;
+    const content=document.getElementById('workspace-content');
+    if(!content)return;
+    const headings=[...content.querySelectorAll('h3')];
+    const serviceHeading=headings.find(item=>item.textContent.trim()==='Service Billing');
+    if(serviceHeading){
+      serviceHeading.textContent='Company Subscription';
+      const description=serviceHeading.parentElement?.querySelector('p');
+      if(description)description.textContent='Assign, change, pause or cancel this company’s Xvond service subscriptions.';
+    }
+    const packagesHeading=headings.find(item=>item.textContent.trim()==='Service Packages');
+    if(packagesHeading){
+      packagesHeading.textContent='Global Package Catalog';
+      const description=packagesHeading.parentElement?.querySelector('p');
+      if(description)description.textContent='These packages are shared across Xvond. Editing a package affects every company assigned to it.';
+    }
+    [...content.querySelectorAll('button')].forEach(button=>{
+      if(button.textContent.trim()==='+ Create Package')button.textContent='+ Create Global Package';
+      if(button.textContent.trim()==='Edit Package')button.textContent='Edit Global Package';
+    });
+  }
+
+  function injectGlobalPackageWarning(){
+    const body=document.getElementById('modal-body');
+    if(!body||body.querySelector('.global-package-warning'))return;
+    const warning=document.createElement('div');
+    warning.className='modal-intro global-package-warning';
+    warning.innerHTML='<strong>Global Xvond package</strong><p>This plan is shared across companies. Price or limit changes affect every company currently assigned to this package.</p>';
+    body.prepend(warning);
+  }
+
+  if(typeof window.openWorkspaceCreateServicePlan==='function'){
+    const baseCreatePlan=window.openWorkspaceCreateServicePlan;
+    window.openWorkspaceCreateServicePlan=function(){const result=baseCreatePlan.apply(this,arguments);injectGlobalPackageWarning();const title=document.getElementById('modal-title');if(title)title.textContent='Create Global Service Package';const submit=document.querySelector('#modal-body .modal-submit');if(submit)submit.textContent='Create Global Package';return result;};
+  }
+  if(typeof window.openWorkspaceEditServicePlan==='function'){
+    const baseEditPlan=window.openWorkspaceEditServicePlan;
+    window.openWorkspaceEditServicePlan=function(){const result=baseEditPlan.apply(this,arguments);injectGlobalPackageWarning();const title=document.getElementById('modal-title');if(title)title.textContent=`Edit Global Package · ${title.textContent.replace(/^Edit\s+/,'')}`;const submit=document.querySelector('#modal-body .modal-submit');if(submit)submit.textContent='Save Global Package';return result;};
+  }
+
   const baseRender=window.renderCompanyControlCenter;
   if(typeof baseRender==='function'){
     window.renderCompanyControlCenter=function polishedOperatorControlCenter(){
@@ -114,6 +155,7 @@
       patchOverview();
       patchEmployeeCards();
       patchReconciliationHeading();
+      patchBillingScope();
       return result;
     };
   }
