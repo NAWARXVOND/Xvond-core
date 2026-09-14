@@ -56,17 +56,10 @@ function xvondCustomerMetaLoginOptions(config) {
 
 function xvondCustomerWhatsAppStatus(config) {
     if (!config.connected) {
-        if (config.coexistence && config.connection_status === "coexistence_echo_pending") {
-            return {
-                title: "واتساب مربوط · بانتظار اختبار التحكم البشري",
-                detail: "أرسل ردًا يدويًا واحدًا من تطبيق WhatsApp Business على محادثة عميل. عند وصول الرد إلى Xvond سيتوقف الموظف AI تلقائيًا عن الرد على تلك المحادثة، ويكتمل التحقق من وضع التعايش.",
-                label: "إعادة الربط عند الحاجة",
-            };
-        }
         if (config.coexistence && config.connection_status === "coexistence_setup_required") {
             return {
                 title: "ربط واتساب موجود · إعداد التعايش غير مكتمل",
-                detail: "Xvond لم يتحقق بعد من اشتراكات Meta المطلوبة لرسائل العملاء وردود تطبيق WhatsApp Business. لن نعرض الاتصال كجاهز حتى يثبت وصول كلا النوعين من الأحداث.",
+                detail: "Xvond لم يتحقق بعد من اشتراكات Meta المطلوبة لرسائل العملاء وردود تطبيق WhatsApp Business. لن يبدأ الموظف حتى تكتمل اشتراكات الرسائل والتحكم البشري.",
                 label: "إعادة الربط لإكمال الإعداد",
             };
         }
@@ -82,11 +75,21 @@ function xvondCustomerWhatsAppStatus(config) {
 
     const phone = safe(config.display_phone_number || "الرقم متصل");
     const name = config.verified_name ? ` · ${safe(config.verified_name)}` : "";
+    if (config.coexistence && config.coexistence_ready === false) {
+        return {
+            title: `واتساب متصل · ${phone}${name}`,
+            detail: config.runtime_ready
+                ? "الموظف AI يستطيع الرد الآن. بقي اختبار واحد للتحكم البشري: أرسل ردًا يدويًا من تطبيق WhatsApp Business على محادثة عميل، وسيتوقف الـAI تلقائيًا عن الرد على تلك المحادثة عند وصول الحدث."
+                : "رقم واتساب متصل، لكن الموظف يحتاج أيضًا إلى إكمال إعداد الخدمة. بعد ذلك اختبر ردًا يدويًا واحدًا من تطبيق WhatsApp Business للتحقق من التحويل التلقائي للبشر.",
+            label: "تغيير الرقم أو إعادة الربط",
+        };
+    }
+
     if (config.runtime_ready) {
         return {
             title: `واتساب متصل · ${phone}${name}`,
             detail: config.coexistence
-                ? "الموظف AI جاهز على نفس رقم WhatsApp Business، ويمكن لفريقك متابعة استخدام التطبيق أيضًا."
+                ? "الموظف AI جاهز على نفس رقم WhatsApp Business، والتحويل التلقائي للبشر تم التحقق منه."
                 : "الموظف AI جاهز لاستقبال رسائل العملاء على هذا الرقم.",
             label: "تغيير الرقم أو إعادة الربط",
         };
@@ -101,10 +104,10 @@ function xvondCustomerWhatsAppStatus(config) {
 
 function xvondCustomerWhatsAppBlockers(config) {
     const blockers = Array.isArray(config.blockers) ? config.blockers.filter(Boolean) : [];
-    if (!config.connected && config.connection_status === "coexistence_echo_pending") {
+    if (config.connected && config.coexistence && config.coexistence_ready === false) {
         return `
             <div class="muted" style="margin-top:8px">
-                <strong>التحكم البشري:</strong> بانتظار أول رد يدوي من تطبيق WhatsApp Business لإثبات أن Xvond يستقبل أحداث التعايش ويوقف الـAI فورًا.
+                <strong>التحكم البشري:</strong> الاتصال يعمل، لكن لم يصل بعد رد يدوي من تطبيق WhatsApp Business. أول رد بشري حقيقي سيؤكد أن Xvond يستقبل أحداث التعايش ويوقف الـAI على المحادثة نفسها.
             </div>
         `;
     }
@@ -205,12 +208,16 @@ async function xvondCustomerFinishMetaWhatsAppSignup(code) {
         });
 
         if (result.runtime_ready) {
-            const mode = result.coexistence
-                ? "الموظف AI جاهز على نفس رقم WhatsApp Business."
-                : "الموظف AI جاهز على واتساب.";
-            alert(`تم ربط رقم واتساب بنجاح.\n${result.display_phone_number || ""}\n${mode}`);
+            if (result.coexistence && result.coexistence_ready === false) {
+                alert(`تم ربط رقم واتساب بنجاح.\n${result.display_phone_number || ""}\nالموظف AI يستطيع الرد الآن. لاختبار التحويل للبشر، أرسل ردًا يدويًا واحدًا من تطبيق WhatsApp Business على محادثة عميل.`);
+            } else {
+                const mode = result.coexistence
+                    ? "الموظف AI جاهز، والتحويل التلقائي للبشر تم التحقق منه."
+                    : "الموظف AI جاهز على واتساب.";
+                alert(`تم ربط رقم واتساب بنجاح.\n${result.display_phone_number || ""}\n${mode}`);
+            }
         } else if (result.coexistence) {
-            alert("تم ربط رقم واتساب. لإكمال وضع التعايش، أرسل ردًا يدويًا من تطبيق WhatsApp Business على محادثة عميل حتى يتحقق Xvond من التحويل التلقائي إلى الوضع البشري.");
+            alert("تم ربط رقم واتساب. أكمل إعداد الموظف من Xvond، وبعدها أرسل ردًا يدويًا من تطبيق WhatsApp Business على محادثة عميل لاختبار التحويل التلقائي للبشر.");
         } else {
             alert("تم ربط رقم واتساب بنجاح. سيبدأ الموظف بالعمل بعد إكمال إعداد الخدمة من Xvond.");
         }
