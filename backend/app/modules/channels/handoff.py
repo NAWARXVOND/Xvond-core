@@ -89,8 +89,10 @@ def resume_ai(
     session,
     now: datetime | None = None,
 ):
+    current = now or datetime.utcnow()
     session.automation_state = "ai"
     session.handoff_reason = None
     session.human_takeover_until = None
-    session.updated_at = now or datetime.utcnow()
+    session.ai_resumed_at = current
+    session.updated_at = current
     return session
