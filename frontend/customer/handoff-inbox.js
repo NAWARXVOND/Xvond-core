@@ -40,6 +40,28 @@ function inboxMessageClass(role) {
     return "user";
 }
 
+function inboxDeliveryText(delivery) {
+    if (!delivery?.status) return "";
+    const status = String(delivery.status).toLowerCase();
+    const labels = {
+        pending: "Pending",
+        sending: "Sending",
+        accepted: "Sent",
+        delivered: "Delivered",
+        read: "Read",
+        failed: delivery.retryable ? "Delivery failed · retry available" : "Delivery failed",
+        unknown: "Delivery outcome unknown"
+    };
+    return labels[status] || status;
+}
+
+function inboxDeliveryBadge(message) {
+    const text = inboxDeliveryText(message?.delivery);
+    if (!text) return "";
+    const state = String(message.delivery?.status || "").toLowerCase();
+    return `<span class="inbox-delivery-state delivery-${safe(state)}">${safe(text)}</span>`;
+}
+
 function inboxThreadFingerprint(result) {
     const conversation = result?.conversation || {};
     const messages = result?.messages || [];
@@ -55,7 +77,8 @@ function inboxThreadFingerprint(result) {
         conversation.handoff_can_return_ai ? "can-return" : "cannot-return",
         conversation.message_count ?? messages.length,
         last?.id || 0,
-        last?.role || ""
+        last?.role || "",
+        last?.delivery?.status || ""
     ].join(":");
 }
 
@@ -175,21 +198,41 @@ async function customerReturnConversationToAI(conversationId) {
     }
 }
 
+function newInboxClientMessageId() {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+    return `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 async function customerSendHumanReply(conversationId) {
     const input = document.getElementById("human-reply-message");
     const button = document.getElementById("human-reply-send");
     const message = input?.value?.trim() || "";
     if (!message) return;
+    const clientMessageId = input?.dataset?.clientMessageId || newInboxClientMessageId();
+    if (input) input.dataset.clientMessageId = clientMessageId;
     if (button) {
         button.disabled = true;
         button.textContent = "Sending...";
     }
     try {
-        await api(`/customer/inbox/${conversationId}/message`, {
+        const result = await api(`/customer/inbox/${conversationId}/message`, {
             method: "POST",
-            body: JSON.stringify({message})
+            body: JSON.stringify({message, client_message_id: clientMessageId})
         });
-        if (input) input.value = "";
+        const status = String(result?.status || "sent");
+        if (status === "delivery_retryable") {
+            alert("WhatsApp rejected this attempt temporarily. Press Send again to retry the same reply safely.");
+        } else {
+            if (input) {
+                input.value = "";
+                delete input.dataset.clientMessageId;
+            }
+            if (status === "delivery_unknown") {
+                alert("WhatsApp may have accepted this reply, but delivery could not be confirmed. Xvond will not resend it automatically to avoid a duplicate.");
+            } else if (status === "delivery_failed") {
+                alert("WhatsApp rejected this reply. The message remains recorded with its delivery status for support review.");
+            }
+        }
         activeInboxConversationId = conversationId;
         activeInboxFingerprint = null;
         await loadInboxConversation(conversationId);
@@ -347,7 +390,7 @@ function handoffComposer(conversation, conversationId) {
     if (human && replySupported && assignedToMe) {
         return `
             <div class="human-reply-box">
-                <textarea id="human-reply-message" rows="2" maxlength="12000" placeholder="Type your reply..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();customerSendHumanReply(${conversationId})}"></textarea>
+                <textarea id="human-reply-message" rows="2" maxlength="12000" placeholder="Type your reply..." oninput="if(!this.value.trim()) delete this.dataset.clientMessageId" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();customerSendHumanReply(${conversationId})}"></textarea>
                 <div class="human-reply-actions">
                     <span>Enter to send · Shift+Enter for new line</span>
                     <button id="human-reply-send" onclick="customerSendHumanReply(${conversationId})">Send</button>
@@ -420,7 +463,9 @@ loadInboxConversation = async function(conversationId, button = null, options = 
         const messages = result.messages || [];
         const contact = conversation.external_contact_id || conversation.title || `Conversation ${conversationId}`;
         const previousList = target.querySelector(".inbox-message-list");
-        const replyDraft = options.silent ? document.getElementById("human-reply-message")?.value : "";
+        const replyInput = options.silent ? document.getElementById("human-reply-message") : null;
+        const replyDraft = replyInput?.value || "";
+        const replyDraftId = replyInput?.dataset?.clientMessageId || "";
         const keepBottom = !previousList || (previousList.scrollHeight - previousList.scrollTop - previousList.clientHeight < 80);
 
         target.innerHTML = `
@@ -446,7 +491,7 @@ loadInboxConversation = async function(conversationId, button = null, options = 
                         <div class="inbox-message ${safe(inboxMessageClass(message.role))}">
                             <div class="inbox-message-author">${safe(inboxMessageLabel(message.role))}</div>
                             <div class="inbox-message-content">${safe(message.content)}</div>
-                            <small>${formatDate(message.created_at)}</small>
+                            <small>${formatDate(message.created_at)} ${inboxDeliveryBadge(message)}</small>
                         </div>
                     </div>
                 `).join("") : '<div class="empty-state">No messages in this conversation.</div>'}
@@ -455,7 +500,10 @@ loadInboxConversation = async function(conversationId, button = null, options = 
         `;
         const messageList = target.querySelector(".inbox-message-list");
         const composer = document.getElementById("human-reply-message");
-        if (composer && replyDraft) composer.value = replyDraft;
+        if (composer && replyDraft) {
+            composer.value = replyDraft;
+            if (replyDraftId) composer.dataset.clientMessageId = replyDraftId;
+        }
         if (messageList && keepBottom) messageList.scrollTop = messageList.scrollHeight;
     } catch (error) {
         if (!options.silent && requestVersion === inboxThreadRequest && Number(activeInboxConversationId) === Number(conversationId)) {
