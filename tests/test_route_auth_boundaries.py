@@ -46,6 +46,7 @@ def test_every_customer_namespace_route_requires_customer_authentication():
     failures = []
     accepted = {
         "require_customer_user",
+        "require_customer_operator",
         "require_customer_manager",
         "require_customer_admin",
     }
@@ -62,7 +63,6 @@ def test_customer_management_surfaces_require_manager_or_admin_role():
     protected_prefixes = (
         "/customer/agents",
         "/customer/business",
-        "/customer/inbox",
         "/customer/operations",
         "/customer/meta-whatsapp",
     )
@@ -72,6 +72,17 @@ def test_customer_management_surfaces_require_manager_or_admin_role():
             continue
         names = _dependency_names(route)
         if not {"require_customer_manager", "require_customer_admin"}.intersection(names):
+            failures.append((sorted(route.methods), route.path, sorted(names)))
+    assert failures == []
+
+
+def test_customer_inbox_is_operator_scoped_not_manager_scoped():
+    failures = []
+    for route in _mounted_api_routes():
+        if not route.path.startswith("/customer/inbox"):
+            continue
+        names = _dependency_names(route)
+        if "require_customer_operator" not in names:
             failures.append((sorted(route.methods), route.path, sorted(names)))
     assert failures == []
 
