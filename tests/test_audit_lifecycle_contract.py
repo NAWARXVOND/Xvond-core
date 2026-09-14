@@ -8,8 +8,8 @@ DELIVERY = Path("backend/app/api/admin_delivery_readiness.py").read_text(encodin
 READINESS = Path("backend/app/core/readiness.py").read_text(encoding="utf-8")
 MAIN = Path("backend/app/main.py").read_text(encoding="utf-8")
 BOOTSTRAP = Path("backend/app/modules/tools/bootstrap.py").read_text(encoding="utf-8")
-AUDIT_FIXES = Path("frontend/admin/core-audit-fixes.js").read_text(encoding="utf-8")
 PRIVACY = Path("frontend/admin/privacy-boundaries.js").read_text(encoding="utf-8")
+SIMPLE_COMPANY = Path("frontend/admin/simple-company.js").read_text(encoding="utf-8")
 COMPANY_USERS = Path("backend/app/api/admin_company_users.py").read_text(encoding="utf-8")
 COMPANY_MODULES = Path("backend/app/api/company_modules.py").read_text(encoding="utf-8-sig")
 
@@ -68,12 +68,12 @@ def test_unreachable_duplicate_company_admin_module_is_removed():
     assert not Path("backend/app/api/admin_companies.py").exists()
 
 
-def test_admin_pdf_upload_uses_http_only_cookie_session_not_browser_token_storage():
-    assert "uploadPDFKnowledge=async function" in AUDIT_FIXES
-    assert "credentials:'same-origin'" in AUDIT_FIXES
-    override = AUDIT_FIXES.split("uploadPDFKnowledge=async function", 1)[1]
-    assert "localStorage" not in override
-    assert "Authorization" not in override
+def test_admin_pdf_upload_uses_http_only_cookie_session_at_source():
+    assert "async function uploadPDFKnowledge" in SIMPLE_COMPANY
+    uploader = SIMPLE_COMPANY.split("async function uploadPDFKnowledge", 1)[1].split("async function openWhatsAppSetup", 1)[0]
+    assert 'credentials:"same-origin"' in uploader
+    assert "localStorage" not in uploader
+    assert "Authorization" not in uploader
 
 
 def test_sensitive_operator_mutations_are_audited_without_customer_identity_payloads():
