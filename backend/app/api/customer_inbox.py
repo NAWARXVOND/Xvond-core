@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -18,17 +19,18 @@ from backend.app.modules.channels.handoff import (
     resume_ai,
 )
 from backend.app.modules.channels.models import AgentChannel
-from backend.app.modules.channels.whatsapp import whatsapp_sender
+from backend.app.modules.channels.whatsapp_delivery import attempt_delivery, ensure_delivery
 from backend.app.modules.channels.whatsapp_queue import whatsapp_job_queue
-from backend.app.modules.channels.whatsapp_models import WhatsAppSession
+from backend.app.modules.channels.whatsapp_models import (
+    WhatsAppOutboundDelivery,
+    WhatsAppSession,
+)
 from backend.app.modules.tools.business_models import HumanHandoff
 
 router = APIRouter(prefix="/customer/inbox", tags=["Customer Conversation Inbox"])
 ACTIVE_HANDOFF_STATUSES = {"pending", "in_progress"}
 HANDOFF_MANAGER_ROLES = {"owner", "admin", "manager"}
 
-# Handoff is a channel capability, not a generic button. Only expose controls when
-# Xvond has a real delivery path back to the customer on that channel.
 HANDOFF_CAPABILITIES = {
     "whatsapp": {
         "handoff_supported": True,
@@ -60,6 +62,7 @@ HANDOFF_CAPABILITIES = {
 
 class HumanReply(BaseModel):
     message: str = Field(min_length=1, max_length=12000)
+    client_message_id: str | None = Field(default=None, max_length=120)
 
     @field_validator("message")
     @classmethod
@@ -67,6 +70,16 @@ class HumanReply(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("A reply cannot be blank")
+        return value
+
+    @field_validator("client_message_id")
+    @classmethod
+    def clean_client_message_id(cls, value):
+        value = str(value or "").strip()
+        if not value:
+            return None
+        if any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:" for ch in value):
+            raise ValueError("Invalid client message id")
         return value
 
 
@@ -80,7 +93,6 @@ def _visible_agents(db, current_user: User) -> list[AIAgent]:
     )
     if not agents:
         return []
-
     configs = (
         db.query(AgentConfig)
         .filter(AgentConfig.agent_id.in_([item.id for item in agents]))
@@ -158,88 +170,51 @@ def _claim_handoff(handoff: HumanHandoff, current_user: User) -> None:
     handoff.updated_at = now
 
 
-def _require_handoff_owner(
-    handoff: HumanHandoff,
-    current_user: User,
-) -> None:
+def _require_handoff_owner(handoff: HumanHandoff, current_user: User) -> None:
     if handoff.assigned_user_id == current_user.id:
         return
     if handoff.assigned_user_id is None:
-        raise HTTPException(
-            409,
-            "Claim this conversation before replying",
-        )
-    raise HTTPException(
-        409,
-        "This conversation is owned by another teammate",
-    )
+        raise HTTPException(409, "Claim this conversation before replying")
+    raise HTTPException(409, "This conversation is owned by another teammate")
 
 
-def _require_handoff_close_permission(
-    handoff: HumanHandoff,
-    current_user: User,
-) -> None:
+def _require_handoff_close_permission(handoff: HumanHandoff, current_user: User) -> None:
     if handoff.assigned_user_id == current_user.id:
         return
     if current_user.role in HANDOFF_MANAGER_ROLES:
         return
     if handoff.assigned_user_id is None:
-        raise HTTPException(
-            409,
-            "Claim this conversation before returning it to AI",
-        )
+        raise HTTPException(409, "Claim this conversation before returning it to AI")
     raise HTTPException(
         409,
         "Only the assigned teammate or a manager can return this conversation to AI",
     )
 
 
-def _handoff_state(
-    db,
-    current_user: User,
-    conversation_id: int,
-):
+def _handoff_state(db, current_user: User, conversation_id: int):
     session = _session(db, current_user.company_id, conversation_id)
-    handoff = _active_handoff(
-        db,
-        current_user.company_id,
-        conversation_id,
-    )
+    handoff = _active_handoff(db, current_user.company_id, conversation_id)
     active = bool(handoff)
     if session is not None and human_handoff_active(session):
         active = True
-
     assigned_user_id = handoff.assigned_user_id if handoff else None
     assigned_to_me = bool(
-        assigned_user_id is not None
-        and assigned_user_id == current_user.id
+        assigned_user_id is not None and assigned_user_id == current_user.id
     )
     manager_override = current_user.role in HANDOFF_MANAGER_ROLES
     return {
         "mode": "human" if active else "ai",
-        "handoff_reason": (
-            handoff.reason
-            if handoff
-            else (session.handoff_reason if session else None)
-        ),
+        "handoff_reason": handoff.reason if handoff else (session.handoff_reason if session else None),
         "handoff_status": handoff.status if handoff else None,
         "handoff_assigned_user_id": assigned_user_id,
         "handoff_assigned_to_me": assigned_to_me,
         "handoff_claimable": bool(active and assigned_user_id is None),
-        "handoff_can_return_ai": bool(
-            active and (assigned_to_me or manager_override)
-        ),
+        "handoff_can_return_ai": bool(active and (assigned_to_me or manager_override)),
         "handoff_taken_over_at": handoff.taken_over_at if handoff else None,
     }
 
 
-def _conversation_meta(
-    item: AIConversation,
-    agent: AIAgent,
-    last_message,
-    message_count: int,
-    handoff=None,
-):
+def _conversation_meta(item: AIConversation, agent: AIAgent, last_message, message_count: int, handoff=None):
     channel_type = item.channel_type or "unknown"
     handoff = handoff or {
         "mode": "ai",
@@ -288,12 +263,9 @@ def _conversation_meta(
 def _authorized_conversation(db, current_user: User, conversation_id: int, *, lock: bool = False):
     agents = _visible_agents(db, current_user)
     agent_map = {item.id: item for item in agents}
-    query = (
-        db.query(AIConversation)
-        .filter(
-            AIConversation.id == conversation_id,
-            AIConversation.company_id == current_user.company_id,
-        )
+    query = db.query(AIConversation).filter(
+        AIConversation.id == conversation_id,
+        AIConversation.company_id == current_user.company_id,
     )
     if lock:
         query = query.with_for_update()
@@ -313,11 +285,7 @@ def _require_handoff_supported(conversation: AIConversation) -> dict:
     return capabilities
 
 
-def _whatsapp_channel(
-    db,
-    conversation: AIConversation,
-    session: WhatsAppSession,
-):
+def _whatsapp_channel(db, conversation: AIConversation, session: WhatsAppSession):
     channels = (
         db.query(AgentChannel)
         .filter(
@@ -331,21 +299,12 @@ def _whatsapp_channel(
     )
     for channel in channels:
         config = reveal_config(channel.config) or {}
-        if str(config.get("phone_number_id") or "") == str(
-            session.phone_number_id or ""
-        ):
+        if str(config.get("phone_number_id") or "") == str(session.phone_number_id or ""):
             return channel, config
     return None, None
 
 
-def _audit_handoff(
-    db,
-    *,
-    action: str,
-    conversation: AIConversation,
-    current_user: User,
-    details: dict | None = None,
-):
+def _audit_handoff(db, *, action: str, conversation: AIConversation, current_user: User, details: dict | None = None):
     payload = {
         "agent_id": conversation.agent_id,
         "channel_type": conversation.channel_type or "unknown",
@@ -364,6 +323,30 @@ def _audit_handoff(
     )
 
 
+def _message_delivery_map(db, message_ids: list[int]) -> dict[int, dict]:
+    if not message_ids:
+        return {}
+    rows = (
+        db.query(WhatsAppOutboundDelivery)
+        .filter(WhatsAppOutboundDelivery.message_id.in_(message_ids))
+        .order_by(WhatsAppOutboundDelivery.id.desc())
+        .all()
+    )
+    result = {}
+    for row in rows:
+        result.setdefault(
+            row.message_id,
+            {
+                "id": row.id,
+                "status": row.status,
+                "retryable": bool(row.retryable),
+                "provider_message_id": row.provider_message_id,
+                "error_code": row.last_error_code,
+            },
+        )
+    return result
+
+
 @router.get("")
 def list_inbox(
     agent_id: int | None = None,
@@ -378,16 +361,9 @@ def list_inbox(
         agent_map = {item.id: item for item in agents}
         visible_ids = list(agent_map)
         if agent_id is not None and agent_id not in agent_map:
-            raise HTTPException(
-                403,
-                "Conversation viewing is disabled for this AI employee",
-            )
-
+            raise HTTPException(403, "Conversation viewing is disabled for this AI employee")
         if not visible_ids:
-            return {
-                "conversations": [],
-                "filters": {"agents": [], "channels": []},
-            }
+            return {"conversations": [], "filters": {"agents": [], "channels": []}}
 
         query = db.query(AIConversation).filter(
             AIConversation.company_id == current_user.company_id,
@@ -401,13 +377,18 @@ def list_inbox(
         normalized_channel = str(channel_type or "").strip().lower()
         if normalized_channel:
             if normalized_channel == "unknown":
-                query = query.filter(or_(AIConversation.channel_type.is_(None), AIConversation.channel_type.in_(["", "unknown"])))
-            else:
                 query = query.filter(
-                    AIConversation.channel_type == normalized_channel
+                    or_(
+                        AIConversation.channel_type.is_(None),
+                        AIConversation.channel_type.in_(["", "unknown"]),
+                    )
                 )
+            else:
+                query = query.filter(AIConversation.channel_type == normalized_channel)
         else:
-            query = query.filter(AIConversation.channel_type.in_(["whatsapp", "website", "voice", "instagram"]))
+            query = query.filter(
+                AIConversation.channel_type.in_(["whatsapp", "website", "voice", "instagram"])
+            )
 
         search_value = str(search or "").strip()
         if search_value:
@@ -426,10 +407,7 @@ def list_inbox(
             .scalar_subquery()
         )
         conversations = (
-            query.order_by(
-                latest_message_id.desc().nullslast(),
-                AIConversation.id.desc(),
-            )
+            query.order_by(latest_message_id.desc().nullslast(), AIConversation.id.desc())
             .limit(500)
             .all()
         )
@@ -444,9 +422,7 @@ def list_inbox(
                 .all()
             )
             for message in messages:
-                counts[message.conversation_id] = (
-                    counts.get(message.conversation_id, 0) + 1
-                )
+                counts[message.conversation_id] = counts.get(message.conversation_id, 0) + 1
                 last_messages.setdefault(message.conversation_id, message)
 
         assigned_channels = (
@@ -464,8 +440,7 @@ def list_inbox(
             if item.channel_type
         }
         channel_types.update(
-            (item.channel_type or "unknown").strip().lower()
-            for item in conversations
+            (item.channel_type or "unknown").strip().lower() for item in conversations
         )
 
         return {
@@ -480,10 +455,7 @@ def list_inbox(
                 for item in conversations
             ],
             "filters": {
-                "agents": [
-                    {"id": item.id, "name": item.name}
-                    for item in agents
-                ],
+                "agents": [{"id": item.id, "name": item.name} for item in agents],
                 "channels": [
                     {"type": value, "label": _channel_label(value)}
                     for value in sorted(channel_types)
@@ -501,28 +473,21 @@ def inbox_conversation(
 ):
     db = SessionLocal()
     try:
-        conversation, agent = _authorized_conversation(
-            db,
-            current_user,
-            conversation_id,
-        )
+        conversation, agent = _authorized_conversation(db, current_user, conversation_id)
         messages = (
             db.query(AIMessage)
             .filter(AIMessage.conversation_id == conversation.id)
             .order_by(AIMessage.id.asc())
             .all()
         )
+        deliveries = _message_delivery_map(db, [item.id for item in messages])
         return {
             "conversation": _conversation_meta(
                 conversation,
                 agent,
                 messages[-1] if messages else None,
                 len(messages),
-                _handoff_state(
-                    db,
-                    current_user,
-                    conversation.id,
-                ),
+                _handoff_state(db, current_user, conversation.id),
             ),
             "messages": [
                 {
@@ -530,6 +495,7 @@ def inbox_conversation(
                     "role": item.role,
                     "content": item.content,
                     "created_at": item.created_at,
+                    "delivery": deliveries.get(item.id),
                 }
                 for item in messages
             ],
@@ -545,18 +511,9 @@ def take_over_conversation(
 ):
     db = SessionLocal()
     try:
-        conversation, _ = _authorized_conversation(
-            db,
-            current_user,
-            conversation_id,
-            lock=True,
-        )
+        conversation, _ = _authorized_conversation(db, current_user, conversation_id, lock=True)
         capabilities = _require_handoff_supported(conversation)
-        handoff = _active_handoff(
-            db,
-            current_user.company_id,
-            conversation.id,
-        )
+        handoff = _active_handoff(db, current_user.company_id, conversation.id)
         if handoff is None:
             handoff = HumanHandoff(
                 company_id=current_user.company_id,
@@ -573,10 +530,7 @@ def take_over_conversation(
         _claim_handoff(handoff, current_user)
         session = _session(db, current_user.company_id, conversation.id)
         if session is not None:
-            activate_human_handoff(
-                session,
-                reason=handoff.reason or "customer_portal_takeover",
-            )
+            activate_human_handoff(session, reason=handoff.reason or "customer_portal_takeover")
         _audit_handoff(
             db,
             action="customer_inbox.handoff_started",
@@ -613,12 +567,7 @@ def return_conversation_to_ai(
 ):
     db = SessionLocal()
     try:
-        conversation, _ = _authorized_conversation(
-            db,
-            current_user,
-            conversation_id,
-            lock=True,
-        )
+        conversation, _ = _authorized_conversation(db, current_user, conversation_id, lock=True)
         handoffs = (
             db.query(HumanHandoff)
             .filter(
@@ -632,9 +581,18 @@ def return_conversation_to_ai(
             _require_handoff_close_permission(handoff, current_user)
 
         session = _session(db, current_user.company_id, conversation.id)
-        if not handoffs and session is not None and human_handoff_active(session) and current_user.role not in HANDOFF_MANAGER_ROLES:
+        if (
+            not handoffs
+            and session is not None
+            and human_handoff_active(session)
+            and current_user.role not in HANDOFF_MANAGER_ROLES
+        ):
             raise HTTPException(409, "A manager must return this unassigned conversation to AI")
-        marker = whatsapp_job_queue.human_marker(session.phone_number_id, session.wa_id) if session else None
+        marker = (
+            whatsapp_job_queue.human_marker(session.phone_number_id, session.wa_id)
+            if session
+            else None
+        )
         completed_at = datetime.utcnow()
         for handoff in handoffs:
             handoff.status = "completed"
@@ -659,17 +617,29 @@ def return_conversation_to_ai(
         )
         db.commit()
         if session:
-            whatsapp_job_queue.clear_human_marker(session.phone_number_id, session.wa_id, marker)
-        return {
-            "status": "ai_active",
-            "conversation_id": conversation.id,
-            "mode": "ai",
-        }
+            whatsapp_job_queue.clear_human_marker(
+                session.phone_number_id,
+                session.wa_id,
+                marker,
+            )
+        return {"status": "ai_active", "conversation_id": conversation.id, "mode": "ai"}
     except Exception:
         db.rollback()
         raise
     finally:
         db.close()
+
+
+def _delivery_response_status(result: dict) -> str:
+    if result.get("success"):
+        return "sent"
+    if result.get("unknown"):
+        return "delivery_unknown"
+    if result.get("permanent"):
+        return "delivery_failed"
+    if result.get("retryable"):
+        return "delivery_retryable"
+    return "delivery_failed"
 
 
 @router.post("/{conversation_id}/message")
@@ -680,118 +650,164 @@ def send_human_reply(
 ):
     db = SessionLocal()
     try:
-        conversation, _ = _authorized_conversation(
-            db,
-            current_user,
-            conversation_id,
-            lock=True,
-        )
+        conversation, _ = _authorized_conversation(db, current_user, conversation_id, lock=True)
         capabilities = _require_handoff_supported(conversation)
         if not capabilities["human_reply_supported"]:
-            raise HTTPException(
-                409,
-                "Human replies are not available for this conversation channel yet",
-            )
+            raise HTTPException(409, "Human replies are not available for this conversation channel yet")
 
-        handoff = _active_handoff(
-            db,
-            current_user.company_id,
-            conversation.id,
-        )
+        handoff = _active_handoff(db, current_user.company_id, conversation.id)
         if handoff is None:
-            raise HTTPException(
-                409,
-                "Take over the conversation before replying",
-            )
+            raise HTTPException(409, "Take over the conversation before replying")
         _require_handoff_owner(handoff, current_user)
 
         text = data.message.strip()
         delivery = capabilities["human_reply_delivery"]
-        audit_details = {
-            "delivery": delivery,
-            "assigned_user_id": current_user.id,
-        }
+        audit_details = {"delivery": delivery, "assigned_user_id": current_user.id}
 
         if delivery == "whatsapp":
-            session = _session(
-                db,
-                current_user.company_id,
-                conversation.id,
-            )
+            session = _session(db, current_user.company_id, conversation.id)
             if session is None:
-                raise HTTPException(
-                    409,
-                    "WhatsApp session is unavailable for this conversation",
-                )
+                raise HTTPException(409, "WhatsApp session is unavailable for this conversation")
+            channel, config = _whatsapp_channel(db, conversation, session)
+            if channel is None or config is None:
+                raise HTTPException(409, "The WhatsApp channel for this conversation is not active or configured")
 
-            _channel, config = _whatsapp_channel(db, conversation, session)
-            if config is None:
-                raise HTTPException(
-                    409,
-                    "The WhatsApp channel for this conversation is not active or configured",
-                )
-
-            result = whatsapp_sender.send_text(
-                config=config,
-                to=session.wa_id,
-                text=text,
+            client_message_id = data.client_message_id or str(uuid4())
+            idempotency_key = (
+                f"portal:{current_user.company_id}:{conversation.id}:"
+                f"{current_user.id}:{client_message_id}"
             )
-            if not result.get("success"):
-                raise HTTPException(
-                    502,
-                    "WhatsApp delivery failed; the reply was not recorded as sent",
-                )
+            existing_delivery = (
+                db.query(WhatsAppOutboundDelivery)
+                .filter(WhatsAppOutboundDelivery.idempotency_key == idempotency_key)
+                .first()
+            )
+            if existing_delivery is not None:
+                existing_message = db.query(AIMessage).filter(
+                    AIMessage.id == existing_delivery.message_id,
+                    AIMessage.conversation_id == conversation.id,
+                ).first()
+                if existing_message is None:
+                    raise HTTPException(409, "Existing reply delivery is inconsistent")
+                result = attempt_delivery(db, delivery_id=existing_delivery.id, config=config)
+                db.refresh(existing_message)
+                return {
+                    "status": _delivery_response_status(result),
+                    "mode": "human",
+                    "delivery": delivery,
+                    "delivery_state": result,
+                    "message": {
+                        "id": existing_message.id,
+                        "role": existing_message.role,
+                        "content": existing_message.content,
+                        "created_at": existing_message.created_at,
+                    },
+                }
 
             activate_human_handoff(
                 session,
                 reason=handoff.reason or "customer_portal_reply",
                 human_message=True,
             )
+            handoff.status = "in_progress"
+            handoff.updated_at = datetime.utcnow()
+            message = AIMessage(
+                conversation_id=conversation.id,
+                role="human",
+                content=text,
+            )
+            db.add(message)
+            db.flush()
+            outbound = ensure_delivery(
+                db,
+                idempotency_key=idempotency_key,
+                company_id=current_user.company_id,
+                agent_id=conversation.agent_id,
+                conversation_id=conversation.id,
+                channel_id=channel.id,
+                message_id=message.id,
+                wa_id=session.wa_id,
+            )
             audit_details.update(
                 {
                     "wa_id": session.wa_id,
-                    "delivery_status_code": result.get("status_code"),
+                    "delivery_id": outbound.id,
+                    "client_message_id": client_message_id,
                 }
             )
-        elif delivery == "website_widget":
-            # Website visitors poll the canonical conversation. Recording a human
-            # message here delivers it through the same embedded chat without a
-            # separate outbound provider.
-            pass
-        else:
-            raise HTTPException(
-                409,
-                "No human reply delivery adapter exists for this channel",
+            _audit_handoff(
+                db,
+                action="customer_inbox.human_reply_prepared",
+                conversation=conversation,
+                current_user=current_user,
+                details=audit_details,
             )
+            db.commit()
 
-        handoff.status = "in_progress"
-        handoff.updated_at = datetime.utcnow()
-        message = AIMessage(
-            conversation_id=conversation.id,
-            role="human",
-            content=text,
-        )
-        db.add(message)
-        _audit_handoff(
-            db,
-            action="customer_inbox.human_reply_sent",
-            conversation=conversation,
-            current_user=current_user,
-            details=audit_details,
-        )
-        db.commit()
-        db.refresh(message)
-        return {
-            "status": "sent",
-            "mode": "human",
-            "delivery": delivery,
-            "message": {
-                "id": message.id,
-                "role": message.role,
-                "content": message.content,
-                "created_at": message.created_at,
-            },
-        }
+            result = attempt_delivery(db, delivery_id=outbound.id, config=config)
+            _audit_handoff(
+                db,
+                action=(
+                    "customer_inbox.human_reply_sent"
+                    if result.get("success")
+                    else "customer_inbox.human_reply_delivery_unresolved"
+                ),
+                conversation=conversation,
+                current_user=current_user,
+                details={
+                    **audit_details,
+                    "delivery_status": result.get("status"),
+                    "retryable": result.get("retryable"),
+                    "error_code": result.get("error_code"),
+                    "provider_message_id": result.get("provider_message_id"),
+                },
+            )
+            db.commit()
+            db.refresh(message)
+            return {
+                "status": _delivery_response_status(result),
+                "mode": "human",
+                "delivery": delivery,
+                "delivery_state": result,
+                "message": {
+                    "id": message.id,
+                    "role": message.role,
+                    "content": message.content,
+                    "created_at": message.created_at,
+                },
+            }
+
+        if delivery == "website_widget":
+            handoff.status = "in_progress"
+            handoff.updated_at = datetime.utcnow()
+            message = AIMessage(
+                conversation_id=conversation.id,
+                role="human",
+                content=text,
+            )
+            db.add(message)
+            _audit_handoff(
+                db,
+                action="customer_inbox.human_reply_sent",
+                conversation=conversation,
+                current_user=current_user,
+                details=audit_details,
+            )
+            db.commit()
+            db.refresh(message)
+            return {
+                "status": "sent",
+                "mode": "human",
+                "delivery": delivery,
+                "message": {
+                    "id": message.id,
+                    "role": message.role,
+                    "content": message.content,
+                    "created_at": message.created_at,
+                },
+            }
+
+        raise HTTPException(409, "No human reply delivery adapter exists for this channel")
     except Exception:
         db.rollback()
         raise
