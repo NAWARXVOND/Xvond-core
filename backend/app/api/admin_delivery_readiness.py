@@ -6,6 +6,7 @@ from backend.app.core.config_secrets import reveal_config
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.core.n8n_gateway import N8NGatewayError, n8n_gateway
+from backend.app.core.readiness import _channel_customer_accepted
 from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
@@ -83,7 +84,11 @@ def _channel_state(db, company_id: int, agent_id: int) -> dict:
         .all()
     )
     configured = []
+    enabled = []
     live = []
+    customer_ready = []
+    acceptance_pending = []
+
     for row in rows:
         config = reveal_config(row.config) or {}
         try:
@@ -91,19 +96,41 @@ def _channel_state(db, company_id: int, agent_id: int) -> dict:
         except ValueError:
             continue
         configured.append(row)
+
+        connection = None
         if row.channel_type == "whatsapp":
-            connected = bool(
-                whatsapp_connection_state(config, verify_remote=True)["connected"]
-            )
+            connection = whatsapp_connection_state(config, verify_remote=True)
+            connected = bool(connection["connected"])
         else:
             connected = True
-        if row.enabled and connected:
+
+        accepted = _channel_customer_accepted(
+            channel_type=row.channel_type,
+            channel_config=config,
+            connected=connected,
+            connection=connection,
+        )
+
+        if not row.enabled:
+            continue
+        enabled.append(row)
+        if connected:
             live.append(row)
+        if accepted:
+            customer_ready.append(row)
+        else:
+            acceptance_pending.append(row)
+
+    fully_customer_ready = bool(customer_ready) and not acceptance_pending
     return {
         "configured_count": len(configured),
+        "enabled_count": len(enabled),
         "live_count": len(live),
+        "customer_ready_count": len(customer_ready),
+        "acceptance_pending_count": len(acceptance_pending),
         "configured": bool(configured),
         "live": bool(live),
+        "customer_ready": fully_customer_ready,
     }
 
 
@@ -237,9 +264,14 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
         blockers.insert(0, "AI employee is in draft mode")
     elif not channels["live"]:
         blockers.append("Activate at least one connected customer channel")
+    elif not channels["customer_ready"]:
+        blockers.append("Complete live channel acceptance before customer handover")
 
     ready_for_customer = bool(
-        company.active and agent.enabled and setup_ready and channels["live"]
+        company.active
+        and agent.enabled
+        and setup_ready
+        and channels["customer_ready"]
     )
 
     return {
@@ -263,6 +295,7 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
                 "knowledge": knowledge_ready,
                 "channels": channels["configured"],
                 "live_channels": channels["live"],
+                "customer_ready_channels": channels["customer_ready"],
                 "actions": actions["ready"],
                 "workflow_engine": workflow_ready,
                 "connected_apps": not integration_issues,
@@ -270,7 +303,10 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
             "counts": {
                 "knowledge_sources": knowledge_count,
                 "channels": channels["configured_count"],
+                "enabled_channels": channels["enabled_count"],
                 "live_channels": channels["live_count"],
+                "customer_ready_channels": channels["customer_ready_count"],
+                "acceptance_pending_channels": channels["acceptance_pending_count"],
                 "enabled_actions": actions["enabled_count"],
                 "required_connected_apps": len(actions["required_integration_ids"]),
             },
