@@ -54,7 +54,7 @@ def test_customer_agent_management_is_manager_only_and_never_exposes_provider_mo
     assert '"provider"' not in source
     assert '"model"' not in source
     assert "controls.get(\"can_enable_disable\", False)" in update_source
-    assert "controls.get(\"can_edit_prompt\")" in update_source
+    assert "controls.get(\"can_edit_prompt\", False)" in update_source
     assert "_profile_prompt(company.name, update)" in update_source
     assert "AI employee activation is managed by Xvond Delivery Readiness" in update_source
     assert "_sync_channel_setup" not in update_source
