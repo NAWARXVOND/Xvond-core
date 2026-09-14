@@ -143,8 +143,21 @@ def _activation_blockers(db, channel: AgentChannel) -> list[str]:
         blockers.append("AI employee must be active")
     elif not _has_real_runtime_provider(db, channel.company_id, agent):
         blockers.append("At least one real AI provider/model must be enabled and configured")
-    if not _channel_configured(channel):
+
+    channel_config = reveal_config(channel.config)
+    configured = _channel_configured(channel, channel_config)
+    if not configured:
         blockers.append(f"{channel.channel_type.title()} channel configuration is incomplete")
+    elif channel.channel_type == "whatsapp":
+        # Production activation must prove the stored Meta connection works now.
+        # A syntactically complete credential set is configuration, not connectivity.
+        connection = whatsapp_connection_state(channel_config, verify_remote=True)
+        if connection["connected"] is not True:
+            blockers.append(
+                connection.get("connection_issue")
+                or "WhatsApp must be connected and verified with Meta"
+            )
+
     docs = (
         db.query(KnowledgeDocument)
         .join(AgentKnowledge, AgentKnowledge.document_id == KnowledgeDocument.id)
