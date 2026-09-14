@@ -7,18 +7,23 @@ AGENTS_API = ROOT / "backend" / "app" / "api" / "ai_agents.py"
 CUSTOMER_AGENTS_API = ROOT / "backend" / "app" / "api" / "customer_agents.py"
 USERS_API = ROOT / "backend" / "app" / "api" / "users.py"
 MANAGER_UI = ROOT / "frontend" / "customer" / "manager-controls.js"
+PORTAL_IA = ROOT / "frontend" / "customer" / "portal-information-architecture.js"
 PORTAL_HTML = ROOT / "frontend" / "customer" / "index.html"
 
 
-def test_staff_overview_is_dashboard_only_and_omits_management_payloads():
+def test_staff_overview_is_operator_scoped_and_omits_management_payloads():
     source = PORTAL_API.read_text(encoding="utf-8-sig")
-    assert '"access_level": "staff"' in source
+    assert '"access_level": "operator"' in source
     assert '"navigation": [' in source
     assert '"id": "dashboard"' in source
+    assert '"id": "conversations"' in source
+    assert '"label": "Customer Inbox"' in source
     assert '"services": []' in source
     assert '"billing": {}' in source
     assert '"channels": []' in source
     assert '"integrations": []' in source
+    assert '"conversations": int(conversation_count)' in source
+    assert '"active_handoffs": int(active_handoffs)' in source
     assert 'if current_user.role not in MANAGER_ROLES:' in source
 
 
@@ -67,22 +72,26 @@ def test_company_user_role_hierarchy_is_enforced_server_side():
     assert "You cannot disable your own account" in source
 
 
-def test_customer_manager_ui_matches_server_role_hierarchy():
-    source = MANAGER_UI.read_text(encoding="utf-8-sig")
-    assert "customerManagerAccess" in source
-    assert "Staff — Overview only" in source
-    assert "Manager — Management access" in source
-    assert "customerAssignableRoleOptions" in source
-    assert 'currentUser?.role === "manager"' in source
-    assert "Managers can add Staff accounts only." in source
-    assert "customerCanManageUser" in source
-    assert "/customer/agents/${agentId}" in source
-    assert 'customerSelect("ca-length"' in source
-    assert 'customerSelect("ca-clarification"' in source
-    assert 'customerSelect("ca-off-topic"' in source
-    assert "controls.can_edit_prompt" in source
-    assert 'api("/users/")' in source
-    assert "loadCompanyUsers" in source
+def test_customer_manager_ui_matches_server_role_hierarchy_and_operator_model():
+    manager = MANAGER_UI.read_text(encoding="utf-8-sig")
+    ia = PORTAL_IA.read_text(encoding="utf-8-sig")
+    assert "customerManagerAccess" in manager
+    assert "customerAssignableRoleOptions" in manager
+    assert 'currentUser?.role === "manager"' in manager
+    assert "Managers can add Staff accounts only." in manager
+    assert "customerCanManageUser" in manager
+    assert "/customer/agents/${agentId}" in manager
+    assert 'customerSelect("ca-length"' in manager
+    assert 'customerSelect("ca-clarification"' in manager
+    assert 'customerSelect("ca-off-topic"' in manager
+    assert "controls.can_edit_prompt" in manager
+    assert 'api("/users/")' in manager
+    assert "loadCompanyUsers" in manager
+
+    assert "Staff Operator" in ia
+    assert "Overview + Customer Inbox" in ia
+    assert "Operator access: handle Customer Inbox conversations and human takeover" in ia
+    assert 'id: "conversations", label: "Customer Inbox"' in ia
 
 
 def test_manager_controls_load_after_portal_enhancements_and_before_session_start():
