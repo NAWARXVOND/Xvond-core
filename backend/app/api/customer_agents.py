@@ -15,7 +15,6 @@ from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.factory_models import AgentConfig
 from backend.app.modules.ai_agent.models import AIAgent
-from backend.app.modules.billing.limits import limits_service
 from backend.app.modules.channels.models import AgentChannel
 
 
@@ -112,10 +111,16 @@ def update_agent(
 
         if data.enabled is not None:
             if not controls.get("can_enable_disable", False):
-                raise HTTPException(403, "Customer cannot enable or disable this agent")
+                raise HTTPException(403, "Customer cannot change this employee's runtime state")
             if data.enabled is True and agent.enabled is False:
-                limits_service.check_agent_limit(db, current_user.company_id)
-            agent.enabled = data.enabled
+                # Customer managers may stop a live employee, but production
+                # activation is owned exclusively by Xvond Delivery Readiness.
+                raise HTTPException(
+                    409,
+                    "AI employee activation is managed by Xvond Delivery Readiness",
+                )
+            if data.enabled is False:
+                agent.enabled = False
 
         if data.instructions is not None and not controls.get("can_edit_prompt", False):
             raise HTTPException(403, "Advanced instructions are managed by Xvond")
