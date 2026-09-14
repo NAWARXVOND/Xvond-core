@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
 from backend.app.main import app  # Register all model metadata.
-from backend.app.api import customer_inbox as inbox, whatsapp_webhook as webhook
+from backend.app.api import customer_inbox as inbox, customer_portal as portal_api, whatsapp_webhook as webhook
 from backend.app.api import admin_company_profile as profile_api
 from backend.app.core.database.base import Base
 from backend.app.models.company import Company
@@ -39,7 +39,7 @@ def database(monkeypatch):
         connection.exec_driver_sql("BEGIN")
     Base.metadata.create_all(engine)
     factory = lambda: Session(engine, autoflush=False)
-    for module in (webhook, inbox, profile_api):
+    for module in (webhook, inbox, portal_api, profile_api):
         monkeypatch.setattr(module, "SessionLocal", factory)
     monkeypatch.setattr(webhook.whatsapp_job_queue, "client", None)
     with factory() as db:
@@ -133,6 +133,22 @@ def test_default_inbox_excludes_test_unknown_and_other_tenants(database):
     assert [row["id"] for row in inbox.list_inbox(current_user=user())["conversations"]] == [live_id]
     assert len(inbox.list_inbox(channel_type="portal_test", current_user=user())["conversations"]) == 1
     assert len(inbox.list_inbox(channel_type="unknown", current_user=user())["conversations"]) == 1
+
+
+def test_customer_overview_counts_only_live_inbox_conversations(database):
+    process()["processed"][0]["conversation_id"]
+    with database() as db:
+        db.add_all([
+            AIConversation(company_id=1, agent_id=1, channel_type="portal_test", title="Test"),
+            AIConversation(company_id=1, agent_id=1, title="Unknown"),
+        ])
+        db.commit()
+
+    manager = portal_api.overview(user())
+    staff = portal_api.overview(user("employee", 2))
+
+    assert manager["summary"]["conversations"] == 1
+    assert staff["summary"]["conversations"] == 1
 
 
 def test_source_binding_rejects_channel_or_contact_change(database):
