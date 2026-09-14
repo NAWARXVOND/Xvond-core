@@ -17,6 +17,7 @@ def test_admin_scripts_are_loaded_once_and_workspace_is_consolidated():
     assert scripts.index("/static/admin/privacy-boundaries.js") > scripts.index(
         "/static/admin/company-control-center.js"
     )
+    assert "/static/admin/customer-operations.js" not in scripts
     assert "/static/admin/human-chat.js" not in scripts
     assert not any("company-control-center-runtime" in script for script in scripts)
     assert not any("employee-workspace" in script for script in scripts)
@@ -35,6 +36,7 @@ def test_obsolete_admin_workspace_files_are_removed():
         "company_workspace.js",
         "company_workspace_automation.js",
         "company_workspace_plans.js",
+        "customer-operations.js",
         "human-chat.js",
         "operations.js",
         "services.js",
@@ -89,6 +91,22 @@ def test_admin_privacy_boundary_keeps_customer_content_out_of_operator_ui():
     assert "/admin/agent-actions/companies/${companyId}/requests" not in privacy
     assert "/admin/operations/companies/${companyId}/conversations" not in privacy
     assert "/admin/handoff/companies/${companyId}/sessions" not in privacy
+
+    # Admin keeps a privacy-safe technical reconciliation console.
+    assert "/admin/operations/companies/${companyId}/external-unresolved" in privacy
+    assert "renderPrivacySafeOperations" in privacy
+    assert "reconcilePrivacySafeOperation" in privacy
+    assert "Customer payloads remain inside the tenant workspace" in privacy
+
+
+def test_admin_workspace_uses_canonical_company_lifecycle_transition():
+    privacy = (ADMIN_DIR / "privacy-boundaries.js").read_text(encoding="utf-8-sig")
+    assert "/admin/companies/${xvondWorkspace.companyId}/status" in privacy
+    assert "toggleCanonicalWorkspaceCompany" in privacy
+    canonical_section = privacy.split("toggleCanonicalWorkspaceCompany", 1)[1].split(
+        "renderCompanyControlCenter", 1
+    )[0]
+    assert "/admin/production/" not in canonical_section
 
 
 def test_admin_action_editor_preserves_intentional_state_mutations():
