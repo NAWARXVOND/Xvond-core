@@ -4,8 +4,10 @@ from pydantic import BaseModel
 from backend.app.core.company_lifecycle import (
     CompanyNotFound,
     CompanyNotReady,
+    InvalidCompanyLifecycle,
     activate_company,
     deactivate_company,
+    set_company_lifecycle,
 )
 from backend.app.core.config.settings import settings
 from backend.app.core.database.connection import SessionLocal
@@ -32,6 +34,10 @@ class CompanyStatusUpdate(BaseModel):
     active: bool
 
 
+class CompanyLifecycleUpdate(BaseModel):
+    status: str
+
+
 @router.get("/workflow-engine/status")
 def workflow_engine_status(current_admin: User = Depends(require_xvond_admin)):
     enabled = bool(settings.N8N_ENABLED)
@@ -55,12 +61,7 @@ def workflow_engine_status(current_admin: User = Depends(require_xvond_admin)):
 
 @router.post("/companies")
 def create_company(data: CompanyCreate, current_admin: User = Depends(require_xvond_admin)):
-    """Create an inactive tenant shell.
-
-    Commercial entitlements are assigned only through the canonical per-service
-    billing API. The legacy ``plans/subscriptions`` tables remain readable for
-    historical compatibility but receive no new onboarding writes.
-    """
+    """Create an onboarding tenant shell with portal access and AI runtime off."""
     name = data.name.strip()
     owner_email = data.owner_email.strip().lower()
     owner_full_name = data.owner_full_name.strip()
@@ -80,7 +81,7 @@ def create_company(data: CompanyCreate, current_admin: User = Depends(require_xv
         existing_user = db.query(User).filter(User.email == owner_email).first()
         if existing_user is not None:
             raise HTTPException(status_code=400, detail="Owner email already exists")
-        company = Company(name=name, active=False)
+        company = Company(name=name, active=False, lifecycle_status="onboarding")
         db.add(company)
         db.flush()
         owner = User(
@@ -106,7 +107,8 @@ def create_company(data: CompanyCreate, current_admin: User = Depends(require_xv
             user_id=current_admin.id,
             company_id=company.id,
             details={
-                "initial_state": "inactive",
+                "initial_state": "onboarding",
+                "runtime_active": False,
                 "billing_source": "service_subscriptions",
             },
         )
@@ -118,6 +120,7 @@ def create_company(data: CompanyCreate, current_admin: User = Depends(require_xv
                 "id": company.id,
                 "name": company.name,
                 "active": company.active,
+                "lifecycle_status": company.lifecycle_status,
             },
             "owner": {
                 "id": owner.id,
@@ -138,18 +141,76 @@ def create_company(data: CompanyCreate, current_admin: User = Depends(require_xv
         db.close()
 
 
+@router.patch("/companies/{company_id}/lifecycle")
+def update_company_lifecycle(
+    company_id: int,
+    data: CompanyLifecycleUpdate,
+    current_admin: User = Depends(require_xvond_admin),
+):
+    """Canonical commercial/onboarding lifecycle transition."""
+    db = SessionLocal()
+    try:
+        previous = db.query(Company).filter(Company.id == company_id).first()
+        previous_status = previous.lifecycle_status if previous is not None else None
+        try:
+            company, readiness = set_company_lifecycle(db, company_id, data.status)
+        except CompanyNotFound as exc:
+            raise HTTPException(status_code=404, detail="Company not found") from exc
+        except InvalidCompanyLifecycle as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except CompanyNotReady as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Company is not ready to go live",
+                    "issues": exc.readiness["issues"],
+                    "agents": exc.readiness["agents"],
+                },
+            ) from exc
+
+        audit_service.log(
+            db=db,
+            action="company.lifecycle_changed",
+            resource_type="company",
+            resource_id=company.id,
+            user_id=current_admin.id,
+            company_id=company.id,
+            details={
+                "from": previous_status,
+                "to": company.lifecycle_status,
+                "runtime_active": company.active,
+                "readiness_status": readiness.get("status") if readiness else None,
+            },
+        )
+        db.commit()
+        db.refresh(company)
+        return {
+            "status": "updated",
+            "company": {
+                "id": company.id,
+                "name": company.name,
+                "active": company.active,
+                "lifecycle_status": company.lifecycle_status,
+                "lifecycle_updated_at": company.lifecycle_updated_at,
+            },
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 @router.patch("/companies/{company_id}/status")
 def update_company_status(
     company_id: int,
     data: CompanyStatusUpdate,
     current_admin: User = Depends(require_xvond_admin),
 ):
-    """Canonical emergency runtime switch.
-
-    Activation is readiness-gated. Deactivation disables runtime execution and
-    every AI employee; commercial lifecycle state is managed separately and is
-    not inferred from this boolean.
-    """
+    """Emergency runtime switch, separate from commercial lifecycle."""
     db = SessionLocal()
     try:
         try:
@@ -197,6 +258,7 @@ def update_company_status(
                 "id": company.id,
                 "name": company.name,
                 "active": company.active,
+                "lifecycle_status": company.lifecycle_status,
             },
         }
     except HTTPException:
@@ -220,6 +282,8 @@ def list_companies(current_admin: User = Depends(require_xvond_admin)):
                     "id": company.id,
                     "name": company.name,
                     "active": company.active,
+                    "lifecycle_status": company.lifecycle_status,
+                    "lifecycle_updated_at": company.lifecycle_updated_at,
                     "created_at": company.created_at,
                 }
                 for company in companies
