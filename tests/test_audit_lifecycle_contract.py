@@ -10,6 +10,8 @@ MAIN = Path("backend/app/main.py").read_text(encoding="utf-8")
 BOOTSTRAP = Path("backend/app/modules/tools/bootstrap.py").read_text(encoding="utf-8")
 AUDIT_FIXES = Path("frontend/admin/core-audit-fixes.js").read_text(encoding="utf-8")
 PRIVACY = Path("frontend/admin/privacy-boundaries.js").read_text(encoding="utf-8")
+COMPANY_USERS = Path("backend/app/api/admin_company_users.py").read_text(encoding="utf-8")
+COMPANY_MODULES = Path("backend/app/api/company_modules.py").read_text(encoding="utf-8-sig")
 
 
 def test_company_activation_is_readiness_gated_and_deactivation_is_emergency_stop():
@@ -72,3 +74,21 @@ def test_admin_pdf_upload_uses_http_only_cookie_session_not_browser_token_storag
     override = AUDIT_FIXES.split("uploadPDFKnowledge=async function", 1)[1]
     assert "localStorage" not in override
     assert "Authorization" not in override
+
+
+def test_sensitive_operator_mutations_are_audited_without_customer_identity_payloads():
+    assert 'action="company_user.created"' in COMPANY_USERS
+    assert '"company_user.activated" if data.active else "company_user.deactivated"' in COMPANY_USERS
+    assert 'details={"role": role, "active": True}' in COMPANY_USERS
+    assert 'details={"role": user.role, "active": data.active}' in COMPANY_USERS
+    audit_sections = COMPANY_USERS.split("audit_service.log(")[1:]
+    assert audit_sections
+    for section in audit_sections:
+        call = section.split(")", 1)[0]
+        assert "email" not in call
+        assert "full_name" not in call
+
+    assert '"company_module.installed"' in COMPANY_MODULES
+    assert '"company_module.enabled"' in COMPANY_MODULES
+    assert '"company_module.disabled"' in COMPANY_MODULES
+    assert 'details={"module_name": item.module_name, "enabled": item.enabled}' in COMPANY_MODULES
