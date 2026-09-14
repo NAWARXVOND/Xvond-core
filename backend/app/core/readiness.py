@@ -26,6 +26,9 @@ from backend.app.modules.tools.executor import tool_executor
 from backend.app.modules.tools.models import AgentToolAssignment
 
 
+LEGACY_BUSINESS_TOOL_NAMES = frozenset({"booking", "order", "lead"})
+
+
 def _utcnow_naive() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
@@ -253,8 +256,17 @@ def company_readiness(db, company_id: int):
             )
             .all()
         )
+        enabled_tool_names = {str(item.tool_name or "").strip() for item in tools}
+        legacy_business_tools = sorted(
+            enabled_tool_names & LEGACY_BUSINESS_TOOL_NAMES
+        )
+        action_request_assigned = "action_request" in enabled_tool_names
         runtime_tools = tool_executor.get_agent_tools(db=db, agent_id=agent.id)
         ready_action = any(item.get("name") == "action_request" for item in runtime_tools)
+        tools_ready = bool(
+            not legacy_business_tools
+            and (not action_request_assigned or ready_action)
+        )
 
         channels = (
             db.query(AgentChannel)
@@ -351,6 +363,16 @@ def company_readiness(db, company_id: int):
             issues.append("No channel configured")
         elif not configured_channels:
             issues.append("Channel configuration is incomplete")
+        if legacy_business_tools:
+            issues.append(
+                "Legacy business tools are still enabled: "
+                + ", ".join(legacy_business_tools)
+                + ". Configure canonical Business Actions before Go Live"
+            )
+        if action_request_assigned and not ready_action:
+            issues.append(
+                "Business Actions are enabled, but no configured customer action is runtime-ready"
+            )
         if not agent.enabled:
             warnings.append("AI employee is in draft mode; activate the company, then use Go Live")
         elif not live_channels:
@@ -374,8 +396,6 @@ def company_readiness(db, company_id: int):
             warnings.append(
                 "WhatsApp Coexistence transport is live but human takeover acceptance is pending"
             )
-        if tools and not ready_action:
-            warnings.append("Tools are assigned, but no configured customer action is runtime-ready")
 
         setup_ready = bool(
             provider_ready
@@ -383,6 +403,7 @@ def company_readiness(db, company_id: int):
             and employee_profile_ready
             and knowledge_count > 0
             and configured_channels
+            and tools_ready
         )
         ready_for_customer = bool(
             company.active
@@ -415,7 +436,10 @@ def company_readiness(db, company_id: int):
                 "profile_exists": employee_profile_ready,
                 "knowledge_count": knowledge_count,
                 "tool_count": len(tools),
+                "tools_ready": tools_ready,
+                "action_request_assigned": action_request_assigned,
                 "ready_action": ready_action,
+                "legacy_business_tools": legacy_business_tools,
                 "channels": channel_results,
                 "configured_channel_count": len(configured_channels),
                 "enabled_channel_count": len(enabled_channels),
