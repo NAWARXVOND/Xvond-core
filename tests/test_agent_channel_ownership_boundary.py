@@ -21,5 +21,8 @@ def test_customer_employee_updates_do_not_write_persona_into_channels():
 
 def test_legacy_channel_setup_is_read_only_backfill_compatibility():
     source = inspect.getsource(admin_ai_employee_profile._setup_from_channels)
+    doc = (admin_ai_employee_profile._setup_from_channels.__doc__ or "").lower()
     assert 'config.get("employee_setup")' in source
-    assert "legacy migration fallback" in (admin_ai_employee_profile._setup_from_channels.__doc__ or "")
+    assert "legacy" in doc
+    assert "backfill" in doc
+    assert "never receive employee persona/behavior state again" in doc
