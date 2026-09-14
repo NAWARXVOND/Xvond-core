@@ -12,7 +12,7 @@ from backend.app.modules.ai_agent.profile_models import AIAgentProfile
 from backend.app.modules.billing.limits import limits_service
 from backend.app.modules.channels.catalog import validate_channel_config
 from backend.app.modules.channels.models import AgentChannel
-from backend.app.modules.channels.whatsapp_connection import whatsapp_meta_onboarding_complete
+from backend.app.modules.channels.whatsapp_connection import whatsapp_connection_state
 from backend.app.modules.integrations.models import CompanyIntegration
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeDocument
 from backend.app.modules.tools.models import AgentToolAssignment
@@ -90,10 +90,12 @@ def _channel_state(db, company_id: int, agent_id: int) -> dict:
         except ValueError:
             continue
         configured.append(row)
-        connected = bool(
-            row.channel_type != "whatsapp"
-            or whatsapp_meta_onboarding_complete(config)
-        )
+        if row.channel_type == "whatsapp":
+            connected = bool(
+                whatsapp_connection_state(config, verify_remote=True)["connected"]
+            )
+        else:
+            connected = True
         if row.enabled and connected:
             live.append(row)
     return {
