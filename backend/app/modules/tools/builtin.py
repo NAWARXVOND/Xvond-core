@@ -97,17 +97,17 @@ class HumanHandoffTool(AgentTool):
         if conversation is None:return ToolResult(success=False,error="Conversation not found for human handoff")
         channel_type=str(conversation.channel_type or "").strip().lower()
         if channel_type not in LIVE_HUMAN_HANDOFF_CHANNELS:return ToolResult(success=False,error=f"Live human handoff is not available on {channel_type or 'this'} channel yet",data={"action":"human_handoff_unavailable","channel_type":channel_type or None})
+        session=None
+        if channel_type=="whatsapp":
+            session=db.query(WhatsAppSession).filter(WhatsAppSession.company_id==cid,WhatsAppSession.agent_id==aid,WhatsAppSession.conversation_id==conversation_id).first()
+            if session is None:return ToolResult(success=False,error="WhatsApp session is unavailable for live human handoff")
         reason=arguments.get("reason") or "ai_handoff";priority=arguments.get("priority","normal");department=arguments.get("department",context.get("config",{}).get("department","customer_service"))
         handoff=db.query(HumanHandoff).filter(HumanHandoff.company_id==cid,HumanHandoff.conversation_id==conversation_id,HumanHandoff.status.in_(ACTIVE_HANDOFF_STATUSES)).order_by(HumanHandoff.id.desc()).first()
         if handoff is None:
             handoff=HumanHandoff(company_id=cid,agent_id=aid,conversation_id=conversation_id,reason=reason,priority=priority,department=department,status="pending");db.add(handoff);db.flush()
         else:
             handoff.reason=handoff.reason or reason;handoff.priority=priority;handoff.department=department
-        session=None
-        if channel_type=="whatsapp":
-            session=db.query(WhatsAppSession).filter(WhatsAppSession.company_id==cid,WhatsAppSession.agent_id==aid,WhatsAppSession.conversation_id==conversation_id).first()
-            if session is None:return ToolResult(success=False,error="WhatsApp session is unavailable for live human handoff")
-            activate_human_handoff(session,reason=reason)
+        if session is not None:activate_human_handoff(session,reason=reason)
         # Website runtime treats the active handoff row itself as the AI pause.
         db.flush()
         return ToolResult(success=True,data={"action":"human_handoff_created","handoff_id":handoff.id,"status":handoff.status,"ai_paused":True,"claim_required":handoff.assigned_user_id is None,"channel_type":channel_type})
