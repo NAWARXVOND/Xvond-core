@@ -98,7 +98,9 @@ def test_whatsapp_human_reply_is_durable_and_idempotent_before_network_delivery(
     assert "client_message_id" in source
     assert "existing_delivery" in source
     assert 'action="customer_inbox.human_reply_prepared"' in source
-    assert "human_reply_delivery_unresolved" in source
+    assert "Previous WhatsApp delivery outcome is unknown; do not resend blindly" in source
+    assert "WhatsApp delivery outcome is unknown; the reply is recorded for reconciliation and will not be resent automatically" in source
+    assert "WhatsApp delivery was rejected temporarily; the saved reply can be retried without duplication" in source
 
 
 def test_website_human_reply_uses_canonical_conversation_delivery():
