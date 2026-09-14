@@ -16,6 +16,15 @@ from backend.app.modules.tools.business_models import ActionRequest
 router = APIRouter(prefix="/admin/dashboard", tags=["Xvond Admin - Dashboard"])
 UNRESOLVED_EXTERNAL = {"executing", "external_failed", "cancelling"}
 UNRESOLVED_DELIVERY = {"failed", "unknown"}
+LIFECYCLE_ORDER = (
+    "onboarding",
+    "testing",
+    "live",
+    "paused",
+    "suspended",
+    "cancelled",
+    "archived",
+)
 
 
 def _attention_items(db, day_ago: datetime) -> list[dict]:
@@ -102,6 +111,19 @@ def _attention_items(db, day_ago: datetime) -> list[dict]:
     return items[:20]
 
 
+def _lifecycle_counts(db) -> dict[str, int]:
+    counts = {status: 0 for status in LIFECYCLE_ORDER}
+    rows = (
+        db.query(Company.lifecycle_status, func.count(Company.id))
+        .group_by(Company.lifecycle_status)
+        .all()
+    )
+    for status, count in rows:
+        key = str(status or "onboarding").strip().lower()
+        counts[key] = int(count or 0)
+    return counts
+
+
 @router.get("/summary")
 def summary(current_admin: User = Depends(require_xvond_admin)):
     db = SessionLocal()
@@ -111,6 +133,7 @@ def summary(current_admin: User = Depends(require_xvond_admin)):
         month_ago = now - timedelta(days=30)
 
         companies = db.query(func.count(Company.id)).scalar() or 0
+        lifecycle_counts = _lifecycle_counts(db)
         active_companies = (
             db.query(func.count(Company.id))
             .filter(Company.active.is_(True))
@@ -166,6 +189,7 @@ def summary(current_admin: User = Depends(require_xvond_admin)):
 
         return {
             "companies": companies,
+            "lifecycle_counts": lifecycle_counts,
             "active_companies": active_companies,
             "inactive_companies": max(0, companies - active_companies),
             "users": db.query(func.count(User.id)).scalar() or 0,
