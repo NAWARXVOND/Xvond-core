@@ -100,6 +100,11 @@ class N8NActionGateway:
                 if attempt < attempts:
                     time.sleep(min(0.25 * attempt, 1.0))
 
+        # N8NGatewayError messages are authored by Xvond and contain no upstream
+        # body/credential text. Preserve those safe contract errors for callers;
+        # third-party/http errors remain reduced to their structural type.
+        if isinstance(last_error, N8NGatewayError):
+            raise N8NGatewayError(str(last_error)) from last_error
         raise N8NGatewayError(
             f"n8n workflow execution failed ({safe_error_type(last_error)})"
         ) from last_error
