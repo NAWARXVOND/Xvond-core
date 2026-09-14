@@ -10,7 +10,7 @@
     function removePrivateCustomerControls() {
         document.querySelectorAll('.workspace-tab').forEach(button => {
             const label = (button.textContent || '').trim();
-            if (label === 'Operations' || label === 'Conversations') {
+            if (label === 'Conversations') {
                 button.remove();
             }
         });
@@ -55,8 +55,57 @@
         return originalRenderOverviewTab();
     };
 
+    renderOperationsTab = function renderPrivacySafeOperations() {
+        const data = xvondWorkspace.data || {};
+        const items = data.unresolved || [];
+        return `
+            <div class="workspace-panel">
+                <div class="workspace-panel-head">
+                    <div>
+                        <h3>External Reconciliation</h3>
+                        <p>Technical operation metadata only. Customer payloads remain inside the tenant workspace.</p>
+                    </div>
+                    <button class="table-button" onclick="loadCompanyControlCenter(${Number(xvondWorkspace.companyId)},'operations')">Refresh</button>
+                </div>
+                <div class="workspace-metrics compact">
+                    <div class="metric-card"><span>Unresolved</span><strong>${items.length}</strong><small>external execution outcomes</small></div>
+                </div>
+                ${items.length ? `<div class="operation-list">${items.map(item => `
+                    <div class="request-card">
+                        <div class="request-card-head">
+                            <div>
+                                <strong>${f((item.action_type || 'operation').replaceAll('_',' '))} #${item.id}</strong>
+                                <div class="meta">${f(wsAgentName(item.agent_id))} · ${f(item.status || 'unknown')} · ${wsDate(item.created_at)}</div>
+                            </div>
+                            ${wsPill(item.status || 'unknown', item.status === 'external_failed' ? 'bad' : 'neutral')}
+                        </div>
+                        <div class="workspace-inline-actions">
+                            <button class="table-button" onclick="reconcilePrivacySafeOperation(${item.id},'executed')">Executed</button>
+                            <button class="table-button" onclick="reconcilePrivacySafeOperation(${item.id},'not_executed')">Not executed</button>
+                            <button class="table-button" onclick="reconcilePrivacySafeOperation(${item.id},'cancelled')">Cancelled</button>
+                        </div>
+                    </div>
+                `).join('')}</div>` : wsEmpty('No unresolved external operations','External execution state is reconciled.')}
+            </div>
+        `;
+    };
+
+    window.reconcilePrivacySafeOperation = async function reconcilePrivacySafeOperation(requestId, outcome) {
+        const label = outcome.replaceAll('_', ' ');
+        if (!confirm(`Mark external operation #${requestId} as ${label}? Use this only after verifying the external system.`)) return;
+        try {
+            await api(`/admin/operations/requests/${requestId}/reconcile`, {
+                method: 'PATCH',
+                body: JSON.stringify({outcome})
+            });
+            await loadCompanyControlCenter(xvondWorkspace.companyId, 'operations');
+        } catch (error) {
+            alert(error.message);
+        }
+    };
+
     renderCompanyControlCenter = function renderPrivacyAwareCompanyControlCenter() {
-        if (xvondWorkspace.tab === 'operations' || xvondWorkspace.tab === 'conversations') {
+        if (xvondWorkspace.tab === 'conversations') {
             xvondWorkspace.tab = 'overview';
         }
         originalRenderCompanyControlCenter();
@@ -122,9 +171,9 @@
     loadCompanyControlCenter = async function loadPrivacyAwareCompanyControlCenter(companyId, tab = null) {
         simpleCompanyId = Number(companyId);
         xvondWorkspace.companyId = Number(companyId);
-        if (tab && !['operations', 'conversations'].includes(tab)) {
+        if (tab && tab !== 'conversations') {
             xvondWorkspace.tab = tab;
-        } else if (['operations', 'conversations'].includes(xvondWorkspace.tab)) {
+        } else if (xvondWorkspace.tab === 'conversations') {
             xvondWorkspace.tab = 'overview';
         }
 
@@ -142,6 +191,7 @@
             servicePlans,
             users,
             readiness,
+            unresolved,
         ] = await Promise.all([
             api(`/admin/company-view/${companyId}`),
             api(`/admin/channels/companies/${companyId}`),
@@ -156,6 +206,7 @@
             wsOptional('/admin/service-billing/plans', {plans: []}),
             wsOptional(`/admin/company-users/companies/${companyId}`, {users: []}),
             wsOptional(`/admin/production/companies/${companyId}/readiness`, null),
+            wsOptional(`/admin/operations/companies/${companyId}/external-unresolved`, {requests: []}),
         ]);
 
         const agentMeta = await Promise.all((view.agents || []).map(async agent => {
@@ -184,7 +235,7 @@
             requests: [],
             conversations: [],
             handoffs: [],
-            unresolved: [],
+            unresolved: unresolved.requests || [],
             usage,
             profile,
             setup,
