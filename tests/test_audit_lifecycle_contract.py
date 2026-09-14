@@ -2,18 +2,31 @@ from pathlib import Path
 
 
 ADMIN = Path("backend/app/api/admin.py").read_text(encoding="utf-8")
+PRODUCTION = Path("backend/app/api/admin_production.py").read_text(encoding="utf-8")
+LIFECYCLE = Path("backend/app/core/company_lifecycle.py").read_text(encoding="utf-8")
 DELIVERY = Path("backend/app/api/admin_delivery_readiness.py").read_text(encoding="utf-8")
 READINESS = Path("backend/app/core/readiness.py").read_text(encoding="utf-8")
 MAIN = Path("backend/app/main.py").read_text(encoding="utf-8")
 BOOTSTRAP = Path("backend/app/modules/tools/bootstrap.py").read_text(encoding="utf-8")
 AUDIT_FIXES = Path("frontend/admin/core-audit-fixes.js").read_text(encoding="utf-8")
+PRIVACY = Path("frontend/admin/privacy-boundaries.js").read_text(encoding="utf-8")
 
 
 def test_company_activation_is_readiness_gated_and_deactivation_is_emergency_stop():
-    assert "readiness = company_readiness(db, company_id)" in ADMIN
-    assert 'if not readiness["ready"]' in ADMIN
-    assert "Company is not ready to activate" in ADMIN
-    assert "AIAgent.enabled: False" in ADMIN
+    assert "readiness = company_readiness(db, company_id)" in LIFECYCLE
+    assert 'if not readiness["ready"]' in LIFECYCLE
+    assert "CompanyNotReady(readiness)" in LIFECYCLE
+    assert "AIAgent.enabled: False" in LIFECYCLE
+    assert "activate_company(db, company_id)" in ADMIN
+    assert "deactivate_company(db, company_id)" in ADMIN
+
+
+def test_legacy_production_routes_are_compatibility_wrappers():
+    assert "activate_company_state(db, company_id)" in PRODUCTION
+    assert "deactivate_company_state(db, company_id)" in PRODUCTION
+    assert "status_code=409" in PRODUCTION
+    assert "legacy_production_endpoint" in PRODUCTION
+    assert "/admin/companies/${xvondWorkspace.companyId}/status" in PRIVACY
 
 
 def test_company_setup_readiness_uses_configured_not_live_channels():
