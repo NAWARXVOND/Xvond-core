@@ -18,10 +18,16 @@ def test_ai_agents_portal_is_capability_aware():
         "agents",
         "chat",
         "conversations",
+        "customers",
+        "business-analytics",
+        "notifications",
         "usage",
         "billing",
     ]
     assert next(item for item in basic if item["id"] == "conversations")["label"] == "Inbox"
+    assert next(item for item in basic if item["id"] == "customers")["loader"] == "customers"
+    assert next(item for item in basic if item["id"] == "business-analytics")["loader"] == "customer-analytics"
+    assert next(item for item in basic if item["id"] == "notifications")["loader"] == "customer-notifications"
 
     quotation = build_customer_portal_navigation(
         ["ai_agents"],
@@ -32,6 +38,9 @@ def test_ai_agents_portal_is_capability_aware():
         "agents",
         "chat",
         "conversations",
+        "customers",
+        "business-analytics",
+        "notifications",
         "requests-quotation",
         "usage",
         "billing",
@@ -69,6 +78,7 @@ def test_portal_separates_active_services_and_keeps_billing_core():
         "billing",
     ]
     assert "agents" not in ids
+    assert "customers" not in ids
 
 
 def test_conversations_have_generic_channel_source_fields():
@@ -84,16 +94,23 @@ def test_customer_ui_renders_backend_navigation_and_unified_inbox():
     enhancements = (
         ROOT / "frontend" / "customer" / "portal-enhancements.js"
     ).read_text(encoding="utf-8")
+    operations = (
+        ROOT / "frontend" / "customer" / "customer-operations.js"
+    ).read_text(encoding="utf-8")
     api_source = (
         ROOT / "backend" / "app" / "api" / "customer_portal.py"
     ).read_text(encoding="utf-8")
     inbox_source = (
         ROOT / "backend" / "app" / "api" / "customer_inbox.py"
     ).read_text(encoding="utf-8")
+    operations_api = (
+        ROOT / "backend" / "app" / "api" / "customer_operations.py"
+    ).read_text(encoding="utf-8")
 
     assert 'id="portal-nav"' in html
     assert 'id="page-billing"' in html
     assert "/static/customer/portal-enhancements.js" in html
+    assert "/static/customer/customer-operations.js" in html
     assert "portalOverview?.portal?.navigation" in js
     assert "renderPortalNavigation" in js
     assert "renderBilling" in js
@@ -102,4 +119,8 @@ def test_customer_ui_renders_backend_navigation_and_unified_inbox():
     assert "capability_module" in enhancements
     assert "module=${encodeURIComponent(moduleName)}" in enhancements
     assert 'router = APIRouter(prefix="/customer/inbox"' in inbox_source
+    assert 'prefix="/customer/operations"' in operations_api
+    assert "/customer/operations/customers" in operations
+    assert "/customer/operations/notifications" in operations
+    assert "/customer/operations/analytics" in operations
     assert '"online_payments_enabled": False' in api_source
