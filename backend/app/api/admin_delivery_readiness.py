@@ -5,6 +5,7 @@ from backend.app.core.config.settings import settings
 from backend.app.core.config_secrets import reveal_config
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
+from backend.app.core.n8n_gateway import N8NGatewayError, n8n_gateway
 from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
@@ -106,6 +107,51 @@ def _channel_state(db, company_id: int, agent_id: int) -> dict:
     }
 
 
+def _assert_workflow_runtime_ready(company_id: int, agent_id: int) -> None:
+    """Fail closed before enabling an employee that can execute business actions.
+
+    Configuration values prove only that a workflow endpoint was configured. Go Live
+    requires the canonical workflow itself to answer a real health action so a sold
+    booking/order/CRM/POS path cannot be enabled against a dead or inactive engine.
+    """
+
+    try:
+        result = n8n_gateway.execute(
+            company_id=company_id,
+            agent_id=agent_id,
+            action="health_check",
+            data={"source": "delivery_readiness_go_live"},
+        )
+    except N8NGatewayError as exc:
+        raise HTTPException(
+            409,
+            detail={
+                "message": "Workflow Engine health check failed",
+                "blockers": [
+                    "Workflow Engine is not reachable for enabled business actions"
+                ],
+            },
+        ) from exc
+
+    data = result.get("data") if isinstance(result, dict) else None
+    healthy = bool(
+        isinstance(result, dict)
+        and result.get("success") is True
+        and isinstance(data, dict)
+        and str(data.get("status") or "").strip().lower() == "ok"
+    )
+    if not healthy:
+        raise HTTPException(
+            409,
+            detail={
+                "message": "Workflow Engine health check failed",
+                "blockers": [
+                    "Workflow Engine did not confirm the canonical action workflow"
+                ],
+            },
+        )
+
+
 def _delivery_state(db, company_id: int, agent_id: int) -> dict:
     agent = (
         db.query(AIAgent)
@@ -205,6 +251,7 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
             "company_active": bool(company.active),
             "ready_for_customer": ready_for_customer,
             "setup_ready": setup_ready,
+            "workflow_required": workflow_required,
             "lifecycle": "live" if agent.enabled else "draft",
             "mode": "conversational_and_operational" if actions["requested"] else "conversational",
             "blockers": blockers,
@@ -273,6 +320,8 @@ def go_live(
                     "blockers": ["Company is inactive"],
                 },
             )
+        if state["payload"]["workflow_required"]:
+            _assert_workflow_runtime_ready(company_id, agent_id)
         limits_service.check_agent_limit(db, company_id)
         agent.enabled = True
         db.commit()
