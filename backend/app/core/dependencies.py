@@ -9,6 +9,7 @@ from fastapi.security import (
 )
 from sqlalchemy.orm import Session
 
+from backend.app.core.company_lifecycle import portal_access_allowed
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.security import decode_access_token_claims
 from backend.app.models.company import Company
@@ -34,9 +35,6 @@ CUSTOMER_ROLES = {
     "employee",
 }
 
-# Operators may work customer conversations without receiving company-management
-# permissions. Keep this explicit so future staff roles can be added without
-# accidentally opening billing, business configuration or user administration.
 CUSTOMER_OPERATOR_ROLES = {
     "owner",
     "admin",
@@ -98,8 +96,8 @@ def get_current_user(
         company = db.query(Company).filter(Company.id == user.company_id).first()
         if company is None:
             raise HTTPException(status_code=403, detail="Company not found")
-        if user.role in CUSTOMER_ROLES and not company.active:
-            raise HTTPException(status_code=403, detail="Company is inactive")
+        if user.role in CUSTOMER_ROLES and not portal_access_allowed(company):
+            raise HTTPException(status_code=403, detail="Company portal access is suspended")
 
     return user
 
