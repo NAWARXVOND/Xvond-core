@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 
 from backend.app.core.database.connection import SessionLocal
-from backend.app.core.dependencies import require_xvond_admin
+from backend.app.core.dependencies import require_xvond_operator
 from backend.app.models.company import Company
 from backend.app.models.company_module import CompanyModule
 from backend.app.models.user import User
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/admin/company-view", tags=["Xvond Admin - Company Vi
 
 
 @router.get("/{company_id}")
-def company_full_view(company_id: int, current_admin: User = Depends(require_xvond_admin)):
+def company_full_view(company_id: int, current_admin: User = Depends(require_xvond_operator)):
     db = SessionLocal()
     try:
         company = db.query(Company).filter(Company.id == company_id).first()
@@ -84,23 +84,29 @@ def company_full_view(company_id: int, current_admin: User = Depends(require_xvo
             func.coalesce(func.sum(AIUsage.provider_cost), 0),
         ).filter(AIUsage.company_id == company_id).first()
 
+        support_view = current_admin.role == "support"
+        user_payload = [] if support_view else [
+            {
+                "id": item.id,
+                "email": item.email,
+                "full_name": item.full_name,
+                "role": item.role,
+                "active": item.active,
+            }
+            for item in users
+        ]
+
         return {
             "company": {
                 "id": company.id,
                 "name": company.name,
                 "active": company.active,
+                "lifecycle_status": company.lifecycle_status,
+                "lifecycle_updated_at": company.lifecycle_updated_at,
                 "created_at": company.created_at,
             },
-            "users": [
-                {
-                    "id": item.id,
-                    "email": item.email,
-                    "full_name": item.full_name,
-                    "role": item.role,
-                    "active": item.active,
-                }
-                for item in users
-            ],
+            "users": user_payload,
+            "user_count": len(users),
             "modules": [
                 {"name": item.module_name, "enabled": item.enabled}
                 for item in modules

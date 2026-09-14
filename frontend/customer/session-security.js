@@ -17,8 +17,12 @@ api = async function(path, options = {}) {
     let data = {};
     try { data = await response.json(); } catch (_) {}
     if (response.status === 401) {
+        // Login failures are credential errors, not expired-session errors.
+        if (path === "/auth/login") {
+            throw new Error(data.detail || "Invalid email or password");
+        }
         clearSession();
-        throw new Error("Unauthorized");
+        throw new Error("Session expired. Please sign in again.");
     }
     if (!response.ok) {
         const detail = typeof data.detail === "string"
@@ -27,6 +31,32 @@ api = async function(path, options = {}) {
         throw new Error(detail);
     }
     return data;
+};
+
+// Customer eligibility and company attachment are enforced server-side by
+// /customer/overview. Resolve authentication first so an expired session does
+// not fire multiple protected requests and produce duplicate 401 errors.
+startPortal = async function(options = {}) {
+    try {
+        currentUser = await api("/users/me");
+        portalOverview = await api("/customer/overview");
+        portalNavigation = portalOverview?.portal?.navigation || fallbackPortalNavigation();
+        document.getElementById("login-screen").classList.add("hidden");
+        document.getElementById("portal").classList.remove("hidden");
+        document.getElementById("user-email").textContent = currentUser.email;
+        renderPortalNavigation();
+        renderAccountInfo();
+        renderDashboard();
+    } catch (err) {
+        clearSession();
+        const error = document.getElementById("login-error");
+        if (error) {
+            error.textContent = options.silentAuthFailure && String(err.message).startsWith("Session expired")
+                ? ""
+                : err.message;
+        }
+        throw err;
+    }
 };
 
 login = async function() {
@@ -61,5 +91,6 @@ logout = async function() {
 };
 
 // app.js no longer resumes from localStorage because the legacy token is
-// removed before it loads. Resume from the HttpOnly cookie instead.
-startPortal();
+// removed before it loads. Resume from the HttpOnly cookie instead. A missing
+// cookie on the initial public login screen is expected and should stay silent.
+startPortal({silentAuthFailure: true}).catch(() => {});

@@ -1,7 +1,7 @@
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from backend.app.core.config.settings import settings
+from redis.exceptions import RedisError
 
 
 _ARABIC_DIACRITICS = re.compile(r"[\u064b-\u065f\u0670]")
@@ -47,12 +47,18 @@ def activate_human_handoff(
     minutes: int | None = None,
     human_message: bool = False,
 ):
+    """Put the conversation under explicit human control.
+
+    Human takeover is intentionally open-ended. The AI resumes only when an
+    authorized user explicitly returns the conversation to AI. ``minutes`` is
+    retained for backwards-compatible call signatures but is no longer used to
+    auto-resume conversations.
+    """
     current = now or datetime.utcnow()
-    duration = minutes or settings.WHATSAPP_HUMAN_HANDOFF_MINUTES
 
     session.automation_state = "human"
     session.handoff_reason = reason
-    session.human_takeover_until = current + timedelta(minutes=duration)
+    session.human_takeover_until = None
     session.updated_at = current
 
     if human_message:
@@ -65,17 +71,9 @@ def human_handoff_active(
     session,
     now: datetime | None = None,
 ) -> bool:
-    if session.automation_state != "human":
-        return False
-
-    current = now or datetime.utcnow()
-    deadline = session.human_takeover_until
-
-    if deadline is not None and deadline > current:
-        return True
-
-    resume_ai(session, now=current)
-    return False
+    # Human mode is explicit and does not expire. Only resume_ai() may return
+    # the conversation to automation.
+    return session.automation_state == "human"
 
 
 def extend_human_handoff(
@@ -93,8 +91,25 @@ def resume_ai(
     session,
     now: datetime | None = None,
 ):
+    current = now or datetime.utcnow()
     session.automation_state = "ai"
     session.handoff_reason = None
     session.human_takeover_until = None
-    session.updated_at = now or datetime.utcnow()
+    session.ai_resumed_at = current
+
+    # Preserve the exact ingress echo that was pending when an operator chose
+    # Return-to-AI. If that old echo is processed later it may still be mirrored
+    # to the Inbox, but it must not undo the operator's newer control decision.
+    marker = None
+    phone_number_id = str(getattr(session, "phone_number_id", "") or "")
+    wa_id = str(getattr(session, "wa_id", "") or "")
+    if phone_number_id and wa_id:
+        try:
+            from backend.app.modules.channels.whatsapp_queue import whatsapp_job_queue
+
+            marker = whatsapp_job_queue.human_marker(phone_number_id, wa_id)
+        except RedisError:
+            marker = None
+    session.ai_resume_echo_id = marker
+    session.updated_at = current
     return session

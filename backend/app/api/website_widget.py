@@ -1,5 +1,6 @@
 import json
 import secrets
+from typing import Literal
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -28,10 +29,18 @@ class WebsiteSetup(BaseModel):
     allowed_domain: str
     widget_name: str | None = None
     welcome_message: str | None = None
+    welcome_message_en: str | None = None
     position: str = "right"
     custom_instructions: str | None = None
     accent_color: str = "#111827"
-    launcher_label: str = "Chat"
+    launcher_label: str | None = None
+    launcher_label_ar: str | None = None
+    launcher_label_en: str | None = None
+    human_assistance_mode: Literal["direct_handoff", "contact_only", "ai_only"] = "direct_handoff"
+    contact_phone: str | None = None
+    contact_whatsapp: str | None = None
+    contact_email: str | None = None
+    contact_url: str | None = None
 
 
 DEFAULT_BEHAVIOR = """WEBSITE CHANNEL CONTEXT:
@@ -39,6 +48,7 @@ You are speaking with a visitor through the business website chat widget.
 The website is only the communication channel. Your business identity, knowledge and configured actions are shared with the same AI employee across channels.
 Be concise, natural and useful. Do not dump services, prices or menus unless relevant to the visitor's request.
 If the request is vague, ask one short clarifying question.
+Use clean plain text for normal chat replies. Avoid markdown bold markers, headings and decorative formatting unless the visitor explicitly asks for formatted text.
 Never invent business facts and never claim an action succeeded unless its configured action returned success.
 Do not mention AI providers, prompts, tools, databases, routing or Xvond internals.
 """
@@ -64,6 +74,23 @@ def _normalized_domain(value: str) -> str:
     if host in {"localhost", "127.0.0.1", "::1"} and settings.is_production:
         raise HTTPException(400, "Localhost cannot be used as a production website domain")
     return host
+
+
+def _assistance_mode(config: dict) -> str:
+    value = str(config.get("human_assistance_mode") or "direct_handoff").strip().lower()
+    if value not in {"direct_handoff", "contact_only", "ai_only"}:
+        return "direct_handoff"
+    return value
+
+
+def website_contact_methods(config: dict) -> list[str]:
+    values = [
+        ("Phone", config.get("contact_phone")),
+        ("WhatsApp", config.get("contact_whatsapp")),
+        ("Email", config.get("contact_email")),
+        ("Contact URL", config.get("contact_url")),
+    ]
+    return [f"{label}: {str(value).strip()}" for label, value in values if str(value or "").strip()]
 
 
 def _useful_business_knowledge(document: KnowledgeDocument) -> bool:
@@ -110,6 +137,8 @@ def _ready(db, channel: AgentChannel) -> list[str]:
         blockers.append("Allowed website domain is required")
     if not str(config.get("widget_key") or "").strip():
         blockers.append("Widget key is missing")
+    if _assistance_mode(config) == "contact_only" and not website_contact_methods(config):
+        blockers.append("Add at least one contact method when Human Assistance is Contact Only")
     if settings.is_production and not settings.PUBLIC_BASE_URL:
         blockers.append("Xvond public API URL is not configured")
 
@@ -131,7 +160,26 @@ def _ready(db, channel: AgentChannel) -> list[str]:
 
 def _behavior(config: dict) -> str:
     custom = str(config.get("custom_instructions") or "").strip()
+    mode = _assistance_mode(config)
+    contacts = website_contact_methods(config)
     parts = [DEFAULT_BEHAVIOR]
+    if mode == "direct_handoff":
+        parts.append(
+            "HUMAN ASSISTANCE POLICY: Direct handoff is enabled for this website channel. "
+            "If the visitor explicitly asks for a human and the human_handoff action is available, use it. "
+            "Never claim a transfer happened unless the action succeeds."
+        )
+    elif mode == "contact_only":
+        parts.append(
+            "HUMAN ASSISTANCE POLICY: Contact Only. Never create or claim a live human handoff in this website chat. "
+            "If the visitor asks to speak with a human, give only the configured contact methods below and keep the AI conversation available."
+        )
+        parts.append("CONFIGURED HUMAN CONTACT METHODS (authoritative for this channel):\n" + "\n".join(contacts))
+    else:
+        parts.append(
+            "HUMAN ASSISTANCE POLICY: AI Only. Do not offer, create or claim a human handoff and do not invent contact details. "
+            "If the visitor asks for a human, explain briefly that direct human assistance is not available in this chat and continue helping within your configured capabilities."
+        )
     if custom:
         parts.append("Website-specific instructions: " + custom)
     return "\n".join(parts)
@@ -190,11 +238,17 @@ def configure(
             )
             .first()
         )
+        legacy_label = (data.launcher_label or "").strip()
+        label_ar = (data.launcher_label_ar or legacy_label or "مساعد Xvond").strip()[:30]
+        label_en = (data.launcher_label_en or legacy_label or "Chat").strip()[:30]
         config = {
             "allowed_domain": domain,
             "widget_name": (data.widget_name or agent.name).strip()[:120],
             "welcome_message": (
                 data.welcome_message or "مرحباً، كيف يمكنني مساعدتك؟"
+            ).strip()[:1000],
+            "welcome_message_en": (
+                data.welcome_message_en or "Hello, how can I help you?"
             ).strip()[:1000],
             "position": "left" if data.position == "left" else "right",
             "custom_instructions": (data.custom_instructions or "").strip()[:4000],
@@ -203,7 +257,14 @@ def configure(
                 if data.accent_color.startswith("#") and len(data.accent_color) in {4, 7}
                 else "#111827"
             ),
-            "launcher_label": (data.launcher_label or "Chat").strip()[:30],
+            "launcher_label": label_en,
+            "launcher_label_ar": label_ar,
+            "launcher_label_en": label_en,
+            "human_assistance_mode": data.human_assistance_mode,
+            "contact_phone": (data.contact_phone or "").strip()[:120],
+            "contact_whatsapp": (data.contact_whatsapp or "").strip()[:120],
+            "contact_email": (data.contact_email or "").strip()[:254],
+            "contact_url": (data.contact_url or "").strip()[:1000],
         }
         if channel:
             old = reveal_config(channel.config) or {}
@@ -313,10 +374,12 @@ def widget_js(channel_id: int):
         config = reveal_config(channel.config) or {}
         key = config.get("widget_key")
         name = config.get("widget_name") or "AI Assistant"
-        welcome = config.get("welcome_message") or "مرحباً، كيف يمكنني مساعدتك؟"
+        welcome_ar = config.get("welcome_message") or "مرحباً، كيف يمكنني مساعدتك؟"
+        welcome_en = config.get("welcome_message_en") or "Hello, how can I help you?"
         position = config.get("position") or "right"
         accent = config.get("accent_color") or "#111827"
-        label = config.get("launcher_label") or "Chat"
+        label_ar = config.get("launcher_label_ar") or config.get("launcher_label") or "مساعد Xvond"
+        label_en = config.get("launcher_label_en") or config.get("launcher_label") or "Chat"
 
         template = r'''(()=>{
 if(window.__xvondWidget)return;
@@ -329,24 +392,37 @@ const TOKEN_KEY='xvond_visitor_token_'+CHANNEL;
 let cid=localStorage.getItem(CID_KEY)||null;
 let visitorToken=localStorage.getItem(TOKEN_KEY)||null;
 let lastId=0;
+let typingNode=null;
 if(cid&&!visitorToken){localStorage.removeItem(CID_KEY);cid=null;}
 if(visitorToken&&!cid){localStorage.removeItem(TOKEN_KEY);visitorToken=null;}
 const side=__POSITION__;
 const accent=__ACCENT__;
+const pageLang=(document.documentElement.lang||'').toLowerCase();
+const pageDir=(document.documentElement.dir||getComputedStyle(document.documentElement).direction||'').toLowerCase();
+const arabicUI=pageLang.startsWith('ar')||pageDir==='rtl';
+const welcome=arabicUI?__WELCOME_AR__:__WELCOME_EN__;
+const launcherLabel=arabicUI?__LABEL_AR__:__LABEL_EN__;
+const inputPlaceholder=arabicUI?'اكتب رسالتك':'Type your message';
+const sendLabel=arabicUI?'إرسال':'Send';
+const failureMessage=arabicUI?'تعذر إرسال الرسالة الآن. حاول مرة أخرى.':'Unable to send your message right now. Please try again.';
 function requestHeaders(jsonBody=true){const h={'X-Xvond-Widget-Key':WIDGET_KEY};if(jsonBody)h['Content-Type']='application/json';if(visitorToken)h['X-Xvond-Visitor-Token']=visitorToken;return h;}
-const css=`#xvond-btn{position:fixed;bottom:20px;${side}:20px;z-index:2147483646;border:0;border-radius:999px;padding:14px 18px;cursor:pointer;box-shadow:0 8px 30px #0003;background:${accent};color:#fff}#xvond-box{position:fixed;bottom:78px;${side}:20px;width:min(380px,calc(100vw - 24px));height:520px;max-height:70vh;background:#fff;color:#111;z-index:2147483647;border-radius:18px;box-shadow:0 18px 60px #0004;display:none;overflow:hidden;font-family:Arial,sans-serif}#xvond-head{padding:16px;font-weight:700;border-bottom:1px solid #eee}#xvond-msgs{height:calc(100% - 118px);overflow:auto;padding:14px}.xvond-m{margin:8px 0;padding:10px 12px;border-radius:12px;white-space:pre-wrap;line-height:1.4}.xvond-u{background:#eef3ff;margin-left:40px}.xvond-a{background:#f5f5f5;margin-right:40px}#xvond-form{display:flex;border-top:1px solid #eee;padding:10px;gap:8px}#xvond-in{flex:1;border:1px solid #ddd;border-radius:10px;padding:10px}#xvond-send{border:0;border-radius:10px;padding:10px 14px;cursor:pointer;background:${accent};color:#fff}`;
+function cleanText(value){return String(value||'').replace(/\*\*(.*?)\*\*/gs,'$1').replace(/__(.*?)__/gs,'$1').replace(/`([^`]+)`/g,'$1').replace(/^#{1,6}\s+/gm,'').trim();}
+const css=`#xvond-btn{position:fixed;bottom:20px;${side}:20px;z-index:2147483646;border:0;border-radius:999px;padding:14px 18px;cursor:pointer;box-shadow:0 8px 30px #0003;background:${accent};color:#fff;font:600 14px Arial,sans-serif}#xvond-box{position:fixed;bottom:78px;${side}:20px;width:min(380px,calc(100vw - 24px));height:520px;max-height:70vh;background:#fff;color:#111;z-index:2147483647;border-radius:18px;box-shadow:0 18px 60px #0004;display:none;overflow:hidden;font-family:Arial,sans-serif}#xvond-head{padding:16px;font-weight:700;border-bottom:1px solid #eee;direction:auto;text-align:start}#xvond-msgs{height:calc(100% - 118px);overflow:auto;overflow-x:hidden;padding:14px;scroll-behavior:smooth}.xvond-m{margin:8px 0;padding:10px 12px;border-radius:12px;white-space:pre-wrap;line-height:1.55;unicode-bidi:plaintext;overflow-wrap:anywhere;word-break:normal}.xvond-m[dir="rtl"]{text-align:right}.xvond-m[dir="ltr"]{text-align:left}.xvond-u{background:#eef3ff;margin-inline-start:40px}.xvond-a{background:#f5f5f5;margin-inline-end:40px}.xvond-typing{width:max-content;min-width:52px;padding:11px 14px}.xvond-dot{display:inline-block;width:7px;height:7px;margin:0 2px;border-radius:50%;background:#7b8190;animation:xvondTyping 1.15s infinite ease-in-out}.xvond-dot:nth-child(2){animation-delay:.15s}.xvond-dot:nth-child(3){animation-delay:.3s}@keyframes xvondTyping{0%,60%,100%{transform:translateY(0);opacity:.45}30%{transform:translateY(-4px);opacity:1}}#xvond-form{display:flex;border-top:1px solid #eee;padding:10px;gap:8px}#xvond-in{flex:1;min-width:0;border:1px solid #ddd;border-radius:10px;padding:10px;direction:auto;text-align:start;unicode-bidi:plaintext}#xvond-send{border:0;border-radius:10px;padding:10px 14px;cursor:pointer;background:${accent};color:#fff}#xvond-send:disabled,#xvond-in:disabled{opacity:.65;cursor:not-allowed}@media(max-width:480px){#xvond-btn{bottom:14px;${side}:14px}#xvond-box{bottom:70px;${side}:12px;width:calc(100vw - 24px);height:min(540px,72vh);border-radius:16px}.xvond-u{margin-inline-start:24px}.xvond-a{margin-inline-end:24px}}`;
 const st=document.createElement('style');st.textContent=css;document.head.appendChild(st);
-const btn=document.createElement('button');btn.id='xvond-btn';btn.textContent=__LABEL__;
-const box=document.createElement('div');box.id='xvond-box';box.innerHTML=`<div id="xvond-head"></div><div id="xvond-msgs"></div><form id="xvond-form"><input id="xvond-in" autocomplete="off" placeholder="اكتب رسالتك"><button id="xvond-send">إرسال</button></form>`;
-document.body.append(btn,box);box.querySelector('#xvond-head').textContent=__NAME__;
+const btn=document.createElement('button');btn.id='xvond-btn';btn.textContent=launcherLabel;btn.setAttribute('dir','auto');
+const box=document.createElement('div');box.id='xvond-box';box.setAttribute('dir',arabicUI?'rtl':'ltr');box.innerHTML=`<div id="xvond-head"></div><div id="xvond-msgs"></div><form id="xvond-form"><input id="xvond-in" autocomplete="off"><button id="xvond-send" type="submit"></button></form>`;
+document.body.append(btn,box);box.querySelector('#xvond-head').textContent=__NAME__;box.querySelector('#xvond-in').placeholder=inputPlaceholder;box.querySelector('#xvond-send').textContent=sendLabel;
 const msgs=box.querySelector('#xvond-msgs');
-function add(t,c){if(!t)return;const d=document.createElement('div');d.className='xvond-m '+c;d.textContent=t;msgs.appendChild(d);msgs.scrollTop=msgs.scrollHeight;}
+function scrollToLatest(){msgs.scrollTop=msgs.scrollHeight;requestAnimationFrame(()=>{msgs.scrollTop=msgs.scrollHeight;});}
+function add(t,c){const text=cleanText(t);if(!text)return;const d=document.createElement('div');d.className='xvond-m '+c;d.setAttribute('dir','auto');d.textContent=text;msgs.appendChild(d);scrollToLatest();}
+function showTyping(){hideTyping();const d=document.createElement('div');d.className='xvond-m xvond-a xvond-typing';d.setAttribute('aria-label',arabicUI?'المساعد يكتب الآن':'Assistant is typing');d.innerHTML='<span class="xvond-dot"></span><span class="xvond-dot"></span><span class="xvond-dot"></span>';typingNode=d;msgs.appendChild(d);scrollToLatest();}
+function hideTyping(){if(typingNode){typingNode.remove();typingNode=null;}}
 function remember(id){if(id&&id>lastId)lastId=id;}
 function rememberSession(data){if(data.conversation_id){cid=String(data.conversation_id);localStorage.setItem(CID_KEY,cid);}if(data.visitor_token){visitorToken=data.visitor_token;localStorage.setItem(TOKEN_KEY,visitorToken);}}
-if(!cid||!visitorToken)add(__WELCOME__,'xvond-a');
-btn.onclick=()=>box.style.display=box.style.display==='block'?'none':'block';
-box.querySelector('#xvond-form').onsubmit=async e=>{e.preventDefault();const input=box.querySelector('#xvond-in');const m=input.value.trim();if(!m)return;input.value='';add(m,'xvond-u');try{const r=await fetch(API+'/channels/website/'+CHANNEL+'/chat',{method:'POST',headers:requestHeaders(true),body:JSON.stringify({message:m,conversation_id:cid?Number(cid):null})});const j=await r.json();if(!r.ok)throw new Error(j.detail||'Request failed');rememberSession(j);if(j.message)remember(j.message.id);if(j.response){add(j.response.content,'xvond-a');remember(j.response.id);}}catch(_e){add('تعذر إرسال الرسالة الآن. حاول مرة أخرى.','xvond-a');}};
-async function poll(){if(!cid||!visitorToken)return;const restoring=lastId===0;try{const r=await fetch(API+'/channels/website/'+CHANNEL+'/conversation/'+cid+'/messages?after_id='+lastId,{headers:requestHeaders(false)});if(r.status===401||r.status===404){localStorage.removeItem(CID_KEY);localStorage.removeItem(TOKEN_KEY);cid=null;visitorToken=null;lastId=0;if(!msgs.children.length)add(__WELCOME__,'xvond-a');return;}if(!r.ok)return;const j=await r.json();for(const m of (j.messages||[])){remember(m.id);if(restoring){if(m.role==='user')add(m.content,'xvond-u');else if(m.role==='assistant'||m.role==='human')add(m.content,'xvond-a');}else if(m.role==='human')add(m.content,'xvond-a');}}catch(_e){}}
+if(!cid||!visitorToken)add(welcome,'xvond-a');
+btn.onclick=()=>{const opening=box.style.display!=='block';box.style.display=opening?'block':'none';if(opening)scrollToLatest();};
+box.querySelector('#xvond-form').onsubmit=async e=>{e.preventDefault();const input=box.querySelector('#xvond-in');const send=box.querySelector('#xvond-send');const m=input.value.trim();if(!m||send.disabled)return;input.value='';add(m,'xvond-u');showTyping();send.disabled=true;input.disabled=true;try{const r=await fetch(API+'/channels/website/'+CHANNEL+'/chat',{method:'POST',headers:requestHeaders(true),body:JSON.stringify({message:m,conversation_id:cid?Number(cid):null})});const j=await r.json();if(!r.ok)throw new Error(j.detail||'Request failed');rememberSession(j);if(j.message)remember(j.message.id);hideTyping();if(j.response){add(j.response.content,'xvond-a');remember(j.response.id);}}catch(_e){hideTyping();add(failureMessage,'xvond-a');}finally{send.disabled=false;input.disabled=false;input.focus();}};
+async function poll(){if(!cid||!visitorToken)return;const restoring=lastId===0;try{const r=await fetch(API+'/channels/website/'+CHANNEL+'/conversation/'+cid+'/messages?after_id='+lastId,{headers:requestHeaders(false)});if(r.status===401||r.status===404){localStorage.removeItem(CID_KEY);localStorage.removeItem(TOKEN_KEY);cid=null;visitorToken=null;lastId=0;if(!msgs.children.length)add(welcome,'xvond-a');return;}if(!r.ok)return;const j=await r.json();for(const m of (j.messages||[])){remember(m.id);if(restoring){if(m.role==='user')add(m.content,'xvond-u');else if(m.role==='assistant'||m.role==='human')add(m.content,'xvond-a');}else if(m.role==='human'){hideTyping();add(m.content,'xvond-a');}}}catch(_e){}}
 poll();
 setInterval(poll,2500);
 })();'''
@@ -355,9 +431,11 @@ setInterval(poll,2500);
             "__WIDGET_KEY__": json.dumps(key, ensure_ascii=False),
             "__POSITION__": json.dumps(position, ensure_ascii=False),
             "__ACCENT__": json.dumps(accent, ensure_ascii=False),
-            "__LABEL__": json.dumps(label, ensure_ascii=False),
+            "__LABEL_AR__": json.dumps(label_ar, ensure_ascii=False),
+            "__LABEL_EN__": json.dumps(label_en, ensure_ascii=False),
             "__NAME__": json.dumps(name, ensure_ascii=False),
-            "__WELCOME__": json.dumps(welcome, ensure_ascii=False),
+            "__WELCOME_AR__": json.dumps(welcome_ar, ensure_ascii=False),
+            "__WELCOME_EN__": json.dumps(welcome_en, ensure_ascii=False),
         }
         js = template
         for marker, value in replacements.items():

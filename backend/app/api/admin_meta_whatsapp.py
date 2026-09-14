@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, UTC
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -9,7 +10,11 @@ import urllib.request
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from backend.app.api.admin_channels import _activation_blockers, _ensure_channels_module
+from backend.app.api.admin_channels import (
+    _activation_blockers,
+    _assert_unique_whatsapp_phone_number_id,
+    _ensure_channels_module,
+)
 from backend.app.core.config_secrets import merge_config, reveal_config
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
@@ -27,8 +32,6 @@ router = APIRouter(
 
 
 WHATSAPP_BEHAVIOR_DEFAULTS = {
-    "language": "auto",
-    "dialect": "auto",
     "tone": "professional_friendly",
     "response_style": "conversational",
     "response_length": "concise",
@@ -46,8 +49,13 @@ def _meta_settings() -> dict:
         "app_secret": _env("META_APP_SECRET"),
         "config_id": _env("META_WHATSAPP_CONFIG_ID"),
         "verify_token": _env("META_WHATSAPP_VERIFY_TOKEN"),
-        "graph_api_version": _env("META_GRAPH_API_VERSION", "v23.0"),
+        "graph_api_version": _env("META_GRAPH_API_VERSION", "v26.0"),
         "redirect_uri": _env("META_WHATSAPP_REDIRECT_URI"),
+        # Standard Embedded Signup should not be forced into WhatsApp Business
+        # App onboarding/coexistence. Set these only when the Meta configuration
+        # explicitly requires those options.
+        "feature_type": _env("META_WHATSAPP_FEATURE_TYPE"),
+        "session_info_version": _env("META_WHATSAPP_SESSION_INFO_VERSION"),
     }
 
 
@@ -108,17 +116,16 @@ def _graph_request(
             raw = response.read().decode("utf-8")
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
-        body_text = exc.read().decode("utf-8", errors="replace")
         raise HTTPException(
             status_code=502,
-            detail=f"Meta Graph API error ({exc.code}): {body_text[:500]}",
+            detail=f"Meta Graph API request rejected (HTTP {exc.code})",
         ) from exc
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Meta Graph API request failed: {str(exc)[:300]}",
+            detail="Meta Graph API request failed",
         ) from exc
 
 
@@ -183,7 +190,10 @@ def _resolve_signup_phone(
     if len(phones) == 1:
         return phones[0]
     if not phones:
-        raise HTTPException(status_code=400, detail="Meta returned no phone numbers for the selected WhatsApp Business Account")
+        raise HTTPException(
+            status_code=400,
+            detail="Meta returned no phone numbers for the selected WhatsApp Business Account",
+        )
     raise HTTPException(
         status_code=400,
         detail="Meta did not return a phone number ID and the selected WhatsApp Business Account has multiple phone numbers",
@@ -236,6 +246,24 @@ class EmbeddedSignupComplete(BaseModel):
     connection_mode: str | None = None
 
 
+def _coexistence_subscription_evidence(config: dict) -> dict:
+    """Read Meta's app subscription; never trust a browser-provided ready flag."""
+    payload = _graph_request(
+        "GET", _graph_url(config["graph_api_version"], f"{config['app_id']}/subscriptions"),
+        access_token=f"{config['app_id']}|{config['app_secret']}",
+    )
+    fields = set()
+    for row in payload.get("data", []):
+        if row.get("object") != "whatsapp_business_account" or row.get("active") is not True:
+            continue
+        for field in row.get("fields", []):
+            name = field.get("name") if isinstance(field, dict) else field
+            if name in {"messages", "smb_message_echoes", "smb_app_state_sync", "history"}:
+                fields.add(name)
+    return {"meta_app_id": config["app_id"], "subscribed_webhook_fields": sorted(fields),
+            "subscription_checked_at": datetime.now(UTC).isoformat()}
+
+
 @router.get("/embedded-signup/config")
 def embedded_signup_config(
     agent_id: int,
@@ -256,8 +284,8 @@ def embedded_signup_config(
             "app_id": config["app_id"] if ready else None,
             "config_id": config["config_id"] if ready else None,
             "graph_api_version": config["graph_api_version"],
-            "feature": "whatsapp_business_app_onboarding",
-            "session_info_version": "3",
+            "feature_type": config.get("feature_type") or None,
+            "session_info_version": config.get("session_info_version") or None,
             "missing_settings": missing,
         }
     finally:
@@ -288,12 +316,18 @@ def complete_embedded_signup(
     )
     phone_number_id = str(phone.get("id") or "").strip()
     if not phone_number_id:
-        raise HTTPException(status_code=502, detail="Meta did not return a usable phone number ID")
+        raise HTTPException(
+            status_code=502,
+            detail="Meta did not return a usable phone number ID",
+        )
     _subscribe_app_to_waba(
         waba_id=waba_id,
         access_token=access_token,
         graph_api_version=config["graph_api_version"],
     )
+    evidence = {"waba_subscription_verified": True, "meta_app_id": config["app_id"]}
+    if connection_mode == "coexistence":
+        evidence.update(_coexistence_subscription_evidence(config))
 
     db = SessionLocal()
     try:
@@ -309,8 +343,18 @@ def complete_embedded_signup(
             )
             .first()
         )
-        method = "meta_embedded_signup_coexistence" if connection_mode == "coexistence" else "meta_embedded_signup"
+        _assert_unique_whatsapp_phone_number_id(
+            db,
+            phone_number_id,
+            exclude_channel_id=channel.id if channel is not None else None,
+        )
+        method = (
+            "meta_embedded_signup_coexistence"
+            if connection_mode == "coexistence"
+            else "meta_embedded_signup"
+        )
         incoming = {
+            **evidence,
             "waba_id": waba_id,
             "meta_business_id": data.business_id,
             "phone_number_id": phone_number_id,
@@ -322,6 +366,8 @@ def complete_embedded_signup(
             "graph_api_version": config["graph_api_version"],
             "connection_method": method,
             "coexistence": connection_mode == "coexistence",
+            "coexistence_echo_received_at": None,
+            "activation_pending_coexistence": connection_mode == "coexistence",
         }
         if channel is None:
             incoming.update(WHATSAPP_BEHAVIOR_DEFAULTS)

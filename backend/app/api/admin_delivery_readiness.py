@@ -5,12 +5,16 @@ from backend.app.core.config.settings import settings
 from backend.app.core.config_secrets import reveal_config
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
+from backend.app.core.n8n_gateway import N8NGatewayError, n8n_gateway
+from backend.app.core.readiness import _channel_customer_accepted
 from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.ai_agent.profile_models import AIAgentProfile
 from backend.app.modules.billing.limits import limits_service
+from backend.app.modules.channels.catalog import validate_channel_config
 from backend.app.modules.channels.models import AgentChannel
+from backend.app.modules.channels.whatsapp_connection import whatsapp_connection_state
 from backend.app.modules.integrations.models import CompanyIntegration
 from backend.app.modules.knowledge.models import AgentKnowledge, KnowledgeDocument
 from backend.app.modules.tools.models import AgentToolAssignment
@@ -79,14 +83,100 @@ def _channel_state(db, company_id: int, agent_id: int) -> dict:
         )
         .all()
     )
-    configured = [row for row in rows if bool(reveal_config(row.config) or {})]
-    live = [row for row in configured if row.enabled]
+    configured = []
+    enabled = []
+    live = []
+    customer_ready = []
+    acceptance_pending = []
+
+    for row in rows:
+        config = reveal_config(row.config) or {}
+        try:
+            validate_channel_config(row.channel_type, config)
+        except ValueError:
+            continue
+        configured.append(row)
+
+        connection = None
+        if row.channel_type == "whatsapp":
+            connection = whatsapp_connection_state(config, verify_remote=True)
+            connected = bool(connection["connected"])
+        else:
+            connected = True
+
+        accepted = _channel_customer_accepted(
+            channel_type=row.channel_type,
+            channel_config=config,
+            connected=connected,
+            connection=connection,
+        )
+
+        if not row.enabled:
+            continue
+        enabled.append(row)
+        if connected:
+            live.append(row)
+        if accepted:
+            customer_ready.append(row)
+        else:
+            acceptance_pending.append(row)
+
+    fully_customer_ready = bool(customer_ready) and not acceptance_pending
     return {
         "configured_count": len(configured),
+        "enabled_count": len(enabled),
         "live_count": len(live),
+        "customer_ready_count": len(customer_ready),
+        "acceptance_pending_count": len(acceptance_pending),
         "configured": bool(configured),
         "live": bool(live),
+        "customer_ready": fully_customer_ready,
     }
+
+
+def _assert_workflow_runtime_ready(company_id: int, agent_id: int) -> None:
+    """Fail closed before enabling an employee that can execute business actions.
+
+    Configuration values prove only that a workflow endpoint was configured. Go Live
+    requires the canonical workflow itself to answer a real health action so a sold
+    booking/order/CRM/POS path cannot be enabled against a dead or inactive engine.
+    """
+
+    try:
+        result = n8n_gateway.execute(
+            company_id=company_id,
+            agent_id=agent_id,
+            action="health_check",
+            data={"source": "delivery_readiness_go_live"},
+        )
+    except N8NGatewayError as exc:
+        raise HTTPException(
+            409,
+            detail={
+                "message": "Workflow Engine health check failed",
+                "blockers": [
+                    "Workflow Engine is not reachable for enabled business actions"
+                ],
+            },
+        ) from exc
+
+    data = result.get("data") if isinstance(result, dict) else None
+    healthy = bool(
+        isinstance(result, dict)
+        and result.get("success") is True
+        and isinstance(data, dict)
+        and str(data.get("status") or "").strip().lower() == "ok"
+    )
+    if not healthy:
+        raise HTTPException(
+            409,
+            detail={
+                "message": "Workflow Engine health check failed",
+                "blockers": [
+                    "Workflow Engine did not confirm the canonical action workflow"
+                ],
+            },
+        )
 
 
 def _delivery_state(db, company_id: int, agent_id: int) -> dict:
@@ -173,10 +263,15 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
     if not agent.enabled:
         blockers.insert(0, "AI employee is in draft mode")
     elif not channels["live"]:
-        blockers.append("Activate at least one customer channel")
+        blockers.append("Activate at least one connected customer channel")
+    elif not channels["customer_ready"]:
+        blockers.append("Complete live channel acceptance before customer handover")
 
     ready_for_customer = bool(
-        company.active and agent.enabled and setup_ready and channels["live"]
+        company.active
+        and agent.enabled
+        and setup_ready
+        and channels["customer_ready"]
     )
 
     return {
@@ -188,6 +283,7 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
             "company_active": bool(company.active),
             "ready_for_customer": ready_for_customer,
             "setup_ready": setup_ready,
+            "workflow_required": workflow_required,
             "lifecycle": "live" if agent.enabled else "draft",
             "mode": "conversational_and_operational" if actions["requested"] else "conversational",
             "blockers": blockers,
@@ -199,6 +295,7 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
                 "knowledge": knowledge_ready,
                 "channels": channels["configured"],
                 "live_channels": channels["live"],
+                "customer_ready_channels": channels["customer_ready"],
                 "actions": actions["ready"],
                 "workflow_engine": workflow_ready,
                 "connected_apps": not integration_issues,
@@ -206,7 +303,10 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
             "counts": {
                 "knowledge_sources": knowledge_count,
                 "channels": channels["configured_count"],
+                "enabled_channels": channels["enabled_count"],
                 "live_channels": channels["live_count"],
+                "customer_ready_channels": channels["customer_ready_count"],
+                "acceptance_pending_channels": channels["acceptance_pending_count"],
                 "enabled_actions": actions["enabled_count"],
                 "required_connected_apps": len(actions["required_integration_ids"]),
             },
@@ -256,6 +356,8 @@ def go_live(
                     "blockers": ["Company is inactive"],
                 },
             )
+        if state["payload"]["workflow_required"]:
+            _assert_workflow_runtime_ready(company_id, agent_id)
         limits_service.check_agent_limit(db, company_id)
         agent.enabled = True
         db.commit()

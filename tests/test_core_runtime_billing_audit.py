@@ -95,7 +95,7 @@ def test_channel_capacity_is_consumed_on_activation_not_disabled_creation():
     assert "limits_service.check_channel_limit" in activation_block
 
 
-def test_ai_employee_capacity_is_consumed_on_go_live_not_draft_creation():
+def test_ai_employee_capacity_is_consumed_only_by_delivery_readiness_go_live():
     admin_source = open("backend/app/api/admin_ai_employee_profile.py", encoding="utf-8").read()
     delivery_source = open("backend/app/api/admin_delivery_readiness.py", encoding="utf-8").read()
     customer_source = open("backend/app/api/customer_agents.py", encoding="utf-8").read()
@@ -103,8 +103,9 @@ def test_ai_employee_capacity_is_consumed_on_go_live_not_draft_creation():
     assert "limits_service.check_agent_limit" not in creation_block
     assert "enabled=False" in creation_block
     assert "limits_service.check_agent_limit(db, company_id)" in delivery_source
-    assert "limits_service.check_agent_limit(db, current_user.company_id)" in customer_source
-    assert "Depends(require_customer_user)" in customer_source
+    assert "AI employee activation is managed by Xvond Delivery Readiness" in customer_source
+    assert "if data.enabled is False" in customer_source
+    assert "Depends(require_customer_manager)" in customer_source
 
 
 def test_whatsapp_and_voice_have_customer_safe_service_limit_fallbacks():

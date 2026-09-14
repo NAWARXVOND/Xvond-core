@@ -6,9 +6,15 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
+from backend.app.core.company_lifecycle import portal_access_allowed
 from backend.app.core.config.settings import settings
 from backend.app.core.database.connection import SessionLocal
-from backend.app.core.dependencies import get_current_user, SESSION_COOKIE_NAME
+from backend.app.core.dependencies import (
+    CUSTOMER_ROLES,
+    SESSION_COOKIE_NAME,
+    get_current_user,
+    require_customer_user,
+)
 from backend.app.core.mail import send_password_reset_code
 from backend.app.core.password_policy import validate_password
 from backend.app.core.security import (
@@ -87,13 +93,13 @@ def login(data: LoginRequest, response: Response):
 
         if user.company_id is not None:
             company = db.query(Company).filter(Company.id == user.company_id).first()
-            if company is None or not company.active:
-                raise HTTPException(status_code=403, detail="Company is inactive")
+            if company is None:
+                raise HTTPException(status_code=403, detail="Company not found")
+            if user.role in CUSTOMER_ROLES and not portal_access_allowed(company):
+                raise HTTPException(status_code=403, detail="Company portal access is suspended")
 
         token = create_access_token(user.id, user.token_version)
         _set_session_cookie(response, token)
-        # Keep access_token in the response for non-browser API clients. The
-        # bundled Admin and Customer UIs intentionally use only the HttpOnly cookie.
         return {
             "access_token": token,
             "token_type": "bearer",
@@ -107,6 +113,16 @@ def login(data: LoginRequest, response: Response):
         }
     finally:
         db.close()
+
+
+@router.post("/refresh")
+def refresh_session(
+    response: Response,
+    current_user: User = Depends(get_current_user),
+):
+    token = create_access_token(current_user.id, current_user.token_version)
+    _set_session_cookie(response, token)
+    return {"status": "refreshed"}
 
 
 def _validate_new_password(password: str):
@@ -137,11 +153,7 @@ def customer_forgot_password(data: ForgotPasswordRequest):
     try:
         email = data.email.strip().lower()
         user = db.query(User).filter(User.email == email).first()
-        if (
-            user is None
-            or user.company_id is None
-            or user.role in ("super_admin", "xvond_admin")
-        ):
+        if user is None or user.company_id is None or user.role not in CUSTOMER_ROLES:
             return generic_response
 
         latest = (
@@ -197,11 +209,7 @@ def customer_reset_password(data: ResetPasswordRequest, response: Response):
     try:
         email = data.email.strip().lower()
         user = db.query(User).filter(User.email == email).first()
-        if (
-            user is None
-            or user.company_id is None
-            or user.role in ("super_admin", "xvond_admin")
-        ):
+        if user is None or user.company_id is None or user.role not in CUSTOMER_ROLES:
             raise HTTPException(status_code=400, detail="Invalid or expired code")
 
         reset = (
@@ -237,14 +245,8 @@ def customer_reset_password(data: ResetPasswordRequest, response: Response):
 def customer_change_password(
     data: ChangePasswordRequest,
     response: Response,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_customer_user),
 ):
-    if current_user.company_id is None or current_user.role in (
-        "super_admin",
-        "xvond_admin",
-    ):
-        raise HTTPException(status_code=403, detail="Customer account required")
-
     _validate_new_password(data.new_password)
     if data.current_password == data.new_password:
         raise HTTPException(status_code=400, detail="New password must be different")
@@ -252,9 +254,7 @@ def customer_change_password(
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.id == current_user.id).first()
-        if user is None or not verify_password(
-            data.current_password, user.password_hash
-        ):
+        if user is None or not verify_password(data.current_password, user.password_hash):
             raise HTTPException(status_code=400, detail="Current password is incorrect")
         user.password_hash = hash_password(data.new_password)
         user.token_version += 1
@@ -266,18 +266,6 @@ def customer_change_password(
 
 
 @router.post("/logout")
-def logout(
-    response: Response,
-    current_user: User = Depends(get_current_user),
-):
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.id == current_user.id).first()
-        if user is None:
-            raise HTTPException(status_code=401, detail="User not found")
-        user.token_version += 1
-        db.commit()
-        _clear_session_cookie(response)
-        return {"status": "logged_out"}
-    finally:
-        db.close()
+def logout(response: Response):
+    _clear_session_cookie(response)
+    return {"status": "logged_out"}

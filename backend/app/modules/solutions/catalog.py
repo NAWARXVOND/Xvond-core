@@ -1,6 +1,6 @@
 SERVICE_CATALOG = {
     "ai_agents": {
-        "name": "AI Agents",
+        "name": "AI Employees",
         "description": "Customer service, sales, booking and order AI employees across business channels.",
         "delivery_mode": "builder",
     },
@@ -42,7 +42,7 @@ PACKAGE_TIERS = {
     "enterprise": "Enterprise",
 }
 
-# Commercial model-power ceiling used when an AI Agents plan does not provide
+# Commercial model-power ceiling used when an AI Employees plan does not provide
 # an explicit max_quality_tier override. Starter still reaches Tier 2 so core
 # business actions such as bookings/orders remain fully usable. Business unlocks
 # advanced reasoning; Enterprise unlocks the strongest premium tier.

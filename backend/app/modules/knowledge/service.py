@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from time import monotonic
 
 from backend.app.core.config.settings import settings
 from backend.app.modules.knowledge.embeddings import knowledge_embedding_client
@@ -21,8 +22,25 @@ class KnowledgeService:
     DEFAULT_CHUNK_SIZE = 1400
     DEFAULT_OVERLAP = 180
     DEFAULT_MAX_CHUNKS = 7
-    DEFAULT_MAX_CONTEXT_CHARS = 8500
+    DEFAULT_MAX_CONTEXT_CHARS = 12000
+    CORE_MAX_CONTEXT_CHARS = 5500
     MAX_CHUNKS_PER_DOCUMENT = 3
+    LIVE_BACKFILL_TTL_SECONDS = 300.0
+
+    MANUAL_SOURCE_TYPES = {
+        "general",
+        "services_prices",
+        "menu",
+        "products",
+        "faq",
+        "policies",
+        "branches",
+        "hours",
+        "delivery_payment",
+        "booking_rules",
+        "order_rules",
+        "custom",
+    }
 
     STOP_WORDS = {
         "the", "a", "an", "is", "are", "do", "does", "what", "how", "can", "i", "we", "you",
@@ -33,8 +51,15 @@ class KnowledgeService:
     ARABIC_EQUIVALENTS = {
         "اسعار": {"السعر", "سعر", "الاسعار", "أسعار", "الأسعار", "بكم", "تكلفة", "تكلفه", "ثمن"},
         "خدمات": {
-            "خدمة", "الخدمات", "خدمات", "بتعملو", "بتعملوا", "تقدمون", "تقدموا", "بتقدموا", "نقدم",
+            "خدمة", "الخدمات", "خدمات", "بتعملو", "بتعملوا", "تعملون", "تعملوا", "تقدمون", "تقدموا",
+            "بتقدموا", "بتقدمو", "بتقدمون", "نقدم", "خدماتكم", "خدماتكن", "خدمتكم", "خدمتكن",
             "service", "services", "offer", "offers", "offering", "provide", "provides",
+        },
+        "تواصل": {
+            "تواصل", "التواصل", "اتواصل", "أتواصل", "اكلم", "أكلم", "احكي", "أحكي", "اتصل", "أتصل",
+            "هاتف", "الهاتف", "تلفون", "تليفون", "رقم", "واتساب", "ايميل", "إيميل", "بريد", "البريد",
+            "مسؤول", "المسؤول", "موظف", "موظفة", "بشري", "انسان", "فريق", "الدعم", "المبيعات",
+            "contact", "phone", "telephone", "whatsapp", "email", "mail", "human", "person", "representative", "team", "support", "sales",
         },
         "حجز": {"موعد", "مواعيد", "احجز", "الحجز", "حجز", "احجزلي", "موعدي"},
         "دوام": {"ساعات", "الدوام", "دوام", "مفتوح", "تفتحون", "تسكرون", "اغلاق", "إغلاق"},
@@ -45,15 +70,34 @@ class KnowledgeService:
     }
 
     INTENT_CATEGORY_HINTS = {
-        "price": {"services_prices", "menu", "products"},
-        "services": {"services_prices", "menu", "products", "general", "business_profile"},
-        "hours": {"hours", "branches", "general", "business_profile"},
-        "location": {"branches", "general", "business_profile"},
-        "booking": {"booking_rules", "services_prices", "hours", "general"},
-        "order": {"order_rules", "menu", "products", "delivery_payment"},
-        "delivery_payment": {"delivery_payment", "policies", "order_rules"},
-        "policy": {"policies", "booking_rules", "order_rules"},
+        "price": {"services_prices", "menu", "products", "pdf", "website", "general", "business_profile"},
+        "services": {"services_prices", "menu", "products", "general", "business_profile", "pdf", "website"},
+        "contact": {"general", "business_profile", "pdf", "website"},
+        "hours": {"hours", "branches", "general", "business_profile", "pdf", "website"},
+        "location": {"branches", "general", "business_profile", "pdf", "website"},
+        "booking": {"booking_rules", "services_prices", "hours", "general", "pdf", "website"},
+        "order": {"order_rules", "menu", "products", "delivery_payment", "pdf", "website"},
+        "delivery_payment": {"delivery_payment", "policies", "order_rules", "pdf", "website"},
+        "policy": {"policies", "booking_rules", "order_rules", "pdf", "website"},
     }
+
+    INTENT_CONTENT_TERMS = {
+        "price": {"اسعار", "سعر", "تكلفه", "ثمن", "price", "prices", "cost"},
+        "services": {"خدمات", "خدمه", "نقدم", "تقدم", "service", "services", "offer", "offers", "offering", "provide", "provides"},
+        "contact": {
+            "تواصل", "هاتف", "تلفون", "رقم", "واتساب", "ايميل", "بريد", "مسؤول", "موظف", "بشري", "فريق", "دعم", "مبيعات",
+            "contact", "phone", "telephone", "whatsapp", "email", "mail", "human", "representative", "team", "support", "sales",
+        },
+        "hours": {"دوام", "ساعات", "مفتوح", "اغلاق", "hours", "open", "close"},
+        "location": {"عنوان", "موقع", "فرع", "location", "address", "branch"},
+        "booking": {"حجز", "موعد", "booking", "appointment", "reserve"},
+        "order": {"طلب", "توصيل", "order", "delivery"},
+        "delivery_payment": {"دفع", "بطاقه", "كاش", "payment", "pay", "cash", "card"},
+        "policy": {"سياسه", "الغاء", "استرجاع", "تبديل", "policy", "cancel", "refund", "return"},
+    }
+
+    def __init__(self):
+        self._live_backfill_after: dict[int, float] = {}
 
     def normalize(self, text):
         text = (text or "").lower().replace("\r", " ").replace("\n", " ")
@@ -69,12 +113,27 @@ class KnowledgeService:
 
     def _token_forms(self, token):
         forms = {token}
-        if re.search(r"[\u0600-\u06FF]", token):
-            if token.startswith("ال") and len(token) > 4:
-                forms.add(token[2:])
+        if not re.search(r"[\u0600-\u06FF]", token):
+            return forms
+        queue = [token]
+        seen = {token}
+        while queue:
+            current = queue.pop()
+            derived = set()
+            for prefix in ("وال", "بال", "فال", "كال", "لل", "ال"):
+                if current.startswith(prefix) and len(current) - len(prefix) >= 3:
+                    derived.add(current[len(prefix):])
+            for prefix in ("و", "ف", "ب", "ك", "ل"):
+                if current.startswith(prefix) and len(current) - 1 >= 3:
+                    derived.add(current[1:])
             for suffix in ("كم", "كن", "نا", "هم", "هن"):
-                if token.endswith(suffix) and len(token) - len(suffix) >= 3:
-                    forms.add(token[: -len(suffix)])
+                if current.endswith(suffix) and len(current) - len(suffix) >= 3:
+                    derived.add(current[: -len(suffix)])
+            for item in derived:
+                if item not in seen:
+                    seen.add(item)
+                    queue.append(item)
+        forms |= seen
         return forms
 
     def _base_tokens(self, text):
@@ -90,9 +149,7 @@ class KnowledgeService:
         tokens = self._base_tokens(text)
         expanded = set(tokens)
         for canonical, variants in self.ARABIC_EQUIVALENTS.items():
-            normalized_variants = {self.normalize(x) for x in variants} | {
-                self.normalize(canonical)
-            }
+            normalized_variants = {self.normalize(x) for x in variants} | {self.normalize(canonical)}
             if tokens & normalized_variants:
                 expanded |= normalized_variants
         return expanded
@@ -102,10 +159,7 @@ class KnowledgeService:
         tokens = [token for token in self.normalize(text).split() if token in base]
         if len(tokens) < size:
             return set()
-        return {
-            " ".join(tokens[index : index + size])
-            for index in range(len(tokens) - size + 1)
-        }
+        return {" ".join(tokens[index : index + size]) for index in range(len(tokens) - size + 1)}
 
     def detect_intents(self, query):
         q = self.normalize(query)
@@ -116,17 +170,31 @@ class KnowledgeService:
             normalized_words = {self.normalize(x) for x in words}
             return bool(t & normalized_words) or any(word in q for word in normalized_words)
 
-        if has({"سعر", "اسعار", "بكم", "تكلفة", "price", "prices", "cost"}): intents.add("price")
+        if has({"سعر", "اسعار", "بكم", "تكلفة", "price", "prices", "cost"}):
+            intents.add("price")
         if has({
             "خدمات", "خدمة", "service", "services", "menu", "منيو", "offer", "offers", "offering",
-            "provide", "provides", "تقدمون", "تقدموا", "بتقدموا", "بتعملوا", "بتعملو", "نقدم",
-        }): intents.add("services")
-        if has({"دوام", "ساعات", "مفتوح", "اغلاق", "hours", "open", "close"}): intents.add("hours")
-        if has({"وين", "عنوان", "موقع", "فرع", "location", "address", "branch"}): intents.add("location")
-        if has({"حجز", "موعد", "احجز", "booking", "appointment", "reserve"}): intents.add("booking")
-        if has({"طلب", "اطلب", "توصيل", "order", "delivery"}): intents.add("order")
-        if has({"دفع", "بطاقة", "كاش", "payment", "pay", "cash", "card"}): intents.add("delivery_payment")
-        if has({"سياسة", "الغاء", "استرجاع", "تبديل", "policy", "cancel", "refund", "return"}): intents.add("policy")
+            "provide", "provides", "تقدمون", "تقدموا", "بتقدموا", "بتقدمو", "بتعملوا", "بتعملو", "تعملون", "تعملوا", "نقدم",
+        }):
+            intents.add("services")
+        if has({
+            "تواصل", "اتواصل", "اكلم", "احكي", "اتصل", "هاتف", "تلفون", "تليفون", "رقم", "واتساب", "ايميل", "بريد",
+            "مسؤول", "المسؤول", "موظف", "موظفة", "بشري", "انسان", "فريق", "دعم", "الدعم", "مبيعات", "المبيعات",
+            "contact", "phone", "telephone", "whatsapp", "email", "mail", "human", "person", "representative", "team", "support", "sales",
+        }):
+            intents.add("contact")
+        if has({"دوام", "ساعات", "مفتوح", "اغلاق", "hours", "open", "close"}):
+            intents.add("hours")
+        if has({"وين", "عنوان", "موقع", "فرع", "location", "address", "branch"}):
+            intents.add("location")
+        if has({"حجز", "موعد", "احجز", "booking", "appointment", "reserve"}):
+            intents.add("booking")
+        if has({"طلب", "اطلب", "توصيل", "order", "delivery"}):
+            intents.add("order")
+        if has({"دفع", "بطاقة", "كاش", "payment", "pay", "cash", "card"}):
+            intents.add("delivery_payment")
+        if has({"سياسة", "الغاء", "استرجاع", "تبديل", "policy", "cancel", "refund", "return"}):
+            intents.add("policy")
         return intents
 
     def split_content(self, content, chunk_size=None, overlap=None):
@@ -163,10 +231,7 @@ class KnowledgeService:
     def _embed_chunks(self, chunks, documents_by_id):
         if not chunks or not knowledge_embedding_client.available:
             return 0
-        texts = [
-            self._embedding_text(documents_by_id[chunk.document_id], chunk.content)
-            for chunk in chunks
-        ]
+        texts = [self._embedding_text(documents_by_id[chunk.document_id], chunk.content) for chunk in chunks]
         vectors = knowledge_embedding_client.embed_many(texts)
         if len(vectors) != len(chunks):
             return 0
@@ -178,10 +243,8 @@ class KnowledgeService:
             chunk.embedding_updated_at = updated_at
         return len(chunks)
 
-    def rebuild_document_index(self, db, document):
-        db.query(KnowledgeChunk).filter(
-            KnowledgeChunk.document_id == document.id
-        ).delete(synchronize_session=False)
+    def rebuild_document_index(self, db, document, *, embed=True):
+        db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == document.id).delete(synchronize_session=False)
         chunks = []
         for index, content in enumerate(self.split_content(document.content or "")):
             chunk = KnowledgeChunk(
@@ -194,47 +257,76 @@ class KnowledgeService:
             db.add(chunk)
             chunks.append(chunk)
         db.flush()
-        self._embed_chunks(chunks, {document.id: document})
+        if embed:
+            self._embed_chunks(chunks, {document.id: document})
         return len(chunks)
 
-    def backfill_company_index(self, db, company_id):
-        docs = (
-            db.query(KnowledgeDocument)
-            .filter(KnowledgeDocument.company_id == company_id)
-            .all()
-        )
-        indexed = 0
-        for doc in docs:
-            if (
-                db.query(KnowledgeChunk)
-                .filter(KnowledgeChunk.document_id == doc.id)
-                .first()
-                is None
-            ):
-                self.rebuild_document_index(db, doc)
-                indexed += 1
+    def backfill_company_index(self, db, company_id, *, embed=True):
+        docs = db.query(KnowledgeDocument).filter(KnowledgeDocument.company_id == company_id).all()
+        if not docs:
+            return 0
 
-        if knowledge_embedding_client.available:
-            documents_by_id = {doc.id: doc for doc in docs}
-            chunks = (
-                db.query(KnowledgeChunk)
+        existing_document_ids = {
+            row[0]
+            for row in (
+                db.query(KnowledgeChunk.document_id)
                 .filter(KnowledgeChunk.company_id == company_id)
+                .distinct()
                 .all()
             )
+        }
+        missing_docs = [doc for doc in docs if doc.id not in existing_document_ids]
+        for doc in missing_docs:
+            self.rebuild_document_index(db, doc, embed=embed)
+
+        if embed and knowledge_embedding_client.available:
+            documents_by_id = {doc.id: doc for doc in docs}
+            chunks = db.query(KnowledgeChunk).filter(KnowledgeChunk.company_id == company_id).all()
             stale = [
-                chunk
-                for chunk in chunks
+                chunk for chunk in chunks
                 if chunk.document_id in documents_by_id and not self._embedding_is_current(chunk)
             ]
             self._embed_chunks(stale, documents_by_id)
-        return indexed
+        return len(missing_docs)
+
+    def _backfill_live_if_due(self, db, company_id):
+        now = monotonic()
+        if now < self._live_backfill_after.get(company_id, 0.0):
+            return 0
+        # Set the guard before work starts so concurrent/re-entrant requests do not
+        # repeatedly execute the same full-company maintenance scan.
+        self._live_backfill_after[company_id] = now + self.LIVE_BACKFILL_TTL_SECONDS
+        try:
+            return self.backfill_company_index(db, company_id, embed=False)
+        except Exception:
+            # Allow a later request to retry maintenance rather than suppressing it
+            # for the whole TTL after a failure.
+            self._live_backfill_after.pop(company_id, None)
+            raise
+
+    def _intent_content_evidence(self, intents, chunk_tokens):
+        for intent in intents:
+            terms = {self.normalize(term) for term in self.INTENT_CONTENT_TERMS.get(intent, set())}
+            if chunk_tokens & terms:
+                return True
+        return False
+
+    def _source_priority_boost(self, source_type: str) -> float:
+        if source_type == "business_profile":
+            return 12.0
+        if source_type in self.MANUAL_SOURCE_TYPES:
+            return 5.0
+        if source_type == "pdf":
+            return 2.0
+        if source_type == "website":
+            return 1.0
+        return 0.0
 
     def _score_match(self, query, chunk, document):
         qnorm = self.normalize(query)
         qtokens = self.tokenize(query)
         if not qtokens:
             return None
-
         chunk_norm = self.normalize(chunk.normalized_text or chunk.content)
         title_norm = self.normalize(document.title or "")
         ctokens = self.tokenize(chunk_norm)
@@ -247,11 +339,11 @@ class KnowledgeService:
         chunk_phrases = self._ordered_phrases(chunk_norm)
         phrase_matches = query_phrases & chunk_phrases
         category_boost = sum(
-            8
-            for intent in intents
+            8 for intent in intents
             if document.source_type in self.INTENT_CATEGORY_HINTS.get(intent, set())
         )
-        if not common and not title_common and not phrase_matches and category_boost == 0:
+        intent_content_evidence = self._intent_content_evidence(intents, ctokens)
+        if not common and not title_common and not phrase_matches and not intent_content_evidence:
             return None
         coverage = len(common) / max(1, len(qtokens))
         phrase_coverage = len(phrase_matches) / max(1, len(query_phrases)) if query_phrases else 0
@@ -263,13 +355,14 @@ class KnowledgeService:
             + phrase_coverage * 5
             + (14 if exact_query else 0)
             + category_boost
+            + (4 if intent_content_evidence else 0)
+            + self._source_priority_boost(document.source_type)
         )
 
     def search_agent_knowledge(self, db, company_id, agent_id, query, max_chunks=None):
         max_chunks = max_chunks or self.DEFAULT_MAX_CHUNKS
         if not self.tokenize(query):
             return []
-
         rows = (
             db.query(KnowledgeChunk, KnowledgeDocument)
             .join(KnowledgeDocument, KnowledgeDocument.id == KnowledgeChunk.document_id)
@@ -283,21 +376,13 @@ class KnowledgeService:
             )
             .all()
         )
-
-        query_embedding = (
-            knowledge_embedding_client.embed_one(query)
-            if knowledge_embedding_client.available
-            else None
-        )
+        query_embedding = knowledge_embedding_client.embed_one(query) if knowledge_embedding_client.available else None
         matches = []
         for chunk, doc in rows:
             lexical_score = self._score_match(query, chunk, doc)
             semantic_similarity = None
             if query_embedding is not None and self._embedding_is_current(chunk):
-                semantic_similarity = knowledge_embedding_client.cosine_similarity(
-                    query_embedding,
-                    chunk.embedding,
-                )
+                semantic_similarity = knowledge_embedding_client.cosine_similarity(query_embedding, chunk.embedding)
             semantic_match = bool(
                 semantic_similarity is not None
                 and semantic_similarity >= settings.KNOWLEDGE_SEMANTIC_MIN_SIMILARITY
@@ -307,17 +392,7 @@ class KnowledgeService:
             score = float(lexical_score or 0)
             if semantic_match:
                 score += max(0.0, semantic_similarity) * settings.KNOWLEDGE_SEMANTIC_WEIGHT
-            matches.append(
-                KnowledgeMatch(
-                    doc.id,
-                    doc.title,
-                    doc.source_type,
-                    chunk.chunk_index,
-                    chunk.content,
-                    score,
-                )
-            )
-
+            matches.append(KnowledgeMatch(doc.id, doc.title, doc.source_type, chunk.chunk_index, chunk.content, score))
         matches.sort(key=lambda item: (item.score, -item.chunk_index), reverse=True)
         selected = []
         per_document = {}
@@ -330,17 +405,71 @@ class KnowledgeService:
                 break
         return selected
 
+    def _core_business_information(self, db, company_id, agent_id):
+        document = (
+            db.query(KnowledgeDocument)
+            .join(AgentKnowledge, AgentKnowledge.document_id == KnowledgeDocument.id)
+            .filter(
+                KnowledgeDocument.company_id == company_id,
+                KnowledgeDocument.source_type == "business_profile",
+                KnowledgeDocument.enabled.is_(True),
+                AgentKnowledge.agent_id == agent_id,
+                AgentKnowledge.enabled.is_(True),
+            )
+            .order_by(KnowledgeDocument.id.asc())
+            .first()
+        )
+        if document is None:
+            return "", None
+        content = (document.content or "").strip()
+        if len(content) > self.CORE_MAX_CONTEXT_CHARS:
+            content = content[: self.CORE_MAX_CONTEXT_CHARS].rstrip() + "\n[Core company information truncated for context size]"
+        return content, document.id
+
+    def _source_label(self, source_type):
+        if source_type in self.MANUAL_SOURCE_TYPES:
+            return "curated manual knowledge"
+        if source_type == "pdf":
+            return "imported PDF"
+        if source_type == "website":
+            return "imported website"
+        return source_type
+
     def get_agent_context(self, db, company_id, agent_id, query):
-        self.backfill_company_index(db, company_id)
-        matches = self.search_agent_knowledge(db, company_id, agent_id, query)
-        if not matches:
+        # Greeting/acknowledgement turns do not need a full-company maintenance scan,
+        # chunk load, lexical scoring pass, or semantic request. Keep only the core
+        # company profile so the employee can still identify the business correctly.
+        trivial_query = not knowledge_embedding_client._should_embed_query(str(query or ""))
+        if not trivial_query:
+            self._backfill_live_if_due(db, company_id)
+
+        core, core_document_id = self._core_business_information(db, company_id, agent_id)
+        matches = [] if trivial_query else self.search_agent_knowledge(db, company_id, agent_id, query)
+        supplementary = [match for match in matches if match.document_id != core_document_id]
+
+        if not core and not supplementary:
             return ""
-        parts = []
-        used = 0
-        for match in matches:
+
+        policy = (
+            "KNOWLEDGE HIERARCHY AND SYNTHESIS POLICY:\n"
+            "1. CORE COMPANY INFORMATION is always the canonical source for company identity, official contact details, website, languages, locations, working hours and other structured company fields.\n"
+            "2. Curated manual knowledge supplies detailed business facts and takes precedence over imported PDF/website text when they conflict on a secondary detail.\n"
+            "3. Imported PDFs and website pages are supporting knowledge. Use them together with the core and manual knowledge; do not ignore one source merely because another source also matched.\n"
+            "4. If two supporting sources conflict and the core/manual sources do not resolve the conflict, do not guess. State that the detail needs confirmation.\n"
+            "5. Conversation history and customer memory never override current company facts.\n"
+        )
+
+        parts = [policy]
+        used = len(policy)
+        if core:
+            block = "[CORE COMPANY INFORMATION | highest factual priority]\n" + core
+            parts.append(block)
+            used += len(block)
+
+        for match in supplementary:
             block = (
-                f"[Knowledge: {match.title} | category: {match.source_type} | "
-                f"chunk {match.chunk_index + 1}]\n{match.content}"
+                f"[SUPPLEMENTARY KNOWLEDGE: {match.title} | source: {self._source_label(match.source_type)} | "
+                f"category: {match.source_type} | chunk {match.chunk_index + 1}]\n{match.content}"
             )
             if used + len(block) > self.DEFAULT_MAX_CONTEXT_CHARS:
                 remain = self.DEFAULT_MAX_CONTEXT_CHARS - used

@@ -11,8 +11,8 @@ def source(path: str) -> str:
 
 
 def test_graph_url_is_pinned_to_meta_graph_host():
-    url = admin_meta_whatsapp._graph_url("v23.0", "123/phone_numbers", {"fields": "id"})
-    assert url.startswith("https://graph.facebook.com/v23.0/123/phone_numbers?")
+    url = admin_meta_whatsapp._graph_url("v26.0", "123/phone_numbers", {"fields": "id"})
+    assert url.startswith("https://graph.facebook.com/v26.0/123/phone_numbers?")
 
 
 def test_meta_completion_subscribes_waba_before_local_activation():
@@ -67,11 +67,19 @@ def test_meta_environment_template_contains_no_real_secrets():
     assert "META_APP_SECRET=" in env
     assert "META_WHATSAPP_CONFIG_ID=" in env
     assert "META_WHATSAPP_VERIFY_TOKEN=" in env
+    assert "META_GRAPH_API_VERSION=v26.0" in env
+    assert "META_WHATSAPP_FEATURE_TYPE=" in env
+    assert "META_WHATSAPP_SESSION_INFO_VERSION=" in env
 
 
-def test_embedded_signup_launches_whatsapp_business_app_coexistence_flow():
+def test_embedded_signup_login_options_follow_server_configuration():
+    api = source("backend/app/api/admin_meta_whatsapp.py")
     js = source("frontend/admin/meta-whatsapp.js")
-    assert "featureType:'whatsapp_business_app_onboarding'" in js
+    assert '"feature_type": _env("META_WHATSAPP_FEATURE_TYPE")' in api
+    assert '"session_info_version": _env("META_WHATSAPP_SESSION_INFO_VERSION")' in api
+    assert "if(config.feature_type)extras.featureType=config.feature_type" in js
+    assert "if(config.session_info_version)extras.sessionInfoVersion" in js
+    assert "featureType:'whatsapp_business_app_onboarding'" not in js
     assert "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" in js
     assert "connection_mode:data.event==='FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING'?'coexistence':'embedded_signup'" in js
 
@@ -88,3 +96,14 @@ def test_coexistence_completion_can_resolve_missing_phone_number_id_server_side(
 def test_coexistence_does_not_guess_when_waba_has_multiple_phone_numbers():
     api = source("backend/app/api/admin_meta_whatsapp.py")
     assert "the selected WhatsApp Business Account has multiple phone numbers" in api
+
+
+def test_webhook_verification_uses_platform_token_before_tenant_activation():
+    webhook = source("backend/app/api/whatsapp_webhook.py")
+    assert "from backend.app.api.admin_meta_whatsapp import _meta_settings" in webhook
+    assert 'platform_token = str(_meta_settings().get("verify_token") or "")' in webhook
+    assert "hmac.compare_digest(" in webhook
+    platform_pos = webhook.index("platform_token =")
+    compare_pos = webhook.index("hmac.compare_digest(", platform_pos)
+    tenant_loop_pos = webhook.index("for channel in get_whatsapp_channels(db):")
+    assert platform_pos < compare_pos < tenant_loop_pos

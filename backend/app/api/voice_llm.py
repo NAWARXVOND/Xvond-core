@@ -218,7 +218,7 @@ def voice_chat_completions(
         agent = agent_runtime.get_agent(db, channel.company_id, channel.agent_id)
         original_prompt = agent.system_prompt or ""
         try:
-            agent.system_prompt = (
+            runtime_prompt = (
                 original_prompt + "\n\n" + build_voice_behavior_prompt(config)
             ).strip()
             try:
@@ -229,6 +229,9 @@ def voice_chat_completions(
                     message=transcript,
                     conversation_id=conversation_id,
                     commit=False,
+                    channel_type="voice", channel_id=channel.id,
+                    external_contact_id=external_call_id,
+                    system_prompt_override=runtime_prompt,
                 )
             except HTTPException as exc:
                 if not is_service_access_error(exc):

@@ -18,15 +18,15 @@
   function fixOverview(d){
     if(typeof xvondWorkspace==='undefined'||xvondWorkspace.tab!=='overview')return;
     const channels=d.channels||[];
-    const active=channels.filter(x=>x.enabled===true).length;
+    const connectedCount=channels.filter(x=>x.enabled===true&&x.connected===true).length;
     const configured=channels.filter(x=>x.configured===true).length;
     const card=metricCard('Channels');
     if(card){
       const strong=card.querySelector('strong'),small=card.querySelector('small');
-      if(strong)strong.textContent=String(active);
-      if(small)small.textContent=`${configured} configured · ${channels.length} created`;
+      if(strong)strong.textContent=String(connectedCount);
+      if(small)small.textContent=`${connectedCount} connected · ${configured} configured · ${channels.length} created`;
     }
-    const connected=channels.some(x=>x.enabled===true&&x.configured===true);
+    const connected=connectedCount>0;
     for(const row of document.querySelectorAll('.readiness-row')){
       const spans=row.querySelectorAll('span');
       if(![...spans].some(x=>x.textContent?.trim()==='Connected channel'))continue;

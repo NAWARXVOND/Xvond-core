@@ -6,10 +6,11 @@ set -eu
 : "${PGUSER:?PGUSER is required}"
 : "${PGDATABASE:?PGDATABASE is required}"
 : "${BACKUP_DIR:=/backups}"
+: "${BACKUP_STATUS_DIR:=/backup-status}"
 : "${BACKUP_RETENTION_DAYS:=14}"
 
 umask 077
-mkdir -p "$BACKUP_DIR"
+mkdir -p "$BACKUP_DIR" "$BACKUP_STATUS_DIR"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 final_path="$BACKUP_DIR/xvond_${timestamp}.dump"
@@ -33,6 +34,15 @@ pg_dump \
 
 mv "$partial_path" "$final_path"
 sha256sum "$final_path" > "${final_path}.sha256"
+
+# Publish health only after the dump is complete and checksummed. Write via a
+# temporary file so the app never observes a partially-written status marker.
+# Backup contents remain private under umask 077; the timestamp marker contains
+# no secrets and must be readable by the unprivileged app health process.
+status_tmp="$BACKUP_STATUS_DIR/local_success_epoch.partial"
+printf '%s\n' "$(date -u +%s)" > "$status_tmp"
+chmod 0644 "$status_tmp"
+mv "$status_tmp" "$BACKUP_STATUS_DIR/local_success_epoch"
 
 find "$BACKUP_DIR" \
     -type f \

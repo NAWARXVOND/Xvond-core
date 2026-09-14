@@ -9,6 +9,7 @@ from fastapi.security import (
 )
 from sqlalchemy.orm import Session
 
+from backend.app.core.company_lifecycle import portal_access_allowed
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.security import decode_access_token_claims
 from backend.app.models.company import Company
@@ -26,8 +27,20 @@ XVOND_INTERNAL_ROLES = {
     "support",
 }
 
+XVOND_OPERATOR_ROLES = {
+    "super_admin",
+    "xvond_admin",
+    "support",
+}
 
 CUSTOMER_ROLES = {
+    "owner",
+    "admin",
+    "manager",
+    "employee",
+}
+
+CUSTOMER_OPERATOR_ROLES = {
     "owner",
     "admin",
     "manager",
@@ -88,8 +101,8 @@ def get_current_user(
         company = db.query(Company).filter(Company.id == user.company_id).first()
         if company is None:
             raise HTTPException(status_code=403, detail="Company not found")
-        if user.role in CUSTOMER_ROLES and not company.active:
-            raise HTTPException(status_code=403, detail="Company is inactive")
+        if user.role in CUSTOMER_ROLES and not portal_access_allowed(company):
+            raise HTTPException(status_code=403, detail="Company portal access is suspended")
 
     return user
 
@@ -99,6 +112,17 @@ def require_customer_user(
 ) -> User:
     if current_user.role not in CUSTOMER_ROLES:
         raise HTTPException(status_code=403, detail="Customer access required")
+    return current_user
+
+
+def require_customer_operator(
+    current_user: User = Depends(require_customer_user),
+) -> User:
+    if current_user.role not in CUSTOMER_OPERATOR_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail="Company operator access required",
+        )
     return current_user
 
 
@@ -121,6 +145,19 @@ def require_customer_admin(
             status_code=403,
             detail="Company owner or admin required",
         )
+    return current_user
+
+
+def require_xvond_operator(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Allow Xvond operational read access without granting mutation rights.
+
+    Support can inspect platform health and incident metadata, while every
+    production-changing endpoint continues to require ``require_xvond_admin``.
+    """
+    if current_user.role not in XVOND_OPERATOR_ROLES:
+        raise HTTPException(status_code=403, detail="Xvond operations access required")
     return current_user
 
 

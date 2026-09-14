@@ -27,12 +27,13 @@ def test_service_limit_error_is_internal_and_recognized():
         },
     )
     assert _is_service_access_error(exc) is True
-    public_text = _safe_unavailable_message("Hello")
+    public_text = _safe_unavailable_message("Hello", {"human_assistance_mode": "direct_handoff"})
     assert "limit" not in public_text.lower()
     assert "subscription" not in public_text.lower()
     assert "temporarily unavailable" in public_text.lower()
 
 
 def test_safe_fallback_matches_customer_language():
-    assert _safe_unavailable_message("Hello, can you help?").startswith("Sorry")
-    assert _safe_unavailable_message("مرحبا ممكن تساعدني؟").startswith("عذرًا")
+    config = {"human_assistance_mode": "direct_handoff"}
+    assert _safe_unavailable_message("Hello, can you help?", config).startswith("Sorry")
+    assert _safe_unavailable_message("مرحبا ممكن تساعدني؟", config).startswith("عذرًا")

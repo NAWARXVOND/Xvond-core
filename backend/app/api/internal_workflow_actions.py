@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hmac
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
@@ -25,7 +26,8 @@ class InternalWorkflowAction(BaseModel):
 
 def _require_workflow_secret(value: str | None) -> None:
     expected = str(settings.N8N_SHARED_SECRET or "")
-    if not expected or value != expected:
+    received = str(value or "")
+    if not expected or not received or not hmac.compare_digest(received, expected):
         raise HTTPException(401, "Unauthorized workflow request")
 
 

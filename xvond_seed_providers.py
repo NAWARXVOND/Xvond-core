@@ -7,8 +7,12 @@ from backend.app.modules.providers.models import (
 )
 
 
+# Provider catalog must match adapters that are actually registered by AIEngine.
+# Keep retired rows in the database for historical usage/audit references, but never
+# advertise or route new traffic to them.
+RETIRED_PROVIDERS = {"groq"}
+
 PROVIDERS = [
-    ("groq", "Groq", 5),
     ("openai", "OpenAI", 10),
     ("anthropic", "Anthropic", 20),
     ("google", "Google Gemini", 30),
@@ -17,20 +21,6 @@ PROVIDERS = [
 ]
 
 MODELS = [
-    (
-        "groq",
-        "openai/gpt-oss-20b",
-        "GPT OSS 20B",
-        Decimal("0.075"),
-        Decimal("0.30"),
-    ),
-    (
-        "groq",
-        "openai/gpt-oss-120b",
-        "GPT OSS 120B",
-        Decimal("0.15"),
-        Decimal("0.60"),
-    ),
     (
         "openai",
         "gpt-5.6-luna",
@@ -55,12 +45,31 @@ MODELS = [
 ]
 
 
+def _disable_retired_provider_rows(db) -> None:
+    """Keep historical provider/model rows but make them ineligible for routing."""
+
+    if not RETIRED_PROVIDERS:
+        return
+    (
+        db.query(AIProviderRecord)
+        .filter(AIProviderRecord.name.in_(RETIRED_PROVIDERS))
+        .update({AIProviderRecord.enabled: False}, synchronize_session=False)
+    )
+    (
+        db.query(AIModelRecord)
+        .filter(AIModelRecord.provider_name.in_(RETIRED_PROVIDERS))
+        .update({AIModelRecord.enabled: False}, synchronize_session=False)
+    )
+
+
 def seed_provider_catalog() -> tuple[int, int]:
     db = SessionLocal()
     providers_seeded = 0
     models_seeded = 0
 
     try:
+        _disable_retired_provider_rows(db)
+
         for name, display_name, priority in PROVIDERS:
             item = (
                 db.query(AIProviderRecord)

@@ -9,6 +9,58 @@ class FakeRedis:
     def __init__(self):
         self.data = {}
         self.sorted = {}
+        self.ttls = {}
+
+    def pipeline(self, transaction=True):
+        parent = self
+
+        class Pipeline:
+            def __init__(self):
+                self.commands = []
+
+            def __getattr__(self, name):
+                def queue(*args, **kwargs):
+                    self.commands.append((name, args, kwargs))
+                    return self
+
+                return queue
+
+            def execute(self):
+                return [
+                    getattr(parent, name)(*args, **kwargs)
+                    for name, args, kwargs in self.commands
+                ]
+
+        return Pipeline()
+
+    def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.data:
+            return False
+        self.data[key] = value
+        if ex is not None:
+            self.ttls[key] = int(ex)
+        return True
+
+    def get(self, key):
+        value = self.data.get(key)
+        return value if not isinstance(value, list) else None
+
+    def ttl(self, key):
+        if key not in self.data:
+            return -2
+        return self.ttls.get(key, -1)
+
+    def delete(self, key):
+        existed = key in self.data
+        self.data.pop(key, None)
+        self.ttls.pop(key, None)
+        return 1 if existed else 0
+
+    def expire(self, key, ttl):
+        if key not in self.data:
+            return 0
+        self.ttls[key] = int(ttl)
+        return 1
 
     def lpush(self, key, value):
         self.data.setdefault(key, []).insert(0, value)
@@ -44,19 +96,51 @@ class FakeRedis:
     def zcard(self, key):
         return len(self.sorted.setdefault(key, {}))
 
-    def eval(self, _script, _numkeys, retry_key, queue_key, now, limit):
-        due = [
-            (raw, score)
-            for raw, score
-            in self.sorted.setdefault(retry_key, {}).items()
-            if score <= float(now)
-        ]
-        due.sort(key=lambda item: item[1])
-        selected = due[:int(limit)]
-        for raw, _score in selected:
-            del self.sorted[retry_key][raw]
-            self.lpush(queue_key, raw)
-        return len(selected)
+    def eval(self, _script, numkeys, *args):
+        if numkeys == 2 and len(args) == 4:
+            retry_key, queue_key, now, limit = args
+            due = [
+                (raw, score)
+                for raw, score in self.sorted.setdefault(retry_key, {}).items()
+                if score <= float(now)
+            ]
+            due.sort(key=lambda item: item[1])
+            selected = due[: int(limit)]
+            for raw, _score in selected:
+                del self.sorted[retry_key][raw]
+                self.lpush(queue_key, raw)
+            return len(selected)
+
+        if numkeys == 2 and len(args) == 2:
+            dead_key, queue_key = args
+            raw = self.rpop(dead_key)
+            if raw is None:
+                return 0
+            try:
+                job = json.loads(raw)
+            except (TypeError, ValueError):
+                self.rpush(dead_key, raw)
+                return -1
+            job["attempts"] = 0
+            job.pop("last_error", None)
+            job.pop("last_failed_at", None)
+            job.pop("retry_after_seconds", None)
+            self.lpush(queue_key, json.dumps(job, separators=(",", ":")))
+            return 1
+
+        if numkeys == 1 and len(args) == 2:
+            key, expected = args
+            if self.get(key) != expected:
+                return 0
+            return self.delete(key)
+
+        if numkeys == 1 and len(args) == 3:
+            key, expected, ttl = args
+            if self.get(key) != expected:
+                return 0
+            return self.expire(key, ttl)
+
+        raise AssertionError("Unexpected Lua invocation")
 
     def lrem(self, key, count, value):
         items = self.data.setdefault(key, [])
@@ -71,6 +155,18 @@ def make_queue():
     queue = WhatsAppJobQueue(redis_url="")
     queue.client = FakeRedis()
     return queue
+
+
+def test_worker_lease_allows_one_owner_and_protects_release():
+    queue = make_queue()
+
+    assert queue.acquire_worker_lock("worker-a", 30) is True
+    assert queue.acquire_worker_lock("worker-b", 30) is False
+    assert queue.refresh_worker_lock("worker-a", 30) is True
+    assert queue.refresh_worker_lock("worker-b", 30) is False
+    assert queue.release_worker_lock("worker-b") is False
+    assert queue.release_worker_lock("worker-a") is True
+    assert queue.acquire_worker_lock("worker-b", 30) is True
 
 
 def test_job_is_reserved_and_acknowledged():
@@ -117,11 +213,9 @@ def test_failed_job_retries_then_moves_to_dead_letter():
     )
 
     assert status == "dead"
-    dead = json.loads(
-        queue.client.data[queue.dead_key][0]
-    )
+    dead = json.loads(queue.client.data[queue.dead_key][0])
     assert dead["attempts"] == 2
-    assert dead["last_error"] == "permanent"
+    assert dead["last_error"] == "RuntimeError"
 
 
 def test_interrupted_jobs_are_recovered_on_worker_start():
@@ -134,8 +228,7 @@ def test_interrupted_jobs_are_recovered_on_worker_start():
     assert len(queue.client.data[queue.queue_key]) == 1
 
 
-
-def test_stats_report_queue_depths():
+def test_stats_report_queue_depths_and_worker_health():
     queue = make_queue()
     queue.enqueue(body="{}", signature="secret")
     queue.client.lpush(
@@ -148,9 +241,12 @@ def test_stats_report_queue_depths():
             "last_error": "delivery failed",
         }),
     )
+    assert queue.acquire_worker_lock("worker-a", 30) is True
 
     assert queue.stats() == {
         "configured": True,
+        "worker_active": True,
+        "worker_lease_ttl_seconds": 30,
         "queued": 1,
         "processing": 0,
         "retrying": 0,
@@ -179,7 +275,7 @@ def test_dead_job_view_never_exposes_body_or_signature():
     assert "signature" not in item
 
 
-def test_admin_retry_resets_attempts_and_requeues():
+def test_admin_retry_resets_attempts_and_requeues_atomically():
     queue = make_queue()
     queue.client.lpush(
         queue.dead_key,
@@ -190,17 +286,27 @@ def test_admin_retry_resets_attempts_and_requeues():
             "attempts": 5,
             "last_error": "delivery failed",
             "last_failed_at": "2026-08-24T12:00:00+00:00",
+            "retry_after_seconds": 600,
         }),
     )
 
     assert queue.requeue_dead(limit=1) == 1
 
-    queued = json.loads(
-        queue.client.data[queue.queue_key][0]
-    )
+    queued = json.loads(queue.client.data[queue.queue_key][0])
     assert queued["attempts"] == 0
     assert "last_error" not in queued
+    assert "last_failed_at" not in queued
+    assert "retry_after_seconds" not in queued
     assert queue.client.data[queue.dead_key] == []
+
+
+def test_invalid_dead_job_is_not_lost_during_requeue():
+    queue = make_queue()
+    queue.client.lpush(queue.dead_key, "not-json")
+
+    assert queue.requeue_dead(limit=1) == 0
+    assert queue.client.data[queue.dead_key] == ["not-json"]
+    assert queue.client.data.get(queue.queue_key, []) == []
 
 
 def test_retry_delay_increases_with_attempts():
@@ -233,11 +339,9 @@ def test_retry_delay_increases_with_attempts():
 
 def test_blocking_reserve_timeout_has_socket_margin():
     source = (
-        __import__(
-            "pathlib"
-        ).Path(
-            "backend/app/modules/channels/whatsapp_queue.py"
-        ).read_text(encoding="utf-8")
+        __import__("pathlib")
+        .Path("backend/app/modules/channels/whatsapp_queue.py")
+        .read_text(encoding="utf-8")
     )
     assert "socket_timeout=15" in source
     assert "def reserve(self, timeout: int = 5)" in source

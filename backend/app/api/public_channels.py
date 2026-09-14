@@ -4,7 +4,11 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from backend.app.api.website_widget import website_behavior
+from backend.app.api.website_widget import (
+    _assistance_mode,
+    website_behavior,
+    website_contact_methods,
+)
 from backend.app.core.agent_runtime import agent_runtime
 from backend.app.core.config_secrets import reveal_config
 from backend.app.core.database.connection import SessionLocal
@@ -126,6 +130,7 @@ def _conversation(db, channel: AgentChannel, conversation_id: int):
             AIConversation.id == conversation_id,
             AIConversation.company_id == channel.company_id,
             AIConversation.agent_id == channel.agent_id,
+            AIConversation.channel_id == channel.id,
         )
         .first()
     )
@@ -191,21 +196,34 @@ def _is_service_access_error(exc: HTTPException) -> bool:
     return "service subscription" in text or "service plan" in text
 
 
-def _safe_unavailable_message(message: str) -> str:
-    if _dominant_message_language(message) == "en":
-        return "Sorry, the service is temporarily unavailable. I've forwarded your conversation to the team for assistance."
-    return "عذرًا، الخدمة غير متاحة مؤقتًا. تم تحويل محادثتك للفريق لمساعدتك."
+def _safe_unavailable_message(message: str, config: dict) -> str:
+    language = _dominant_message_language(message)
+    mode = _assistance_mode(config)
+    contacts = website_contact_methods(config)
+    if language == "en":
+        if mode == "direct_handoff":
+            return "Sorry, the service is temporarily unavailable. I've forwarded your conversation to the team for assistance."
+        if mode == "contact_only":
+            return "Sorry, the service is temporarily unavailable. You can contact the team here:\n" + "\n".join(contacts)
+        return "Sorry, the service is temporarily unavailable. Please try again later."
+    if mode == "direct_handoff":
+        return "عذرًا، الخدمة غير متاحة مؤقتًا. تم تحويل محادثتك للفريق لمساعدتك."
+    if mode == "contact_only":
+        return "عذرًا، الخدمة غير متاحة مؤقتًا. يمكنك التواصل مع الفريق عبر:\n" + "\n".join(contacts)
+    return "عذرًا، الخدمة غير متاحة مؤقتًا. يرجى المحاولة لاحقًا."
 
 
 def _website_service_fallback(
     db,
     *,
     channel: AgentChannel,
+    config: dict,
     message: str,
     conversation_id: int | None,
     internal_error: HTTPException,
 ):
     db.rollback()
+    mode = _assistance_mode(config)
     conversation = agent_runtime.get_or_create_conversation(
         db=db,
         company_id=channel.company_id,
@@ -226,7 +244,7 @@ def _website_service_fallback(
         role="user",
         content=message.strip(),
     )
-    safe_text = _safe_unavailable_message(message)
+    safe_text = _safe_unavailable_message(message, config)
     assistant_message = AIMessage(
         conversation_id=conversation.id,
         role="assistant",
@@ -234,7 +252,9 @@ def _website_service_fallback(
     )
     db.add(user_message)
     db.add(assistant_message)
-    if not _human_active(db, channel.company_id, conversation.id):
+    if mode == "direct_handoff" and not _human_active(
+        db, channel.company_id, conversation.id
+    ):
         db.add(
             HumanHandoff(
                 company_id=channel.company_id,
@@ -254,6 +274,7 @@ def _website_service_fallback(
         resource_id=channel.id,
         details={
             "conversation_id": conversation.id,
+            "human_assistance_mode": mode,
             "internal_status": internal_error.status_code,
             "internal_detail": internal_error.detail,
         },
@@ -264,7 +285,7 @@ def _website_service_fallback(
     return {
         "conversation_id": conversation.id,
         "visitor_token": issue_website_visitor_token(channel.id, conversation.id),
-        "mode": "human",
+        "mode": "human" if mode == "direct_handoff" else "ai",
         "message": {
             "id": user_message.id,
             "role": "user",
@@ -339,7 +360,7 @@ def website_chat(
         original_prompt = agent.system_prompt
         try:
             language_policy = _website_language_policy(db, channel, data.message)
-            agent.system_prompt = (
+            runtime_prompt = (
                 original_prompt
                 + "\n\n"
                 + website_behavior(config)
@@ -353,12 +374,15 @@ def website_chat(
                     agent_id=channel.agent_id,
                     message=data.message,
                     conversation_id=data.conversation_id,
+                    channel_type="website", channel_id=channel.id,
+                    system_prompt_override=runtime_prompt, commit=False,
                 )
             except HTTPException as exc:
                 if _is_service_access_error(exc):
                     return _website_service_fallback(
                         db,
                         channel=channel,
+                        config=config,
                         message=data.message,
                         conversation_id=data.conversation_id,
                         internal_error=exc,
@@ -457,7 +481,7 @@ def voice_turn(
         agent = agent_runtime.get_agent(db, channel.company_id, channel.agent_id)
         original_prompt = agent.system_prompt or ""
         try:
-            agent.system_prompt = (
+            runtime_prompt = (
                 original_prompt + "\n\n" + build_voice_behavior_prompt(config)
             ).strip()
             result = agent_runtime.chat(
@@ -466,6 +490,9 @@ def voice_turn(
                 agent_id=channel.agent_id,
                 message=data.transcript,
                 conversation_id=data.conversation_id,
+                channel_type="voice", channel_id=channel.id,
+                external_contact_id=data.session_id,
+                system_prompt_override=runtime_prompt, commit=False,
             )
         finally:
             agent.system_prompt = original_prompt

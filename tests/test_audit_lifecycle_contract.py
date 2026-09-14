@@ -2,24 +2,42 @@ from pathlib import Path
 
 
 ADMIN = Path("backend/app/api/admin.py").read_text(encoding="utf-8")
+PRODUCTION = Path("backend/app/api/admin_production.py").read_text(encoding="utf-8")
+LIFECYCLE = Path("backend/app/core/company_lifecycle.py").read_text(encoding="utf-8")
 DELIVERY = Path("backend/app/api/admin_delivery_readiness.py").read_text(encoding="utf-8")
 READINESS = Path("backend/app/core/readiness.py").read_text(encoding="utf-8")
 MAIN = Path("backend/app/main.py").read_text(encoding="utf-8")
 BOOTSTRAP = Path("backend/app/modules/tools/bootstrap.py").read_text(encoding="utf-8")
-AUDIT_FIXES = Path("frontend/admin/core-audit-fixes.js").read_text(encoding="utf-8")
+PRIVACY = Path("frontend/admin/privacy-boundaries.js").read_text(encoding="utf-8")
+SIMPLE_COMPANY = Path("frontend/admin/simple-company.js").read_text(encoding="utf-8")
+COMPANY_USERS = Path("backend/app/api/admin_company_users.py").read_text(encoding="utf-8")
+COMPANY_MODULES = Path("backend/app/api/company_modules.py").read_text(encoding="utf-8-sig")
+COMPANY_PROFILE = Path("backend/app/api/admin_company_profile.py").read_text(encoding="utf-8")
+CHANNELS = Path("backend/app/api/admin_channels.py").read_text(encoding="utf-8")
 
 
 def test_company_activation_is_readiness_gated_and_deactivation_is_emergency_stop():
-    assert "readiness = company_readiness(db, company_id)" in ADMIN
-    assert 'if not readiness["ready"]' in ADMIN
-    assert "Company is not ready to activate" in ADMIN
-    assert "AIAgent.enabled: False" in ADMIN
+    assert "readiness = company_readiness(db, company_id)" in LIFECYCLE
+    assert 'if not readiness["ready"]' in LIFECYCLE
+    assert "CompanyNotReady(readiness)" in LIFECYCLE
+    assert "AIAgent.enabled: False" in LIFECYCLE
+    assert "activate_company(db, company_id)" in ADMIN
+    assert "deactivate_company(db, company_id)" in ADMIN
+
+
+def test_legacy_production_routes_are_compatibility_wrappers():
+    assert "activate_company_state(db, company_id)" in PRODUCTION
+    assert "deactivate_company_state(db, company_id)" in PRODUCTION
+    assert "status_code=409" in PRODUCTION
+    assert "legacy_production_endpoint" in PRODUCTION
+    assert "/admin/companies/${xvondWorkspace.companyId}/status" in PRIVACY
 
 
 def test_company_setup_readiness_uses_configured_not_live_channels():
     assert ".filter(AgentChannel.agent_id == agent.id)" in READINESS
     assert "configured_channels =" in READINESS
     assert "live_channels =" in READINESS
+    assert "unaccepted_enabled_channels =" in READINESS
     assert '"setup_ready": setup_ready' in READINESS
     assert '"ready_for_customer": ready_for_customer' in READINESS
     assert "and configured_channels" in READINESS
@@ -28,7 +46,8 @@ def test_company_setup_readiness_uses_configured_not_live_channels():
 def test_employee_go_live_requires_active_company_and_customer_ready_requires_all_gates():
     assert "Activate the company before the AI employee goes live" in DELIVERY
     assert '"company_active": bool(company.active)' in DELIVERY
-    assert "company.active and agent.enabled and setup_ready and channels[\"live\"]" in DELIVERY
+    assert 'and channels["customer_ready"]' in DELIVERY
+    assert "Complete live channel acceptance before customer handover" in DELIVERY
 
 
 def test_delivery_readiness_is_only_registered_at_its_canonical_prefix():
@@ -53,9 +72,40 @@ def test_unreachable_duplicate_company_admin_module_is_removed():
     assert not Path("backend/app/api/admin_companies.py").exists()
 
 
-def test_admin_pdf_upload_uses_http_only_cookie_session_not_browser_token_storage():
-    assert "uploadPDFKnowledge=async function" in AUDIT_FIXES
-    assert "credentials:'same-origin'" in AUDIT_FIXES
-    override = AUDIT_FIXES.split("uploadPDFKnowledge=async function", 1)[1]
-    assert "localStorage" not in override
-    assert "Authorization" not in override
+def test_admin_pdf_upload_uses_http_only_cookie_session_at_source():
+    assert "async function uploadPDFKnowledge" in SIMPLE_COMPANY
+    uploader = SIMPLE_COMPANY.split("async function uploadPDFKnowledge", 1)[1].split("async function openWhatsAppSetup", 1)[0]
+    assert 'credentials:"same-origin"' in uploader
+    assert "localStorage" not in uploader
+    assert "Authorization" not in uploader
+
+
+def test_sensitive_operator_mutations_are_audited_without_customer_identity_payloads():
+    assert 'action="company_user.created"' in COMPANY_USERS
+    assert '"company_user.activated" if data.active else "company_user.deactivated"' in COMPANY_USERS
+    assert 'details={"role": role, "active": True}' in COMPANY_USERS
+    assert 'details={"role": user.role, "active": data.active}' in COMPANY_USERS
+    audit_sections = COMPANY_USERS.split("audit_service.log(")[1:]
+    assert audit_sections
+    for section in audit_sections:
+        call = section.split(")", 1)[0]
+        assert "email" not in call
+        assert "full_name" not in call
+
+    assert '"company_module.installed"' in COMPANY_MODULES
+    assert '"company_module.enabled"' in COMPANY_MODULES
+    assert '"company_module.disabled"' in COMPANY_MODULES
+    assert 'details={"module_name": item.module_name, "enabled": item.enabled}' in COMPANY_MODULES
+
+    assert 'action="company_profile.updated"' in COMPANY_PROFILE
+    profile_audit = COMPANY_PROFILE.split('action="company_profile.updated"', 1)[1]
+    assert 'details={"changed_fields": sorted(set(changed_fields))}' in profile_audit
+    assert '"phone":' not in profile_audit.split("db.commit()", 1)[0]
+    assert '"email":' not in profile_audit.split("db.commit()", 1)[0]
+
+    assert '"channel.created"' in CHANNELS
+    assert '"channel.updated"' in CHANNELS
+    assert '"channel.whatsapp_configured"' in CHANNELS
+    assert '"channel.deleted"' in CHANNELS
+    assert "access_token" not in CHANNELS.split("def _audit_channel", 1)[1].split("def _has_real_runtime_provider", 1)[0]
+    assert "app_secret" not in CHANNELS.split("def _audit_channel", 1)[1].split("def _has_real_runtime_provider", 1)[0]

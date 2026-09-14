@@ -11,10 +11,10 @@ function xvondTrustedMetaOrigin(origin){
 }
 
 function xvondLoadMetaSdk(appId,graphVersion){
-  if(window.FB){FB.init({appId,cookie:true,xfbml:false,version:graphVersion||'v23.0'});return Promise.resolve()}
+  if(window.FB){FB.init({appId,cookie:true,xfbml:false,version:graphVersion||'v26.0'});return Promise.resolve()}
   if(xvondMetaSdkPromise)return xvondMetaSdkPromise;
   xvondMetaSdkPromise=new Promise((resolve,reject)=>{
-    window.fbAsyncInit=function(){FB.init({appId,cookie:true,xfbml:false,version:graphVersion||'v23.0'});resolve()};
+    window.fbAsyncInit=function(){FB.init({appId,cookie:true,xfbml:false,version:graphVersion||'v26.0'});resolve()};
     const existing=document.getElementById('facebook-jssdk');
     if(existing){existing.addEventListener('load',()=>resolve(),{once:true});return}
     const script=document.createElement('script');
@@ -23,7 +23,19 @@ function xvondLoadMetaSdk(appId,graphVersion){
     script.onerror=()=>reject(new Error('Could not load Meta SDK'));
     document.head.appendChild(script);
   });
-  return xvondMetaSdkPromise;
+  return xvondMetaSdkPromise
+}
+
+function xvondMetaLoginOptions(config){
+  const extras={setup:{}};
+  if(config.feature_type)extras.featureType=config.feature_type;
+  if(config.session_info_version)extras.sessionInfoVersion=String(config.session_info_version);
+  return {
+    config_id:config.config_id,
+    response_type:'code',
+    override_default_response_type:true,
+    extras
+  };
 }
 
 window.addEventListener('message',event=>{
@@ -41,20 +53,11 @@ window.openMetaWhatsAppConnect=async function(agentId){
     if(!config.ready){alert('Meta Embedded Signup is not configured on the Xvond server yet.');return}
     xvondMetaSignupState={agentId:Number(agentId)};xvondMetaSignupMessage=null;
     await xvondLoadMetaSdk(config.app_id,config.graph_api_version);
-    FB.login(async response=>{
+    FB.login(response=>{
       const code=response?.authResponse?.code;
       if(!code){if(response?.status!=='unknown')alert('Meta did not return an authorization code.');return}
-      await xvondFinishMetaWhatsAppSignup(code);
-    },{
-      config_id:config.config_id,
-      response_type:'code',
-      override_default_response_type:true,
-      extras:{
-        setup:{},
-        featureType:'whatsapp_business_app_onboarding',
-        sessionInfoVersion:config.session_info_version||'3'
-      }
-    });
+      xvondFinishMetaWhatsAppSignup(code);
+    },xvondMetaLoginOptions(config));
   }catch(e){alert(e.message||String(e))}
 };
 

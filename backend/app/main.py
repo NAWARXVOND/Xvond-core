@@ -12,7 +12,6 @@ from sqlalchemy import text
 from backend.app.api.auth import router as auth_router
 from backend.app.api.users import router as users_router
 from backend.app.api.admin import router as admin_router
-from backend.app.api.admin_customer_operations import router as admin_customer_operations_router
 from backend.app.api.admin_ai import router as admin_ai_router
 from backend.app.api.admin_ai_employee import router as admin_ai_employee_router
 from backend.app.api.admin_ai_employee_profile import router as admin_ai_employee_profile_router
@@ -40,7 +39,6 @@ from backend.app.api.admin_tools import router as admin_tools_router
 from backend.app.api.admin_automation import router as admin_automation_router
 from backend.app.api.admin_analytics_builder import router as admin_analytics_builder_router
 from backend.app.api.admin_service_billing import router as admin_service_billing_router
-from backend.app.api.admin_service_plan_management import router as admin_service_plan_management_router
 from backend.app.api.internal_workflow_actions import router as internal_workflow_actions_router
 from backend.app.api.public_channels import router as public_channels_router
 from backend.app.api.voice_llm import router as voice_llm_router
@@ -48,8 +46,11 @@ from backend.app.api.website_widget import router as website_widget_router
 from backend.app.api.ai_agents import router as ai_agents_router
 from backend.app.api.company_modules import router as company_modules_router
 from backend.app.api.customer_action_requests import router as customer_action_requests_router
+from backend.app.api.customer_agents import router as customer_agents_router
 from backend.app.api.customer_business import router as customer_business_router
 from backend.app.api.customer_inbox import router as customer_inbox_router
+from backend.app.api.customer_meta_whatsapp import router as customer_meta_whatsapp_router
+from backend.app.api.customer_operations import router as customer_operations_router
 from backend.app.api.customer_portal import router as customer_portal_router
 from backend.app.api.modules import router as modules_router
 from backend.app.api.usage import router as usage_router
@@ -69,6 +70,7 @@ from backend.app.core.rate_limit import rate_limiter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
+CUSTOMER_PORTAL_VERSION = "20260914-audit1"
 
 
 @asynccontextmanager
@@ -132,6 +134,10 @@ async def request_observability(request: Request, call_next):
         reset_request_id(token)
     duration_ms = round((perf_counter() - started) * 1000, 2)
     response.headers["X-Request-ID"] = request_id
+    if request.url.path.startswith(("/customer/", "/admin/", "/auth/", "/ai-agents/")) or request.url.path.endswith(".html") or request.url.path in {"/admin-ui", "/customer-ui", "/login", "/dashboard"}:
+        response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     logger.info(
         "Request completed",
         extra={
@@ -186,7 +192,6 @@ for r in [
     auth_router,
     users_router,
     admin_router,
-    admin_customer_operations_router,
     admin_ai_router,
     admin_ai_employee_router,
     admin_ai_employee_profile_router,
@@ -214,7 +219,6 @@ for r in [
     admin_automation_router,
     admin_analytics_builder_router,
     admin_service_billing_router,
-    admin_service_plan_management_router,
     internal_workflow_actions_router,
     ai_agents_router,
     public_channels_router,
@@ -223,8 +227,11 @@ for r in [
     modules_router,
     company_modules_router,
     customer_action_requests_router,
+    customer_agents_router,
     customer_business_router,
     customer_inbox_router,
+    customer_meta_whatsapp_router,
+    customer_operations_router,
     customer_portal_router,
     usage_router,
     whatsapp_webhook_router,
@@ -276,12 +283,16 @@ def health():
 
 @app.get("/admin-ui")
 def admin_ui():
-    return RedirectResponse(url="/static/admin/index.html")
+    return RedirectResponse(url=f"/static/admin/index.html?v={CUSTOMER_PORTAL_VERSION}")
 
 
 @app.get("/customer-ui")
+@app.get("/login")
+@app.get("/dashboard")
 def customer_ui():
-    return RedirectResponse(url="/static/customer/index.html")
+    return RedirectResponse(
+        url=f"/static/customer/index.html?v={CUSTOMER_PORTAL_VERSION}"
+    )
 
 
 @app.get("/privacy")

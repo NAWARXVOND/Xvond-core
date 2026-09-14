@@ -56,8 +56,7 @@ def add_model(db, provider, model, input_price, output_price, priority=10):
 
 
 def seed_quality_models(db):
-    add_model(db, "groq", "openai/gpt-oss-20b", "0.075", "0.30", priority=5)
-    add_model(db, "groq", "openai/gpt-oss-120b", "0.15", "0.60", priority=5)
+    add_model(db, "openai", "gpt-5-mini", "0.10", "0.60", priority=10)
     add_model(db, "openai", "gpt-5.6-luna", "0.20", "1.20", priority=10)
     add_model(db, "openai", "gpt-5.6-terra", "2.00", "12.00", priority=10)
     add_model(db, "openai", "gpt-5.6-sol", "4.00", "20.00", priority=10)
@@ -75,7 +74,7 @@ def test_starter_cap_never_routes_to_advanced_or_premium(monkeypatch):
     engine, db = make_db()
     try:
         seed_quality_models(db)
-        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["groq", "openai"])
+        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["openai"])
         set_quality_tier_cap(2)
         selections = provider_policy.runtime_selections(
             db,
@@ -86,7 +85,7 @@ def test_starter_cap_never_routes_to_advanced_or_premium(monkeypatch):
         )
         assert selections
         assert all(item.model not in {"gpt-5.6-terra", "gpt-5.6-sol"} for item in selections)
-        assert selections[0].model == "openai/gpt-oss-120b"
+        assert selections[0].model == "gpt-5-mini"
         assert current_quality_tier_cap() is None
         assert effective_required_quality_tier("تحليل عميق للمشكلة") == 4
     finally:
@@ -99,7 +98,7 @@ def test_business_cap_allows_advanced_but_not_premium(monkeypatch):
     engine, db = make_db()
     try:
         seed_quality_models(db)
-        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["groq", "openai"])
+        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["openai"])
         set_quality_tier_cap(3)
         selections = provider_policy.runtime_selections(
             db,
@@ -121,7 +120,7 @@ def test_enterprise_cap_allows_premium(monkeypatch):
     engine, db = make_db()
     try:
         seed_quality_models(db)
-        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["groq", "openai"])
+        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["openai"])
         set_quality_tier_cap(4)
         selections = provider_policy.runtime_selections(
             db,
@@ -151,11 +150,11 @@ def test_company_default_above_plan_cap_is_skipped(monkeypatch):
             )
         )
         db.commit()
-        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["groq", "openai"])
+        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["openai"])
         set_quality_tier_cap(2)
         selections = provider_policy.runtime_selections(db, 44, None, None, message="مرحبا")
         assert all(item.model != "gpt-5.6-sol" for item in selections)
-        assert selections[0].model == "openai/gpt-oss-20b"
+        assert selections[0].model == "gpt-5-mini"
         assert current_quality_tier_cap() is None
     finally:
         set_quality_tier_cap(None)

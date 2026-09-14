@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 from backend.app.core.config_secrets import reveal_config
+from backend.app.core.error_safety import safe_error_label
 from backend.app.core.module_access import require_company_module
 from backend.app.models.company_module import CompanyModule
 from backend.app.modules.ai_agent.models import AIAgent, AIConversation
@@ -99,9 +100,17 @@ def _runtime_description(tool, config: dict) -> str:
                 " If a destination is unconfigured or its capability module is disabled, explain that the operation cannot currently be completed instead of pretending it succeeded."
             )
     if tool.name == "lead":
-        fields = [str(x).strip() for x in (config.get("required_fields") or []) if str(x).strip()]
+        fields = [
+            str(x).strip()
+            for x in (config.get("required_fields") or [])
+            if str(x).strip()
+        ]
         if fields:
-            description += " Required lead details: " + ", ".join(fields) + ". Collect missing details naturally before saving."
+            description += (
+                " Required lead details: "
+                + ", ".join(fields)
+                + ". Collect missing details naturally before saving."
+            )
     return description
 
 
@@ -110,11 +119,20 @@ def _runtime_schema(tool, config: dict) -> dict:
     if tool.name == "action_request":
         enabled = list(_enabled_actions(config).keys())
         if enabled:
-            schema.setdefault("properties", {}).setdefault("action_type", {})["enum"] = enabled
+            schema.setdefault("properties", {}).setdefault("action_type", {})[
+                "enum"
+            ] = enabled
     return schema
 
 
-def _pending_request(db, company_id: int, agent_id: int, conversation_id: int | None, action_type: str, operation: str):
+def _pending_request(
+    db,
+    company_id: int,
+    agent_id: int,
+    conversation_id: int | None,
+    action_type: str,
+    operation: str,
+):
     if conversation_id is None:
         return None
     query = db.query(ActionRequest).filter(
@@ -124,9 +142,24 @@ def _pending_request(db, company_id: int, agent_id: int, conversation_id: int | 
         ActionRequest.action_type == action_type,
     )
     if operation == "execute":
-        query = query.filter(ActionRequest.status.in_(["awaiting_confirmation", "new"]))
+        # Include durable post-execution/unresolved states. A retried AI turn must
+        # resolve the same request so the action tool can return already_executed
+        # or reconciliation-required instead of creating/replaying a side effect.
+        query = query.filter(
+            ActionRequest.status.in_(
+                [
+                    "awaiting_confirmation",
+                    "new",
+                    "confirmed",
+                    "executing",
+                    "external_failed",
+                ]
+            )
+        )
     elif operation == "cancel":
-        query = query.filter(ActionRequest.status.notin_(["completed", "cancelled"]))
+        query = query.filter(
+            ActionRequest.status.notin_(["completed", "cancelled"])
+        )
     return query.order_by(ActionRequest.id.desc()).first()
 
 
@@ -166,7 +199,10 @@ class ToolExecutor:
     def get_agent_tools(self, db, agent_id: int) -> list[dict]:
         assignments = (
             db.query(AgentToolAssignment)
-            .filter(AgentToolAssignment.agent_id == agent_id, AgentToolAssignment.enabled.is_(True))
+            .filter(
+                AgentToolAssignment.agent_id == agent_id,
+                AgentToolAssignment.enabled.is_(True),
+            )
             .order_by(AgentToolAssignment.id.asc())
             .all()
         )
@@ -191,7 +227,8 @@ class ToolExecutor:
 
         generic_active = bool(generic_actions)
         allows_handoff = any(
-            str((action.get("destination") or {}).get("type") or "") == "human_handoff"
+            str((action.get("destination") or {}).get("type") or "")
+            == "human_handoff"
             for action in generic_actions.values()
         )
 
@@ -199,7 +236,11 @@ class ToolExecutor:
         for assignment in assignments:
             if generic_active and assignment.tool_name in LEGACY_BUSINESS_TOOLS:
                 continue
-            if generic_active and assignment.tool_name == "human_handoff" and not allows_handoff:
+            if (
+                generic_active
+                and assignment.tool_name == "human_handoff"
+                and not allows_handoff
+            ):
                 continue
             tool = tool_registry.get(assignment.tool_name)
             if tool is not None:
@@ -217,40 +258,99 @@ class ToolExecutor:
                 )
         return result
 
-    def validate_execution_scope(self, db, company_id: int, agent_id: int, conversation_id: int | None = None) -> str | None:
-        agent = db.query(AIAgent).filter(AIAgent.id == agent_id, AIAgent.company_id == company_id).first()
+    def validate_execution_scope(
+        self,
+        db,
+        company_id: int,
+        agent_id: int,
+        conversation_id: int | None = None,
+    ) -> str | None:
+        agent = (
+            db.query(AIAgent)
+            .filter(
+                AIAgent.id == agent_id,
+                AIAgent.company_id == company_id,
+            )
+            .first()
+        )
         if agent is None:
             return "Agent does not belong to this company"
         if conversation_id is None:
             return None
-        conversation = db.query(AIConversation).filter(
-            AIConversation.id == conversation_id,
-            AIConversation.company_id == company_id,
-            AIConversation.agent_id == agent_id,
-        ).first()
-        return None if conversation is not None else "Conversation does not belong to this company and agent"
+        conversation = (
+            db.query(AIConversation)
+            .filter(
+                AIConversation.id == conversation_id,
+                AIConversation.company_id == company_id,
+                AIConversation.agent_id == agent_id,
+            )
+            .first()
+        )
+        return (
+            None
+            if conversation is not None
+            else "Conversation does not belong to this company and agent"
+        )
 
-    def execute(self, db, company_id: int, agent_id: int, tool_name: str, arguments: dict, conversation_id: int | None = None, approval_granted: bool = False) -> dict:
-        scope_error = self.validate_execution_scope(db, company_id, agent_id, conversation_id)
+    def execute(
+        self,
+        db,
+        company_id: int,
+        agent_id: int,
+        tool_name: str,
+        arguments: dict,
+        conversation_id: int | None = None,
+        approval_granted: bool = False,
+    ) -> dict:
+        scope_error = self.validate_execution_scope(
+            db,
+            company_id,
+            agent_id,
+            conversation_id,
+        )
         if scope_error is not None:
-            return {"success": False, "tool": tool_name, "data": None, "error": scope_error}
+            return {
+                "success": False,
+                "tool": tool_name,
+                "data": None,
+                "error": scope_error,
+            }
         require_company_module(db, company_id, "tools")
-        assignment = db.query(AgentToolAssignment).filter(
-            AgentToolAssignment.agent_id == agent_id,
-            AgentToolAssignment.tool_name == tool_name,
-            AgentToolAssignment.enabled.is_(True),
-        ).first()
+        assignment = (
+            db.query(AgentToolAssignment)
+            .filter(
+                AgentToolAssignment.agent_id == agent_id,
+                AgentToolAssignment.tool_name == tool_name,
+                AgentToolAssignment.enabled.is_(True),
+            )
+            .first()
+        )
         if assignment is None:
-            return {"success": False, "tool": tool_name, "data": None, "error": "Tool is not assigned to this agent"}
+            return {
+                "success": False,
+                "tool": tool_name,
+                "data": None,
+                "error": "Tool is not assigned to this agent",
+            }
         tool = tool_registry.get(tool_name)
         if tool is None:
-            return {"success": False, "tool": tool_name, "data": None, "error": "Tool is not registered"}
+            return {
+                "success": False,
+                "tool": tool_name,
+                "data": None,
+                "error": "Tool is not registered",
+            }
         config = reveal_config(assignment.config) or {}
 
         actual_arguments = dict(arguments or {})
         if tool_name == "action_request":
             action_type = str(actual_arguments.get("action_type") or "").strip()
-            if not action_type or not _action_runtime_ready(db, company_id, config, action_type):
+            if not action_type or not _action_runtime_ready(
+                db,
+                company_id,
+                config,
+                action_type,
+            ):
                 return {
                     "success": False,
                     "tool": tool_name,
@@ -273,7 +373,10 @@ class ToolExecutor:
             return {
                 "success": False,
                 "tool": tool_name,
-                "data": {"approval_request_id": request.id, "status": "pending_approval"},
+                "data": {
+                    "approval_request_id": request.id,
+                    "status": "pending_approval",
+                },
                 "error": "Tool execution requires human approval",
                 "approval_required": True,
             }
@@ -282,7 +385,14 @@ class ToolExecutor:
             operation = str(actual_arguments.get("operation") or "").strip()
             action_type = str(actual_arguments.get("action_type") or "").strip()
             if operation in {"execute", "cancel", "status"} and action_type:
-                pending = _pending_request(db, company_id, agent_id, conversation_id, action_type, operation)
+                pending = _pending_request(
+                    db,
+                    company_id,
+                    agent_id,
+                    conversation_id,
+                    action_type,
+                    operation,
+                )
                 if pending is not None:
                     actual_arguments["request_id"] = pending.id
 
@@ -295,7 +405,10 @@ class ToolExecutor:
         }
         try:
             with db.begin_nested():
-                result = tool.execute(arguments=actual_arguments, context=context)
+                result = tool.execute(
+                    arguments=actual_arguments,
+                    context=context,
+                )
                 db.flush()
             return {
                 "success": bool(result.success),
@@ -304,7 +417,12 @@ class ToolExecutor:
                 "error": result.error,
             }
         except Exception as exc:
-            return {"success": False, "tool": tool_name, "data": None, "error": str(exc)}
+            return {
+                "success": False,
+                "tool": tool_name,
+                "data": None,
+                "error": safe_error_label(exc),
+            }
 
 
 tool_executor = ToolExecutor()

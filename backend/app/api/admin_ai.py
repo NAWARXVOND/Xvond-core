@@ -61,12 +61,13 @@ def test_agent_chat(
             agent_id=agent_id,
             message=data.message,
             conversation_id=data.conversation_id,
+            channel_type="portal_test",
         )
     except HTTPException:
         db.rollback()
         raise
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail="AI diagnostic request failed") from exc
     finally:
         db.close()

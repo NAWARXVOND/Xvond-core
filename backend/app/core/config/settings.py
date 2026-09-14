@@ -21,7 +21,7 @@ class Settings:
         "true" if APP_ENV in {"production", "prod"} else "false",
     ).strip().lower() in {"1", "true", "yes", "on"}
     JWT_SECRET = os.getenv("JWT_SECRET", "")
-    JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+    JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256").strip().upper()
     JWT_ISSUER = os.getenv("JWT_ISSUER", "xvond-core")
     JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "xvond-users")
     ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
@@ -32,7 +32,6 @@ class Settings:
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
     XAI_API_KEY = os.getenv("XAI_API_KEY", "")
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
     N8N_ENABLED = os.getenv("N8N_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
     N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "").strip()
     N8N_SHARED_SECRET = os.getenv("N8N_SHARED_SECRET", "")
@@ -64,6 +63,10 @@ class Settings:
             errors.append("DATABASE_URL is required")
         if not self.JWT_SECRET:
             errors.append("JWT_SECRET is required")
+        if self.JWT_ALGORITHM not in {"HS256"}:
+            errors.append("JWT_ALGORITHM must be HS256")
+        if self.ACCESS_TOKEN_EXPIRE_MINUTES < 5 or self.ACCESS_TOKEN_EXPIRE_MINUTES > 1440:
+            errors.append("ACCESS_TOKEN_EXPIRE_MINUTES must be between 5 and 1440")
         if self.KNOWLEDGE_EMBEDDING_PROVIDER not in {"openai"}:
             errors.append("KNOWLEDGE_EMBEDDING_PROVIDER must be a supported provider")
         if self.N8N_ENABLED:

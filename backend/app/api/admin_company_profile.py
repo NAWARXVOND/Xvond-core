@@ -4,7 +4,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.app.core.company_catalog import (
     company_catalog,
@@ -22,6 +22,7 @@ from backend.app.models.company_profile import CompanyProfile
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.ai_agent.profile_models import AIAgentProfile
+from backend.app.modules.audit.service import audit_service
 from backend.app.modules.knowledge.models import (
     AgentKnowledge,
     KnowledgeChunk,
@@ -56,6 +57,18 @@ class CompanyProfileUpdate(BaseModel):
     service_areas: list = Field(default_factory=list)
     policies: list = Field(default_factory=list)
     business_rules: list = Field(default_factory=list)
+
+    @field_validator("services", "locations", "service_areas", "policies", "business_rules")
+    @classmethod
+    def valid_business_facts(cls, values):
+        if len(values) > 500:
+            raise ValueError("Business information cannot exceed 500 entries per field")
+        for item in values:
+            if not isinstance(item, (str, dict)) or isinstance(item, bool):
+                raise ValueError("Each business fact must be text or a structured object")
+            if len(json.dumps(item, ensure_ascii=False)) > 12000:
+                raise ValueError("A business fact is too long")
+        return values
 
 
 def _clean(value):
@@ -127,13 +140,9 @@ def _validate_working_hours(value: dict | None) -> dict:
             start_time = datetime.strptime(start, "%H:%M")
             end_time = datetime.strptime(end, "%H:%M")
         except ValueError as exc:
-            raise ValueError(
-                f"Working hours for {day} must use HH:MM"
-            ) from exc
+            raise ValueError(f"Working hours for {day} must use HH:MM") from exc
         if end_time <= start_time:
-            raise ValueError(
-                f"Working hours for {day} must end after they start"
-            )
+            raise ValueError(f"Working hours for {day} must end after they start")
         result[day] = {"enabled": True, "start": start, "end": end}
     return result
 
@@ -146,7 +155,7 @@ def _normalize_profile(data: CompanyProfileUpdate) -> dict:
             item for item in additional_languages if item != primary_language
         ]
 
-    return {
+    normalized = {
         "business_type": normalize_business_type(data.business_type),
         "description": _clean(data.description),
         "country": normalize_country(data.country),
@@ -164,6 +173,9 @@ def _normalize_profile(data: CompanyProfileUpdate) -> dict:
         "policies": _clean_list(data.policies),
         "business_rules": _clean_list(data.business_rules),
     }
+    # Omitted fields belong to another editor. Only explicit values may replace
+    # saved facts, including an explicit empty list to clear a field.
+    return {key: value for key, value in normalized.items() if key in data.model_fields_set}
 
 
 def _serialize(company: Company, row: CompanyProfile | None) -> dict:
@@ -208,9 +220,7 @@ def _business_knowledge_content(company: Company, row: CompanyProfile) -> str:
         if value:
             blocks.append(f"{label}: {value}")
     if row.additional_languages:
-        blocks.append(
-            "Additional Languages: " + ", ".join(row.additional_languages)
-        )
+        blocks.append("Additional Languages: " + ", ".join(row.additional_languages))
 
     structured = [
         ("Working Hours", row.working_hours),
@@ -222,9 +232,9 @@ def _business_knowledge_content(company: Company, row: CompanyProfile) -> str:
     ]
     for label, value in structured:
         if value:
-            blocks.append(
-                f"{label}:\n{json.dumps(value, ensure_ascii=False, indent=2)}"
-            )
+            blocks.append(f"{label}:\n{json.dumps(value, ensure_ascii=False, indent=2)}")
+    if not row.services:
+        blocks.append("Services: Not saved in the company profile. Do not invent services or infer them from business type or past chat. Only describe services supported by current enabled business knowledge; otherwise ask for confirmation.")
     return "\n\n".join(blocks).strip()
 
 
@@ -334,7 +344,7 @@ def update_company_profile(
 ):
     db = SessionLocal()
     try:
-        company = db.query(Company).filter(Company.id == company_id).first()
+        company = db.query(Company).filter(Company.id == company_id).with_for_update().first()
         if company is None:
             raise HTTPException(404, "Company not found")
 
@@ -349,6 +359,9 @@ def update_company_profile(
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
+        changed_fields = []
+        if company.name != company_name:
+            changed_fields.append("company_name")
         company.name = company_name
         row = (
             db.query(CompanyProfile)
@@ -358,6 +371,11 @@ def update_company_profile(
         if row is None:
             row = CompanyProfile(company_id=company_id)
             db.add(row)
+            changed_fields.extend(normalized.keys())
+        else:
+            for key, value in normalized.items():
+                if getattr(row, key, None) != value:
+                    changed_fields.append(key)
 
         for key, value in normalized.items():
             setattr(row, key, value)
@@ -373,6 +391,16 @@ def update_company_profile(
             profile.business_type = row.business_type
 
         document = sync_company_business_knowledge(db, company, row)
+        if changed_fields:
+            audit_service.log(
+                db=db,
+                action="company_profile.updated",
+                resource_type="company_profile",
+                resource_id=row.id,
+                user_id=current_admin.id,
+                company_id=company_id,
+                details={"changed_fields": sorted(set(changed_fields))},
+            )
         db.commit()
         result = _serialize(company, row)
         result.update(

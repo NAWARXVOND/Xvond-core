@@ -22,6 +22,9 @@ def test_encrypted_whatsapp_channel_is_reported_configured():
     assert channel.config["access_token"].startswith(ENCRYPTED_PREFIX)
     result = serialize_channel(channel)
     assert result["configured"] is True
+    assert result["connected"] is False
+    assert result["connection_status"] == "configured_only"
+    assert result["meta_onboarding_complete"] is False
     assert "access_token" not in result["config"]
 
 

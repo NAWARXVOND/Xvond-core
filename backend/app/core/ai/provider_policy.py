@@ -106,8 +106,9 @@ def _candidate_score(model: AIModelRecord, provider: AIProviderRecord, stats: di
     return (
         1 if provider.name == "mock" else 0,
         round(failure_rate, 4),
-        price,
+        0 if total else 1,
         round(average_latency, 2),
+        price,
         int(provider.priority or 100),
         int(model.id or 0),
     )
@@ -226,10 +227,10 @@ def runtime_selections(
     """Build a package-safe provider/model route and consume the request-local cap.
 
     Company-pinned models remain first when they fit the active package ceiling.
-    In automatic mode Xvond ranks eligible models by reliability, cost, latency
-    and admin priority. The package cap is needed only while this route is built;
-    clearing it here prevents one company/request from leaking commercial routing
-    state into a later request that reuses the same execution context.
+    In automatic mode Xvond ranks eligible models by reliability, observed latency,
+    cost and admin priority. The package cap is needed only while this route is
+    built; clearing it here prevents one company/request from leaking commercial
+    routing state into a later request that reuses the same execution context.
     """
     try:
         return _runtime_selections_with_active_cap(

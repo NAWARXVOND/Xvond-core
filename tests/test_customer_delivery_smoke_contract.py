@@ -30,11 +30,14 @@ def test_customer_delivery_flow_requires_knowledge_and_configured_channel_before
     assert "switchWorkspaceTab('channels')" in GUIDE
 
 
-def test_customer_delivery_flow_requires_live_channel_only_after_employee_goes_live():
+def test_customer_delivery_flow_separates_live_transport_from_customer_handover():
     assert 'elif not channels["live"]' in READINESS_API
-    assert 'blockers.append("Activate at least one customer channel")' in READINESS_API
-    assert 'company.active and agent.enabled and setup_ready and channels["live"]' in READINESS_API
+    assert 'blockers.append("Activate at least one connected customer channel")' in READINESS_API
+    assert 'elif not channels["customer_ready"]' in READINESS_API
+    assert 'blockers.append("Complete live channel acceptance before customer handover")' in READINESS_API
+    assert 'and channels["customer_ready"]' in READINESS_API
     assert '"live_channels": channels["live"]' in READINESS_API
+    assert '"customer_ready_channels": channels["customer_ready"]' in READINESS_API
 
 
 def test_customer_delivery_flow_requires_company_activation_before_employee_go_live():

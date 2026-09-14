@@ -1,4 +1,5 @@
 from backend.app.modules.ai_agent.models import AIConversation
+from backend.app.modules.channels.models import AgentChannel
 
 
 def bind_conversation_source(
@@ -11,6 +12,9 @@ def bind_conversation_source(
     channel_id: int | None = None,
     external_contact_id: str | None = None,
 ) -> AIConversation:
+    # Source identity is immutable once established. Lock the row so two
+    # simultaneous first messages cannot both observe an unbound conversation
+    # and race to attach different channels/contacts.
     conversation = (
         db.query(AIConversation)
         .filter(
@@ -18,6 +22,7 @@ def bind_conversation_source(
             AIConversation.company_id == company_id,
             AIConversation.agent_id == agent_id,
         )
+        .with_for_update()
         .first()
     )
     if conversation is None:
@@ -26,6 +31,21 @@ def bind_conversation_source(
     normalized_type = str(channel_type or "").strip().lower()
     if not normalized_type:
         raise ValueError("Conversation channel type is required")
+
+    if channel_id is not None:
+        channel = db.query(AgentChannel).filter(
+            AgentChannel.id == channel_id,
+            AgentChannel.company_id == company_id,
+            AgentChannel.agent_id == agent_id,
+            AgentChannel.channel_type == normalized_type,
+        ).first()
+        if channel is None:
+            raise ValueError("Channel does not belong to this company and employee")
+    contact = str(external_contact_id or "").strip()
+    if len(contact) > 200:
+        raise ValueError("External contact identity is too long")
+    if conversation.external_contact_id and contact and conversation.external_contact_id != contact:
+        raise ValueError("Conversation is already bound to another contact")
 
     if conversation.channel_type and conversation.channel_type != normalized_type:
         raise ValueError("Conversation is already bound to another channel type")
@@ -37,7 +57,7 @@ def bind_conversation_source(
         conversation.channel_id = conversation.channel_id or channel_id
     if external_contact_id:
         conversation.external_contact_id = (
-            conversation.external_contact_id or str(external_contact_id).strip()[:200]
+            conversation.external_contact_id or contact
         )
     db.flush()
     return conversation

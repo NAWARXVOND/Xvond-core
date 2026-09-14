@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends
@@ -14,6 +14,7 @@ from backend.app.modules.ai_agent.models import AIAgent, AIConversation, AIUsage
 from backend.app.modules.billing.service_limits import service_limits
 from backend.app.modules.billing.service_models import ServicePlan, ServiceSubscription
 from backend.app.modules.channels.models import AgentChannel
+from backend.app.modules.customer_ops.models import NotificationEvent
 from backend.app.modules.integrations.models import CompanyIntegration
 from backend.app.modules.knowledge.models import KnowledgeDocument
 from backend.app.modules.solutions.catalog import SERVICE_CATALOG
@@ -21,8 +22,23 @@ from backend.app.modules.solutions.portal import (
     BUSINESS_CAPABILITY_MODULES,
     build_customer_portal_navigation,
 )
+from backend.app.modules.tools.business_models import ActionRequest, HumanHandoff
 
 router = APIRouter(prefix="/customer", tags=["Customer Portal"])
+
+MANAGER_ROLES = {"owner", "admin", "manager"}
+LIVE_CUSTOMER_CHANNELS = ("whatsapp", "website", "voice", "instagram")
+OPEN_OPERATION_STATES = {
+    "pending",
+    "awaiting_confirmation",
+    "in_progress",
+    "processing",
+    "executing",
+    "external_failed",
+    "cancelling",
+    "pending_human",
+}
+ACTIVE_HANDOFF_STATES = {"pending", "in_progress"}
 
 
 def _plain_limit(value):
@@ -75,12 +91,108 @@ def _service_data(db, subscription: ServiceSubscription, plan: ServicePlan) -> d
     }
 
 
+def _limit_warning_count(services: list[dict]) -> int:
+    warnings = 0
+    for service in services:
+        for row in (service.get("usage") or {}).values():
+            try:
+                limit = Decimal(str(row.get("limit") or 0))
+                used = Decimal(str(row.get("used") or 0))
+            except (InvalidOperation, ValueError, TypeError):
+                continue
+            if limit > 0 and used >= limit:
+                warnings += 1
+    return warnings
+
+
+def _live_conversation_query(db, company_id: int):
+    """Customer-facing operational counts must match the default live Inbox.
+
+    Test Console and legacy/unclassified conversations remain available only via
+    explicit diagnostic filters and must never inflate production dashboard data.
+    """
+    return db.query(AIConversation).filter(
+        AIConversation.company_id == company_id,
+        AIConversation.channel_type.in_(LIVE_CUSTOMER_CHANNELS),
+    )
+
+
+def _active_live_handoff_count(db, company_id: int) -> int:
+    return int(
+        db.query(func.count(HumanHandoff.id))
+        .join(AIConversation, AIConversation.id == HumanHandoff.conversation_id)
+        .filter(
+            HumanHandoff.company_id == company_id,
+            AIConversation.company_id == company_id,
+            AIConversation.channel_type.in_(LIVE_CUSTOMER_CHANNELS),
+            HumanHandoff.status.in_(ACTIVE_HANDOFF_STATES),
+        )
+        .scalar()
+        or 0
+    )
+
+
+def _company_portal_state(company: Company) -> dict:
+    return {
+        "id": company.id,
+        "name": company.name,
+        "active": company.active,
+        "lifecycle_status": company.lifecycle_status,
+        "lifecycle_updated_at": company.lifecycle_updated_at,
+    }
+
+
+def _staff_overview(db, current_user: User, company: Company) -> dict:
+    agents = db.query(AIAgent).filter(AIAgent.company_id == company.id).all()
+    channels = db.query(AgentChannel).filter(AgentChannel.company_id == company.id).all()
+    conversation_count = _live_conversation_query(db, company.id).count()
+    active_handoffs = _active_live_handoff_count(db, company.id)
+    return {
+        "company": _company_portal_state(company),
+        "services": [],
+        "subscription": None,
+        "portal": {
+            "access_level": "operator",
+            "navigation": [
+                {
+                    "id": "dashboard",
+                    "label": "Overview",
+                    "loader": "dashboard",
+                    "group": "Workspace",
+                },
+                {
+                    "id": "conversations",
+                    "label": "Customer Inbox",
+                    "loader": "conversations",
+                    "group": "Operations",
+                },
+            ],
+            "active_services": [],
+            "capabilities": [],
+        },
+        "billing": {},
+        "summary": {
+            "agents": len(agents),
+            "active_agents": sum(1 for item in agents if item.enabled),
+            "channels": len(channels),
+            "active_channels": sum(1 for item in channels if item.enabled),
+            "conversations": int(conversation_count),
+            "active_handoffs": int(active_handoffs),
+        },
+        "channels": [],
+        "integrations": [],
+    }
+
+
 @router.get("/overview")
 def overview(current_user: User = Depends(require_customer_user)):
     db = SessionLocal()
     try:
         company_id = current_user.company_id
         company = db.query(Company).filter(Company.id == company_id).first()
+
+        if current_user.role not in MANAGER_ROLES:
+            return _staff_overview(db, current_user, company)
 
         service_rows = (
             db.query(ServiceSubscription, ServicePlan)
@@ -108,6 +220,15 @@ def overview(current_user: User = Depends(require_customer_user)):
             active_service_codes,
             enabled_modules,
         )
+        navigation.insert(
+            max(len(navigation) - 1, 1),
+            {
+                "id": "users",
+                "label": "Users",
+                "loader": "users",
+                "group": "Account",
+            },
+        )
 
         agents = db.query(AIAgent).filter(AIAgent.company_id == company_id).all()
         channels = db.query(AgentChannel).filter(AgentChannel.company_id == company_id).all()
@@ -118,18 +239,43 @@ def overview(current_user: User = Depends(require_customer_user)):
             func.count(AIUsage.id),
             func.coalesce(func.sum(AIUsage.total_tokens), 0),
         ).filter(AIUsage.company_id == company_id).first()
+        day_ago = datetime.utcnow() - timedelta(hours=24)
+        open_operations = (
+            db.query(func.count(ActionRequest.id))
+            .filter(
+                ActionRequest.company_id == company_id,
+                ActionRequest.status.in_(OPEN_OPERATION_STATES),
+            )
+            .scalar()
+            or 0
+        )
+        active_handoffs = _active_live_handoff_count(db, company_id)
+        unread_notifications = (
+            db.query(func.count(NotificationEvent.id))
+            .filter(
+                NotificationEvent.company_id == company_id,
+                NotificationEvent.read.is_(False),
+            )
+            .scalar()
+            or 0
+        )
+        failed_ai_24h = (
+            db.query(func.count(AIUsage.id))
+            .filter(
+                AIUsage.company_id == company_id,
+                AIUsage.status == "failed",
+                AIUsage.created_at >= day_ago,
+            )
+            .scalar()
+            or 0
+        )
 
         return {
-            "company": {
-                "id": company.id,
-                "name": company.name,
-                "active": company.active,
-            },
+            "company": _company_portal_state(company),
             "services": services,
-            # Compatibility for older customer UI consumers while the service
-            # list is the canonical billing representation.
             "subscription": ai_service,
             "portal": {
+                "access_level": "manager",
                 "navigation": navigation,
                 "active_services": active_service_codes,
                 "capabilities": sorted(
@@ -137,9 +283,6 @@ def overview(current_user: User = Depends(require_customer_user)):
                 ),
             },
             "billing": {
-                # Stable contract for a future card-payment gateway. The portal
-                # already has a Billing surface; a provider can populate these
-                # fields later without redesigning navigation.
                 "online_payments_enabled": False,
                 "payment_provider": None,
                 "payment_method": None,
@@ -147,9 +290,7 @@ def overview(current_user: User = Depends(require_customer_user)):
             "summary": {
                 "agents": len(agents),
                 "active_agents": sum(1 for item in agents if item.enabled),
-                "conversations": db.query(AIConversation).filter(
-                    AIConversation.company_id == company_id
-                ).count(),
+                "conversations": _live_conversation_query(db, company_id).count(),
                 "requests": int(usage[0] or 0),
                 "tokens": int(usage[1] or 0),
                 "knowledge_documents": db.query(KnowledgeDocument).filter(
@@ -159,6 +300,11 @@ def overview(current_user: User = Depends(require_customer_user)):
                 "channels": len(channels),
                 "active_channels": sum(1 for item in channels if item.enabled),
                 "integrations": len(integrations),
+                "open_operations": int(open_operations),
+                "active_handoffs": int(active_handoffs),
+                "unread_notifications": int(unread_notifications),
+                "failed_ai_requests_24h": int(failed_ai_24h),
+                "service_limit_warnings": _limit_warning_count(services),
             },
             "channels": [
                 {

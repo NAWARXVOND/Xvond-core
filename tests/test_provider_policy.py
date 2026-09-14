@@ -35,14 +35,16 @@ def close_db(engine, db):
 
 
 def add_provider(db, provider, model, enabled=True, priority=10, input_price="0", output_price="0"):
-    db.add(
-        AIProviderRecord(
-            name=provider,
-            display_name=provider,
-            enabled=enabled,
-            priority=priority,
+    existing = db.query(AIProviderRecord).filter(AIProviderRecord.name == provider).first()
+    if existing is None:
+        db.add(
+            AIProviderRecord(
+                name=provider,
+                display_name=provider,
+                enabled=enabled,
+                priority=priority,
+            )
         )
-    )
     db.add(
         AIModelRecord(
             provider_name=provider,
@@ -59,12 +61,12 @@ def add_provider(db, provider, model, enabled=True, priority=10, input_price="0"
 def test_provider_model_must_be_loaded_and_enabled(monkeypatch):
     engine, db = make_db()
     try:
-        add_provider(db, "groq", "model-a")
-        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["groq"])
-        selected = provider_policy.require_provider_model(db, "groq", "model-a")
-        assert selected.provider == "groq"
+        add_provider(db, "openai", "model-a")
+        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["openai"])
+        selected = provider_policy.require_provider_model(db, "openai", "model-a")
+        assert selected.provider == "openai"
         assert selected.model == "model-a"
-        assert not provider_policy.provider_model_available(db, "groq", "missing")
+        assert not provider_policy.provider_model_available(db, "openai", "missing")
     finally:
         close_db(engine, db)
 
@@ -72,24 +74,24 @@ def test_provider_model_must_be_loaded_and_enabled(monkeypatch):
 def test_runtime_selections_adds_enabled_company_fallback(monkeypatch):
     engine, db = make_db()
     try:
-        add_provider(db, "groq", "primary-model")
-        add_provider(db, "openai", "fallback-model")
+        add_provider(db, "openai", "primary-model")
+        add_provider(db, "anthropic", "fallback-model")
         db.add(
             CompanyAIProfile(
                 company_id=42,
-                default_provider="groq",
+                default_provider="openai",
                 default_model="primary-model",
                 allow_fallback=True,
-                fallback_provider="openai",
+                fallback_provider="anthropic",
                 fallback_model="fallback-model",
             )
         )
         db.commit()
-        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["groq", "openai"])
-        selections = provider_policy.runtime_selections(db, 42, "groq", "primary-model")
+        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["openai", "anthropic"])
+        selections = provider_policy.runtime_selections(db, 42, "openai", "primary-model")
         assert [(item.provider, item.model) for item in selections] == [
-            ("groq", "primary-model"),
-            ("openai", "fallback-model"),
+            ("openai", "primary-model"),
+            ("anthropic", "fallback-model"),
         ]
     finally:
         close_db(engine, db)
@@ -98,19 +100,19 @@ def test_runtime_selections_adds_enabled_company_fallback(monkeypatch):
 def test_disabled_fallback_is_not_selected(monkeypatch):
     engine, db = make_db()
     try:
-        add_provider(db, "groq", "primary-model")
-        add_provider(db, "openai", "fallback-model", enabled=False)
+        add_provider(db, "openai", "primary-model")
+        add_provider(db, "anthropic", "fallback-model", enabled=False)
         db.add(
             CompanyAIProfile(
                 company_id=7,
                 allow_fallback=True,
-                fallback_provider="openai",
+                fallback_provider="anthropic",
                 fallback_model="fallback-model",
             )
         )
         db.commit()
-        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["groq", "openai"])
-        selections = provider_policy.runtime_selections(db, 7, "groq", "primary-model")
+        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["openai", "anthropic"])
+        selections = provider_policy.runtime_selections(db, 7, "openai", "primary-model")
         assert len(selections) == 1
     finally:
         close_db(engine, db)
@@ -119,19 +121,19 @@ def test_disabled_fallback_is_not_selected(monkeypatch):
 def test_runtime_selections_prefers_cheapest_reliable_candidates(monkeypatch):
     engine, db = make_db()
     try:
-        add_provider(db, "groq", "groq-model", priority=40, input_price="0.2", output_price="0.4")
         add_provider(db, "openai", "openai-model", priority=10, input_price="1", output_price="2")
         add_provider(db, "anthropic", "claude-model", priority=20, input_price="1", output_price="3")
         add_provider(db, "google", "gemini-model", priority=30, input_price="0.1", output_price="0.2")
+        add_provider(db, "xai", "xai-model", priority=40, input_price="0.2", output_price="0.4")
         monkeypatch.setattr(
             provider_policy.ai_engine,
             "list_providers",
-            lambda: ["groq", "openai", "anthropic", "google"],
+            lambda: ["openai", "anthropic", "google", "xai"],
         )
         selections = provider_policy.runtime_selections(db, 99, None, None)
         assert [(item.provider, item.model) for item in selections] == [
             ("google", "gemini-model"),
-            ("groq", "groq-model"),
+            ("xai", "xai-model"),
             ("openai", "openai-model"),
             ("anthropic", "claude-model"),
         ]
@@ -166,8 +168,7 @@ def test_company_default_precedes_automatic_route(monkeypatch):
 
 
 def test_quality_tiers_match_commercial_model_bands():
-    assert model_quality_tier("groq", "openai/gpt-oss-20b") == 1
-    assert model_quality_tier("groq", "openai/gpt-oss-120b") == 2
+    assert model_quality_tier("openai", "gpt-5-mini") == 2
     assert model_quality_tier("openai", "gpt-5.6-luna") == 2
     assert model_quality_tier("openai", "gpt-5.6-terra") == 3
     assert model_quality_tier("openai", "gpt-5.6-sol") == 4
@@ -191,9 +192,9 @@ def test_runtime_message_classifier_ignores_grounding_policy_keywords():
 def test_advanced_request_filters_out_weak_models(monkeypatch):
     engine, db = make_db()
     try:
-        add_provider(db, "groq", "openai/gpt-oss-20b", priority=5, input_price="0.075", output_price="0.30")
+        add_provider(db, "openai", "gpt-5.6-luna", priority=5, input_price="0.20", output_price="1.20")
         add_provider(db, "openai", "gpt-5.6-terra", priority=10, input_price="2", output_price="12")
-        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["groq", "openai"])
+        monkeypatch.setattr(provider_policy.ai_engine, "list_providers", lambda: ["openai"])
         selections = provider_policy.runtime_selections(
             db,
             77,
