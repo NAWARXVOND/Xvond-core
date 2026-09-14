@@ -16,6 +16,69 @@ router = APIRouter(prefix="/admin/dashboard", tags=["Xvond Admin - Dashboard"])
 UNRESOLVED_EXTERNAL = {"executing", "external_failed", "cancelling"}
 
 
+def _attention_items(db, day_ago: datetime) -> list[dict]:
+    failed_rows = (
+        db.query(AIUsage.company_id, func.count(AIUsage.id))
+        .filter(
+            AIUsage.status == "failed",
+            AIUsage.created_at >= day_ago,
+        )
+        .group_by(AIUsage.company_id)
+        .all()
+    )
+    unresolved_rows = (
+        db.query(ActionRequest.company_id, func.count(ActionRequest.id))
+        .filter(ActionRequest.status.in_(UNRESOLVED_EXTERNAL))
+        .group_by(ActionRequest.company_id)
+        .all()
+    )
+    company_ids = {
+        int(company_id)
+        for company_id, _count in [*failed_rows, *unresolved_rows]
+        if company_id is not None
+    }
+    names = {}
+    if company_ids:
+        names = {
+            company.id: company.name
+            for company in db.query(Company).filter(Company.id.in_(company_ids)).all()
+        }
+
+    items = []
+    for company_id, count in unresolved_rows:
+        items.append(
+            {
+                "type": "external_operation",
+                "severity": "critical",
+                "company_id": int(company_id),
+                "company_name": names.get(company_id, f"Company #{company_id}"),
+                "count": int(count or 0),
+                "tab": "overview",
+                "title": "External operations need reconciliation",
+            }
+        )
+    for company_id, count in failed_rows:
+        items.append(
+            {
+                "type": "ai_failure",
+                "severity": "warning",
+                "company_id": int(company_id),
+                "company_name": names.get(company_id, f"Company #{company_id}"),
+                "count": int(count or 0),
+                "tab": "usage",
+                "title": "AI requests failed in the last 24 hours",
+            }
+        )
+    items.sort(
+        key=lambda item: (
+            0 if item["severity"] == "critical" else 1,
+            -item["count"],
+            item["company_id"],
+        )
+    )
+    return items[:20]
+
+
 @router.get("/summary")
 def summary(current_admin: User = Depends(require_xvond_admin)):
     db = SessionLocal()
@@ -104,6 +167,7 @@ def summary(current_admin: User = Depends(require_xvond_admin)):
                 "failed_ai_requests_24h": failed_ai_24h,
                 "unresolved_external_operations": unresolved_external,
             },
+            "attention_items": _attention_items(db, day_ago),
         }
     finally:
         db.close()
