@@ -4,7 +4,7 @@ from sqlalchemy import func, or_
 
 from backend.app.core.config_secrets import reveal_config
 from backend.app.core.database.connection import SessionLocal
-from backend.app.core.dependencies import require_customer_manager
+from backend.app.core.dependencies import require_customer_operator
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.customer_access import can_view_conversations
 from backend.app.modules.ai_agent.factory_models import AgentConfig
@@ -271,7 +271,7 @@ def list_inbox(
     agent_id: int | None = None,
     channel_type: str | None = None,
     search: str | None = None,
-    current_user: User = Depends(require_customer_manager),
+    current_user: User = Depends(require_customer_operator),
 ):
     db = SessionLocal()
     try:
@@ -394,7 +394,7 @@ def list_inbox(
 @router.get("/{conversation_id}")
 def inbox_conversation(
     conversation_id: int,
-    current_user: User = Depends(require_customer_manager),
+    current_user: User = Depends(require_customer_operator),
 ):
     db = SessionLocal()
     try:
@@ -438,7 +438,7 @@ def inbox_conversation(
 @router.post("/{conversation_id}/take-over")
 def take_over_conversation(
     conversation_id: int,
-    current_user: User = Depends(require_customer_manager),
+    current_user: User = Depends(require_customer_operator),
 ):
     db = SessionLocal()
     try:
@@ -500,7 +500,7 @@ def take_over_conversation(
 @router.post("/{conversation_id}/return-ai")
 def return_conversation_to_ai(
     conversation_id: int,
-    current_user: User = Depends(require_customer_manager),
+    current_user: User = Depends(require_customer_operator),
 ):
     db = SessionLocal()
     try:
@@ -548,7 +548,7 @@ def return_conversation_to_ai(
 def send_human_reply(
     conversation_id: int,
     data: HumanReply,
-    current_user: User = Depends(require_customer_manager),
+    current_user: User = Depends(require_customer_operator),
 ):
     db = SessionLocal()
     try:
