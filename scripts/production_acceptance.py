@@ -16,6 +16,7 @@ from backend.app.core.ai.routing_quality import set_quality_tier_cap
 from backend.app.core.config.settings import settings
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.error_safety import safe_error_label
+from backend.app.core.n8n_gateway import n8n_gateway
 from backend.app.core.readiness import company_readiness
 from backend.app.modules.ai_agent.models import AIAgent, AIUsage
 from backend.app.modules.billing.limits import limits_service
@@ -23,6 +24,7 @@ from backend.app.modules.channels.whatsapp_models import WhatsAppOutboundDeliver
 from backend.app.modules.channels.whatsapp_queue import whatsapp_job_queue
 from backend.app.modules.providers.models import AIModelRecord, AIProviderRecord
 from backend.app.modules.tools.business_models import ActionRequest
+from backend.app.modules.tools.models import AgentToolAssignment
 
 
 UNRESOLVED_EXTERNAL = {"executing", "external_failed", "cancelling"}
@@ -69,6 +71,69 @@ def _backup_checks() -> dict:
         "ok": bool(local["ok"] and offsite["ok"]),
         "local": local,
         "offsite": offsite,
+    }
+
+
+def _workflow_engine_check(db, *, company_id: int, agent_id: int) -> dict:
+    """Verify the external execution plane when this employee can run actions.
+
+    The registered live business-action tool is ``action_request``. A customer
+    must never be declared production-ready for bookings/orders/CRM/POS/etc. when
+    that tool is assigned but the Workflow Engine cannot execute its safe
+    ``health_check`` contract.
+    """
+
+    assigned = (
+        db.query(AgentToolAssignment)
+        .filter(
+            AgentToolAssignment.agent_id == agent_id,
+            AgentToolAssignment.tool_name == "action_request",
+            AgentToolAssignment.enabled.is_(True),
+        )
+        .first()
+    )
+    if assigned is None:
+        return {
+            "ok": True,
+            "required": False,
+            "configured": n8n_gateway.configured(),
+            "status": "not_required",
+        }
+
+    if not n8n_gateway.configured():
+        return {
+            "ok": False,
+            "required": True,
+            "configured": False,
+            "status": "not_configured",
+            "error": "Workflow Engine is required by this AI employee but is not configured",
+        }
+
+    try:
+        result = n8n_gateway.execute(
+            company_id=company_id,
+            agent_id=agent_id,
+            conversation_id=None,
+            action="health_check",
+            data={"source": "production_acceptance"},
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "required": True,
+            "configured": True,
+            "status": "unreachable",
+            "error": safe_error_label(exc),
+        }
+
+    data = result.get("data") if isinstance(result, dict) else None
+    workflow_status = str((data or {}).get("status") or "").strip().lower()
+    healthy = bool(result.get("success")) and workflow_status == "ok"
+    return {
+        "ok": healthy,
+        "required": True,
+        "configured": True,
+        "status": "healthy" if healthy else "invalid_health_response",
     }
 
 
@@ -208,7 +273,18 @@ def check_release(
             ).first()
             if agent is None:
                 checks["routing"] = {"ok": False, "error": "AI employee not found"}
+                checks["workflow_engine"] = {
+                    "ok": False,
+                    "required": False,
+                    "configured": n8n_gateway.configured(),
+                    "status": "agent_not_found",
+                }
             else:
+                checks["workflow_engine"] = _workflow_engine_check(
+                    db,
+                    company_id=company_id,
+                    agent_id=agent.id,
+                )
                 try:
                     if settings.is_production:
                         _subscription, plan, quality_cap = limits_service.apply_ai_quality_limit(

@@ -66,8 +66,10 @@ def _state(
     issue: str | None,
     checked_at: str | None = None,
     meta_error_code: int | None = None,
+    coexistence_ready: bool | None = None,
+    echo_received: bool | None = None,
 ) -> dict:
-    return {
+    state = {
         "connected": connected,
         "meta_onboarding_complete": registered,
         "connection_status": status,
@@ -75,6 +77,11 @@ def _state(
         "connection_checked_at": checked_at,
         "meta_error_code": meta_error_code,
     }
+    if coexistence_ready is not None:
+        state["coexistence_ready"] = coexistence_ready
+    if echo_received is not None:
+        state["echo_received"] = echo_received
+    return state
 
 
 def _cache_key(config: dict, token: str) -> tuple[str, ...]:
@@ -138,9 +145,12 @@ def whatsapp_connection_state(
 ) -> dict:
     """Return a safe, truthful WhatsApp/Meta connection state.
 
-    ``connected`` is true only after Embedded Signup data exists and Meta
-    accepts the stored token for the stored phone number. Raw Meta responses
-    and credentials are never returned.
+    ``connected`` describes whether Xvond can safely use the Meta transport for
+    the configured number. For WhatsApp Business App Coexistence,
+    ``coexistence_ready`` separately records whether a real Business App echo
+    has already been observed. A first human reply is allowed to become that
+    evidence; requiring the echo before AI traffic would deadlock a correctly
+    subscribed new Coexistence connection.
     """
 
     config = config or {}
@@ -273,27 +283,80 @@ def whatsapp_connection_state(
         )
 
     if config.get("coexistence") is True:
-        # Phone/token validity alone says nothing about Business App events.
-        # Refresh app + WABA evidence for legacy connections as well as signup.
+        # Transport validity is not enough for safe Business App coexistence.
+        # The app must be subscribed to both inbound messages and SMB echoes.
+        # A real echo is tracked separately as proof that automatic human
+        # takeover has been observed; it is not a prerequisite for the first
+        # AI reply, otherwise a freshly connected number deadlocks forever.
         from backend.app.api.admin_meta_whatsapp import (
-            _coexistence_subscription_evidence, _graph_request, _graph_url, _meta_settings,
+            _coexistence_subscription_evidence,
+            _graph_request,
+            _graph_url,
+            _meta_settings,
         )
+
         meta = _meta_settings()
         try:
             evidence = _coexistence_subscription_evidence(meta)
-            subscriptions = _graph_request("GET", _graph_url(graph_api_version, f"{urllib.parse.quote(str(config.get('waba_id') or ''), safe='')}/subscribed_apps"), access_token=access_token)
-            subscribed = any(str((row.get("whatsapp_business_api_data") or row).get("id")) == str(meta["app_id"]) for row in subscriptions.get("data", []))
+            subscriptions = _graph_request(
+                "GET",
+                _graph_url(
+                    graph_api_version,
+                    f"{urllib.parse.quote(str(config.get('waba_id') or ''), safe='')}/subscribed_apps",
+                ),
+                access_token=access_token,
+            )
+            subscribed = any(
+                str((row.get("whatsapp_business_api_data") or row).get("id"))
+                == str(meta["app_id"])
+                for row in subscriptions.get("data", [])
+            )
             fields = set(evidence["subscribed_webhook_fields"])
             setup_ok = subscribed and {"messages", "smb_message_echoes"}.issubset(fields)
         except Exception:
             setup_ok = False
+
         echo_seen = bool(config.get("coexistence_echo_received_at"))
-        if not setup_ok or not echo_seen:
-            state = _state(connected=False, registered=True,
-                status="coexistence_setup_required" if not setup_ok else "coexistence_echo_pending",
-                issue="Verify Meta app and WABA subscriptions for messages and smb_message_echoes." if not setup_ok else "Send a reply from WhatsApp Business App to verify automatic human takeover.", checked_at=_checked_at())
-            state.update(coexistence_ready=False, echo_received=echo_seen)
-            return _store(key, state)
+        if not setup_ok:
+            return _store(
+                key,
+                _state(
+                    connected=False,
+                    registered=True,
+                    status="coexistence_setup_required",
+                    issue="Verify Meta app and WABA subscriptions for messages and smb_message_echoes.",
+                    checked_at=_checked_at(),
+                    coexistence_ready=False,
+                    echo_received=echo_seen,
+                ),
+            )
+
+        if not echo_seen:
+            return _store(
+                key,
+                _state(
+                    connected=True,
+                    registered=True,
+                    status="connected",
+                    issue="WhatsApp is connected. Automatic Business App takeover will be verified on the first observed human reply.",
+                    checked_at=_checked_at(),
+                    coexistence_ready=False,
+                    echo_received=False,
+                ),
+            )
+
+        return _store(
+            key,
+            _state(
+                connected=True,
+                registered=True,
+                status="connected",
+                issue=None,
+                checked_at=_checked_at(),
+                coexistence_ready=True,
+                echo_received=True,
+            ),
+        )
 
     return _store(
         key,
