@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 from backend.app.api.admin_ai_employee import _ensure_module, _select_model
 from backend.app.api.admin_company_profile import sync_company_business_knowledge
-from backend.app.core.config_secrets import merge_config, reveal_config
+from backend.app.core.config_secrets import reveal_config
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.company import Company
@@ -174,6 +174,11 @@ Additional behavior instructions: {_clean(data.instructions) or 'None.'}""".stri
 
 
 def _setup_from_channels(channels):
+    """Read legacy channel-owned employee setup only for one-way backfill.
+
+    New writes must use AIAgentProfile and AgentConfig. Channels are transport
+    surfaces and never receive employee persona/behavior state again.
+    """
     for channel in channels:
         config = reveal_config(channel.config) or {}
         setup = config.get("employee_setup")
@@ -402,26 +407,8 @@ def update_profile(company_id: int, agent_id: int, data: EmployeeProfileUpdate, 
             raise HTTPException(404, "AI employee not found")
         agent.name = _clean(data.name) or agent.name
         agent.system_prompt = _profile_prompt(company.name, data)
-        profile = _upsert_profile(db, company, agent, data)
-        behavior = _set_agent_behavior(db, agent, data)
-        setup = {
-            "business_name": company.name,
-            "business_type": profile.business_type,
-            "reply_language": profile.reply_language,
-            "dialect": (behavior.settings or {}).get("dialect", "auto"),
-            "conversation_style": profile.conversation_style,
-            "response_length": (behavior.settings or {}).get("response_length", "concise"),
-            "clarification_style": (behavior.settings or {}).get("clarification_style", "smart"),
-            "off_topic_behavior": (behavior.settings or {}).get("off_topic_behavior", "business_redirect"),
-            "greeting": profile.greeting,
-            "instructions": profile.instructions,
-        }
-        channels = db.query(AgentChannel).filter(
-            AgentChannel.company_id == company_id,
-            AgentChannel.agent_id == agent_id,
-        ).all()
-        for channel in channels:
-            channel.config = merge_config(channel.config, {"employee_setup": setup})
+        _upsert_profile(db, company, agent, data)
+        _set_agent_behavior(db, agent, data)
         db.commit()
         return {"status": "updated", "agent_id": agent.id}
     except HTTPException:

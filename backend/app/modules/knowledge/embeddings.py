@@ -121,7 +121,10 @@ class KnowledgeEmbeddingClient:
         vectors = [item.get("embedding") for item in ordered]
         if len(vectors) != len(values) or any(not isinstance(vector, list) for vector in vectors):
             raise RuntimeError("Embedding provider returned an incomplete response")
-        return [[float(number) for number in vector] for vector in vectors]
+        converted = [[float(number) for number in vector] for vector in vectors]
+        if any(not vector or any(not math.isfinite(number) for number in vector) for vector in converted):
+            raise RuntimeError("Embedding provider returned invalid vectors")
+        return converted
 
     def embed_many(self, texts: Iterable[str]) -> list[list[float]]:
         values = [self._prepare_text(text) for text in texts]
@@ -135,7 +138,7 @@ class KnowledgeEmbeddingClient:
             return vectors
         except Exception as exc:
             self._retry_after = monotonic() + self.FAILURE_COOLDOWN_SECONDS
-            logger.warning("Knowledge embedding request failed; using lexical fallback: %s", exc)
+            logger.warning("Knowledge embedding request failed; using lexical fallback; error_type=%s cooldown_seconds=%s", type(exc).__name__, self.FAILURE_COOLDOWN_SECONDS)
             return []
 
     def embed_one(self, text: str) -> list[float] | None:
@@ -150,7 +153,7 @@ class KnowledgeEmbeddingClient:
             self._retry_after = 0.0
         except Exception as exc:
             self._retry_after = monotonic() + self.FAILURE_COOLDOWN_SECONDS
-            logger.warning("Knowledge embedding request failed; using lexical fallback: %s", exc)
+            logger.warning("Knowledge embedding request failed; using lexical fallback; error_type=%s cooldown_seconds=%s", type(exc).__name__, self.FAILURE_COOLDOWN_SECONDS)
             return None
         if not vectors:
             return None

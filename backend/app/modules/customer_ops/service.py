@@ -6,6 +6,7 @@ from sqlalchemy import func
 
 from backend.app.modules.ai_agent.models import AIAgent, AIConversation, AIUsage
 from backend.app.modules.customer_ops.models import (
+    CustomerIdentity,
     CustomerRecord,
     NotificationEvent,
     NotificationPreference,
@@ -63,6 +64,101 @@ def identity_key(*, phone=None, email=None, external=None, channel=None) -> str 
     return None
 
 
+def _channel_key(channel) -> str | None:
+    value = clean(channel)
+    return value.lower() if value else None
+
+
+def _customer_identity(db, company_id: int, channel: str | None, external: str | None):
+    channel_key = _channel_key(channel)
+    external_id = clean(external)
+    if not channel_key or not external_id:
+        return None
+    return (
+        db.query(CustomerIdentity)
+        .filter(
+            CustomerIdentity.company_id == company_id,
+            CustomerIdentity.channel == channel_key,
+            CustomerIdentity.external_id == external_id,
+        )
+        .first()
+    )
+
+
+def _ensure_customer_identity(
+    db,
+    *,
+    company_id: int,
+    customer: CustomerRecord,
+    channel: str | None,
+    external: str | None,
+    seen_at: datetime,
+) -> CustomerIdentity | None:
+    channel_key = _channel_key(channel)
+    external_id = clean(external)
+    if not channel_key or not external_id:
+        return None
+    if customer.id is None:
+        db.flush()
+    identity = _customer_identity(db, company_id, channel_key, external_id)
+    if identity is None:
+        identity = CustomerIdentity(
+            company_id=company_id,
+            customer_id=customer.id,
+            channel=channel_key,
+            external_id=external_id,
+            first_seen_at=seen_at,
+            last_seen_at=seen_at,
+        )
+        db.add(identity)
+        return identity
+    if identity.customer_id != customer.id:
+        # Never silently merge two customer records. Identity conflicts require
+        # explicit reconciliation because merging notes/tags/history is a product
+        # decision, not a safe runtime guess.
+        raise ValueError("External customer identity is already linked to another customer")
+    if seen_at and (identity.last_seen_at is None or seen_at > identity.last_seen_at):
+        identity.last_seen_at = seen_at
+    return identity
+
+
+def _customer_external_ids(db, company_id: int, customer: CustomerRecord) -> list[str]:
+    values = {
+        item.external_id
+        for item in db.query(CustomerIdentity).filter(
+            CustomerIdentity.company_id == company_id,
+            CustomerIdentity.customer_id == customer.id,
+        ).all()
+        if item.external_id
+    }
+    if customer.external_contact_id:
+        values.add(customer.external_contact_id)
+    return sorted(values)
+
+
+def _customer_identity_payload(db, company_id: int, customer_id: int) -> list[dict]:
+    rows = (
+        db.query(CustomerIdentity)
+        .filter(
+            CustomerIdentity.company_id == company_id,
+            CustomerIdentity.customer_id == customer_id,
+        )
+        .order_by(CustomerIdentity.id.asc())
+        .all()
+    )
+    return [
+        {
+            "id": row.id,
+            "channel": row.channel,
+            "external_id": row.external_id,
+            "verified": bool(row.verified),
+            "first_seen_at": row.first_seen_at,
+            "last_seen_at": row.last_seen_at,
+        }
+        for row in rows
+    ]
+
+
 def upsert_customer(
     db,
     company_id: int,
@@ -76,8 +172,8 @@ def upsert_customer(
 ):
     normalized_phone = normalize_phone(phone)
     normalized_external = clean(external)
-    normalized_channel = clean(channel)
-    if not normalized_phone and str(normalized_channel or "").lower() == "whatsapp":
+    normalized_channel = _channel_key(channel)
+    if not normalized_phone and normalized_channel == "whatsapp":
         normalized_phone = normalize_phone(normalized_external)
 
     key = identity_key(
@@ -89,14 +185,32 @@ def upsert_customer(
     if not key:
         return None
 
-    row = (
-        db.query(CustomerRecord)
-        .filter(
-            CustomerRecord.company_id == company_id,
-            CustomerRecord.identity_key == key,
-        )
-        .first()
+    identity = _customer_identity(
+        db,
+        company_id,
+        normalized_channel,
+        normalized_external,
     )
+    row = None
+    if identity is not None:
+        row = (
+            db.query(CustomerRecord)
+            .filter(
+                CustomerRecord.company_id == company_id,
+                CustomerRecord.id == identity.customer_id,
+            )
+            .first()
+        )
+
+    if row is None:
+        row = (
+            db.query(CustomerRecord)
+            .filter(
+                CustomerRecord.company_id == company_id,
+                CustomerRecord.identity_key == key,
+            )
+            .first()
+        )
     if row is None and normalized_external:
         row = (
             db.query(CustomerRecord)
@@ -130,11 +244,20 @@ def upsert_customer(
             last_seen_at=now,
         )
         db.add(row)
+        db.flush()
+        _ensure_customer_identity(
+            db,
+            company_id=company_id,
+            customer=row,
+            channel=normalized_channel,
+            external=normalized_external,
+            seen_at=now,
+        )
         return row
 
-    # Keep old external-contact identities readable, but migrate them to the
-    # canonical key when that key is still free. This prevents WhatsApp and
-    # business-operation records from creating two customers for one phone.
+    # Keep old external-contact identities readable, but migrate the canonical
+    # phone/email key when that key is still free. Never merge conflicting
+    # customer records implicitly.
     if row.identity_key != key:
         key_owner = (
             db.query(CustomerRecord)
@@ -154,12 +277,22 @@ def upsert_customer(
         row.phone = normalized_phone
     if clean(email):
         row.email = clean(email)
-    if normalized_external:
+    # Legacy projection: fill it once, but do not overwrite a prior channel
+    # identity when the same customer later appears somewhere else.
+    if normalized_external and not row.external_contact_id:
         row.external_contact_id = normalized_external
-    if normalized_channel:
+    if normalized_channel and not row.channel:
         row.channel = normalized_channel
     if now and (row.last_seen_at is None or now > row.last_seen_at):
         row.last_seen_at = now
+    _ensure_customer_identity(
+        db,
+        company_id=company_id,
+        customer=row,
+        channel=normalized_channel,
+        external=normalized_external,
+        seen_at=now,
+    )
     return row
 
 
@@ -364,15 +497,18 @@ def customer_metrics(db, company_id: int, customer: CustomerRecord) -> dict:
         bookings = bookings.filter(False)
         orders = orders.filter(False)
     else:
-        return {"leads": 0, "bookings": 0, "orders": 0, "conversations": 0}
+        leads = leads.filter(False)
+        bookings = bookings.filter(False)
+        orders = orders.filter(False)
 
+    external_ids = _customer_external_ids(db, company_id, customer)
     conversation_count = 0
-    if customer.external_contact_id:
+    if external_ids:
         conversation_count = (
             db.query(func.count(AIConversation.id))
             .filter(
                 AIConversation.company_id == company_id,
-                AIConversation.external_contact_id == customer.external_contact_id,
+                AIConversation.external_contact_id.in_(external_ids),
             )
             .scalar()
             or 0
@@ -402,6 +538,7 @@ def list_customers(db, company_id: int) -> list[dict]:
             "email": row.email,
             "external_contact_id": row.external_contact_id,
             "channel": row.channel,
+            "identities": _customer_identity_payload(db, company_id, row.id),
             "tags": row.tags or [],
             "notes": row.notes,
             "first_seen_at": row.first_seen_at,
@@ -460,13 +597,14 @@ def customer_detail(db, company_id: int, customer_id: int) -> dict | None:
         bookings = []
         orders = []
 
+    external_ids = _customer_external_ids(db, company_id, row)
     conversations = []
-    if row.external_contact_id:
+    if external_ids:
         conversations = (
             db.query(AIConversation)
             .filter(
                 AIConversation.company_id == company_id,
-                AIConversation.external_contact_id == row.external_contact_id,
+                AIConversation.external_contact_id.in_(external_ids),
             )
             .order_by(AIConversation.created_at.desc())
             .all()
@@ -479,6 +617,7 @@ def customer_detail(db, company_id: int, customer_id: int) -> dict | None:
             "phone": row.phone,
             "email": row.email,
             "channel": row.channel,
+            "identities": _customer_identity_payload(db, company_id, row.id),
             "tags": row.tags or [],
             "notes": row.notes,
             "first_seen_at": row.first_seen_at,

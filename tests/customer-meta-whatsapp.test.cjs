@@ -74,3 +74,31 @@ for (const sdkAlreadyLoaded of [false, true]) {
         });
     });
 }
+
+test('Coexistence pending states are not presented as a broken generic connection', () => {
+    const context = vm.createContext({
+        window: {addEventListener() {}},
+        URL,
+        document: {},
+        safe: value => String(value)
+    });
+    vm.runInContext(source, context);
+
+    const echoPending = vm.runInContext(`xvondCustomerWhatsAppStatus({
+        connected: false,
+        configured: true,
+        coexistence: true,
+        connection_status: 'coexistence_echo_pending'
+    })`, context);
+    assert.match(echoPending.title, /بانتظار اختبار التحكم البشري/);
+    assert.match(echoPending.detail, /WhatsApp Business/);
+
+    const setupRequired = vm.runInContext(`xvondCustomerWhatsAppStatus({
+        connected: false,
+        configured: true,
+        coexistence: true,
+        connection_status: 'coexistence_setup_required'
+    })`, context);
+    assert.match(setupRequired.title, /إعداد التعايش غير مكتمل/);
+    assert.match(setupRequired.detail, /Meta/);
+});

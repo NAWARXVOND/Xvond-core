@@ -27,6 +27,7 @@ from backend.app.modules.tools.business_models import ActionRequest, HumanHandof
 router = APIRouter(prefix="/customer", tags=["Customer Portal"])
 
 MANAGER_ROLES = {"owner", "admin", "manager"}
+LIVE_CUSTOMER_CHANNELS = ("whatsapp", "website", "voice", "instagram")
 OPEN_OPERATION_STATES = {
     "pending",
     "awaiting_confirmation",
@@ -104,30 +105,50 @@ def _limit_warning_count(services: list[dict]) -> int:
     return warnings
 
 
-def _staff_overview(db, current_user: User, company: Company) -> dict:
-    agents = db.query(AIAgent).filter(AIAgent.company_id == company.id).all()
-    channels = db.query(AgentChannel).filter(AgentChannel.company_id == company.id).all()
-    conversation_count = (
-        db.query(func.count(AIConversation.id))
-        .filter(AIConversation.company_id == company.id)
-        .scalar()
-        or 0
+def _live_conversation_query(db, company_id: int):
+    """Customer-facing operational counts must match the default live Inbox.
+
+    Test Console and legacy/unclassified conversations remain available only via
+    explicit diagnostic filters and must never inflate production dashboard data.
+    """
+    return db.query(AIConversation).filter(
+        AIConversation.company_id == company_id,
+        AIConversation.channel_type.in_(LIVE_CUSTOMER_CHANNELS),
     )
-    active_handoffs = (
+
+
+def _active_live_handoff_count(db, company_id: int) -> int:
+    return int(
         db.query(func.count(HumanHandoff.id))
+        .join(AIConversation, AIConversation.id == HumanHandoff.conversation_id)
         .filter(
-            HumanHandoff.company_id == company.id,
+            HumanHandoff.company_id == company_id,
+            AIConversation.company_id == company_id,
+            AIConversation.channel_type.in_(LIVE_CUSTOMER_CHANNELS),
             HumanHandoff.status.in_(ACTIVE_HANDOFF_STATES),
         )
         .scalar()
         or 0
     )
+
+
+def _company_portal_state(company: Company) -> dict:
     return {
-        "company": {
-            "id": company.id,
-            "name": company.name,
-            "active": company.active,
-        },
+        "id": company.id,
+        "name": company.name,
+        "active": company.active,
+        "lifecycle_status": company.lifecycle_status,
+        "lifecycle_updated_at": company.lifecycle_updated_at,
+    }
+
+
+def _staff_overview(db, current_user: User, company: Company) -> dict:
+    agents = db.query(AIAgent).filter(AIAgent.company_id == company.id).all()
+    channels = db.query(AgentChannel).filter(AgentChannel.company_id == company.id).all()
+    conversation_count = _live_conversation_query(db, company.id).count()
+    active_handoffs = _active_live_handoff_count(db, company.id)
+    return {
+        "company": _company_portal_state(company),
         "services": [],
         "subscription": None,
         "portal": {
@@ -228,15 +249,7 @@ def overview(current_user: User = Depends(require_customer_user)):
             .scalar()
             or 0
         )
-        active_handoffs = (
-            db.query(func.count(HumanHandoff.id))
-            .filter(
-                HumanHandoff.company_id == company_id,
-                HumanHandoff.status.in_(ACTIVE_HANDOFF_STATES),
-            )
-            .scalar()
-            or 0
-        )
+        active_handoffs = _active_live_handoff_count(db, company_id)
         unread_notifications = (
             db.query(func.count(NotificationEvent.id))
             .filter(
@@ -258,11 +271,7 @@ def overview(current_user: User = Depends(require_customer_user)):
         )
 
         return {
-            "company": {
-                "id": company.id,
-                "name": company.name,
-                "active": company.active,
-            },
+            "company": _company_portal_state(company),
             "services": services,
             "subscription": ai_service,
             "portal": {
@@ -281,9 +290,7 @@ def overview(current_user: User = Depends(require_customer_user)):
             "summary": {
                 "agents": len(agents),
                 "active_agents": sum(1 for item in agents if item.enabled),
-                "conversations": db.query(AIConversation).filter(
-                    AIConversation.company_id == company_id
-                ).count(),
+                "conversations": _live_conversation_query(db, company_id).count(),
                 "requests": int(usage[0] or 0),
                 "tokens": int(usage[1] or 0),
                 "knowledge_documents": db.query(KnowledgeDocument).filter(

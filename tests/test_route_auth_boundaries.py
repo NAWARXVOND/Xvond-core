@@ -31,13 +31,35 @@ def _dependency_names(route: APIRoute) -> set[str]:
     return names
 
 
-def test_every_admin_route_requires_xvond_operator_authentication():
+def test_every_admin_route_requires_authenticated_xvond_access():
     failures = []
+    accepted = {
+        "require_xvond_operator",
+        "require_xvond_admin",
+        "require_super_admin",
+    }
     for route in _mounted_api_routes():
         if not route.path.startswith("/admin/") and route.path != "/admin":
             continue
         names = _dependency_names(route)
-        if not {"require_xvond_admin", "require_super_admin"}.intersection(names):
+        if not accepted.intersection(names):
+            failures.append((sorted(route.methods), route.path, sorted(names)))
+    assert failures == []
+
+
+def test_mutating_admin_routes_never_rely_on_read_only_operator_access_only():
+    failures = []
+    mutation_methods = {"POST", "PUT", "PATCH", "DELETE"}
+    for route in _mounted_api_routes():
+        if not route.path.startswith("/admin/") and route.path != "/admin":
+            continue
+        if not mutation_methods.intersection(route.methods or set()):
+            continue
+        names = _dependency_names(route)
+        if "require_xvond_operator" in names and not {
+            "require_xvond_admin",
+            "require_super_admin",
+        }.intersection(names):
             failures.append((sorted(route.methods), route.path, sorted(names)))
     assert failures == []
 

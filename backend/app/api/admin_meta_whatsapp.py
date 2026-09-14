@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, UTC
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -115,17 +116,16 @@ def _graph_request(
             raw = response.read().decode("utf-8")
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
-        body_text = exc.read().decode("utf-8", errors="replace")
         raise HTTPException(
             status_code=502,
-            detail=f"Meta Graph API error ({exc.code}): {body_text[:500]}",
+            detail=f"Meta Graph API request rejected (HTTP {exc.code})",
         ) from exc
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Meta Graph API request failed: {str(exc)[:300]}",
+            detail="Meta Graph API request failed",
         ) from exc
 
 
@@ -246,6 +246,24 @@ class EmbeddedSignupComplete(BaseModel):
     connection_mode: str | None = None
 
 
+def _coexistence_subscription_evidence(config: dict) -> dict:
+    """Read Meta's app subscription; never trust a browser-provided ready flag."""
+    payload = _graph_request(
+        "GET", _graph_url(config["graph_api_version"], f"{config['app_id']}/subscriptions"),
+        access_token=f"{config['app_id']}|{config['app_secret']}",
+    )
+    fields = set()
+    for row in payload.get("data", []):
+        if row.get("object") != "whatsapp_business_account" or row.get("active") is not True:
+            continue
+        for field in row.get("fields", []):
+            name = field.get("name") if isinstance(field, dict) else field
+            if name in {"messages", "smb_message_echoes", "smb_app_state_sync", "history"}:
+                fields.add(name)
+    return {"meta_app_id": config["app_id"], "subscribed_webhook_fields": sorted(fields),
+            "subscription_checked_at": datetime.now(UTC).isoformat()}
+
+
 @router.get("/embedded-signup/config")
 def embedded_signup_config(
     agent_id: int,
@@ -307,6 +325,9 @@ def complete_embedded_signup(
         access_token=access_token,
         graph_api_version=config["graph_api_version"],
     )
+    evidence = {"waba_subscription_verified": True, "meta_app_id": config["app_id"]}
+    if connection_mode == "coexistence":
+        evidence.update(_coexistence_subscription_evidence(config))
 
     db = SessionLocal()
     try:
@@ -333,6 +354,7 @@ def complete_embedded_signup(
             else "meta_embedded_signup"
         )
         incoming = {
+            **evidence,
             "waba_id": waba_id,
             "meta_business_id": data.business_id,
             "phone_number_id": phone_number_id,
@@ -344,6 +366,8 @@ def complete_embedded_signup(
             "graph_api_version": config["graph_api_version"],
             "connection_method": method,
             "coexistence": connection_mode == "coexistence",
+            "coexistence_echo_received_at": None,
+            "activation_pending_coexistence": connection_mode == "coexistence",
         }
         if channel is None:
             incoming.update(WHATSAPP_BEHAVIOR_DEFAULTS)

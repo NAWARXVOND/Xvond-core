@@ -9,14 +9,12 @@ from backend.app.api.admin_ai_employee_profile import (
     _set_agent_behavior,
     _upsert_profile,
 )
-from backend.app.core.config_secrets import merge_config
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_customer_manager
 from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.factory_models import AgentConfig
 from backend.app.modules.ai_agent.models import AIAgent
-from backend.app.modules.billing.limits import limits_service
 from backend.app.modules.channels.models import AgentChannel
 
 
@@ -57,27 +55,12 @@ def _current_profile(db, company: Company, agent: AIAgent):
         .order_by(AgentChannel.id.asc())
         .all()
     )
+    # Channel employee_setup is read only as a legacy migration fallback. New
+    # employee state is owned by AIAgentProfile + AgentConfig and is never
+    # duplicated back into channel configuration.
     profile = _backfill_profile(db, company, agent, channels)
     behavior = _agent_behavior(db, agent, channels)
-    return profile, behavior, channels
-
-
-def _sync_channel_setup(company: Company, profile, behavior: AgentConfig, channels) -> None:
-    settings = dict(behavior.settings or {})
-    setup = {
-        "business_name": company.name,
-        "business_type": profile.business_type,
-        "reply_language": profile.reply_language,
-        "dialect": settings.get("dialect", "auto"),
-        "conversation_style": profile.conversation_style,
-        "response_length": settings.get("response_length", "concise"),
-        "clarification_style": settings.get("clarification_style", "smart"),
-        "off_topic_behavior": settings.get("off_topic_behavior", "business_redirect"),
-        "greeting": profile.greeting,
-        "instructions": profile.instructions,
-    }
-    for channel in channels:
-        channel.config = merge_config(channel.config, {"employee_setup": setup})
+    return profile, behavior
 
 
 @router.get("/{agent_id}")
@@ -89,7 +72,7 @@ def agent_details(
     try:
         agent = get_customer_agent(db, current_user, agent_id)
         company = db.query(Company).filter(Company.id == current_user.company_id).first()
-        profile, behavior, _channels = _current_profile(db, company, agent)
+        profile, behavior = _current_profile(db, company, agent)
         config = db.query(AgentConfig).filter(AgentConfig.agent_id == agent.id).first()
         controls = _controls(config)
         db.commit()
@@ -122,16 +105,22 @@ def update_agent(
     try:
         agent = get_customer_agent(db, current_user, agent_id)
         company = db.query(Company).filter(Company.id == current_user.company_id).first()
-        profile, behavior, channels = _current_profile(db, company, agent)
+        profile, behavior = _current_profile(db, company, agent)
         config = db.query(AgentConfig).filter(AgentConfig.agent_id == agent.id).first()
         controls = _controls(config)
 
         if data.enabled is not None:
             if not controls.get("can_enable_disable", False):
-                raise HTTPException(403, "Customer cannot enable or disable this agent")
+                raise HTTPException(403, "Customer cannot change this employee's runtime state")
             if data.enabled is True and agent.enabled is False:
-                limits_service.check_agent_limit(db, current_user.company_id)
-            agent.enabled = data.enabled
+                # Customer managers may stop a live employee, but production
+                # activation is owned exclusively by Xvond Delivery Readiness.
+                raise HTTPException(
+                    409,
+                    "AI employee activation is managed by Xvond Delivery Readiness",
+                )
+            if data.enabled is False:
+                agent.enabled = False
 
         if data.instructions is not None and not controls.get("can_edit_prompt", False):
             raise HTTPException(403, "Advanced instructions are managed by Xvond")
@@ -162,9 +151,8 @@ def update_agent(
                 instructions=profile.instructions if data.instructions is None else data.instructions,
             )
             agent.system_prompt = _profile_prompt(company.name, update)
-            profile = _upsert_profile(db, company, agent, update)
-            behavior_row = _set_agent_behavior(db, agent, update)
-            _sync_channel_setup(company, profile, behavior_row, channels)
+            _upsert_profile(db, company, agent, update)
+            _set_agent_behavior(db, agent, update)
 
         db.commit()
         db.refresh(agent)

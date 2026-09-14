@@ -70,7 +70,7 @@ from backend.app.core.rate_limit import rate_limiter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
-CUSTOMER_PORTAL_VERSION = "20260914-3"
+CUSTOMER_PORTAL_VERSION = "20260914-audit1"
 
 
 @asynccontextmanager
@@ -134,6 +134,10 @@ async def request_observability(request: Request, call_next):
         reset_request_id(token)
     duration_ms = round((perf_counter() - started) * 1000, 2)
     response.headers["X-Request-ID"] = request_id
+    if request.url.path.startswith(("/customer/", "/admin/", "/auth/", "/ai-agents/")) or request.url.path.endswith(".html") or request.url.path in {"/admin-ui", "/customer-ui", "/login", "/dashboard"}:
+        response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     logger.info(
         "Request completed",
         extra={
@@ -279,7 +283,7 @@ def health():
 
 @app.get("/admin-ui")
 def admin_ui():
-    return RedirectResponse(url="/static/admin/index.html")
+    return RedirectResponse(url=f"/static/admin/index.html?v={CUSTOMER_PORTAL_VERSION}")
 
 
 @app.get("/customer-ui")

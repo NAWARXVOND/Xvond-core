@@ -46,7 +46,9 @@ class AgentFactory:
             system_prompt=system_prompt.strip(),
             provider=provider.strip(),
             model=model.strip(),
-            enabled=True,
+            # Every employee starts in draft/off. Delivery Readiness is the only
+            # authority that may promote an employee into real customer traffic.
+            enabled=False,
         )
         db.add(agent)
         db.flush()
@@ -94,7 +96,9 @@ class AgentFactory:
             system_prompt=selected_prompt.strip(),
             provider=selected_provider.strip(),
             model=selected_model.strip(),
-            enabled=True,
+            # Templates accelerate configuration; they never bypass production
+            # readiness or turn an employee on automatically.
+            enabled=False,
         )
         db.add(agent)
         db.flush()

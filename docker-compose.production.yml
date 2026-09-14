@@ -12,6 +12,10 @@ services:
       APP_ENV: production
       DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER is required}
       REDIS_URL: redis://redis:6379/0
+      BACKUP_STATUS_DIR: /backup-status
+      BACKUP_STALE_AFTER_SECONDS: ${BACKUP_STALE_AFTER_SECONDS:-129600}
+    volumes:
+      - xvond_backup_status:/backup-status:ro
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     depends_on:
@@ -83,10 +87,12 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       PGDATABASE: ${POSTGRES_DB:-xvond}
       BACKUP_DIR: /backups
+      BACKUP_STATUS_DIR: /backup-status
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
     volumes:
       - xvond_backups:/backups
+      - xvond_backup_status:/backup-status
       - ./scripts:/opt/xvond/scripts:ro
     entrypoint: ["/bin/sh", "/opt/xvond/scripts/backup_loop.sh"]
     depends_on:
@@ -107,12 +113,14 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-}
+      BACKUP_STATUS_DIR: /backup-status
       OFFSITE_BACKUP_INTERVAL_SECONDS: ${OFFSITE_BACKUP_INTERVAL_SECONDS:-86400}
       OFFSITE_KEEP_DAILY: ${OFFSITE_KEEP_DAILY:-14}
       OFFSITE_KEEP_WEEKLY: ${OFFSITE_KEEP_WEEKLY:-8}
       OFFSITE_KEEP_MONTHLY: ${OFFSITE_KEEP_MONTHLY:-12}
     volumes:
       - xvond_backups:/backups:ro
+      - xvond_backup_status:/backup-status
       - ./scripts:/opt/xvond/scripts:ro
     entrypoint: ["/bin/sh", "/opt/xvond/scripts/offsite_backup_loop.sh"]
     depends_on:
@@ -210,6 +218,7 @@ volumes:
   xvond_postgres_data:
   xvond_redis_data:
   xvond_backups:
+  xvond_backup_status:
   xvond_restore_verify:
   xvond_workflow_postgres_data:
   xvond_workflow_data:

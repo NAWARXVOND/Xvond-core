@@ -61,7 +61,7 @@ def test_manual_credentials_are_never_reported_connected(monkeypatch):
     assert state["connection_status"] == "configured_only"
 
 
-def test_coexistence_is_connected_only_after_meta_phone_check(monkeypatch):
+def test_coexistence_requires_subscriptions_and_real_echo_beyond_phone_check(monkeypatch):
     calls = []
 
     def urlopen(request, timeout):
@@ -73,12 +73,12 @@ def test_coexistence_is_connected_only_after_meta_phone_check(monkeypatch):
     first = whatsapp_connection.whatsapp_connection_state(coexistence_config())
     second = whatsapp_connection.whatsapp_connection_state(coexistence_config())
 
-    assert first["connected"] is True
+    assert first["connected"] is False
     assert first["meta_onboarding_complete"] is True
-    assert first["connection_status"] == "connected"
-    assert first["connection_issue"] is None
+    assert first["connection_status"] == "coexistence_setup_required"
+    assert first["connection_issue"]
     assert second == first
-    assert len(calls) == 1
+    assert len(calls) >= 1
     assert calls[0][0].get_header("Authorization") == "Bearer secret-token"
     assert calls[0][1] == 5.0
 

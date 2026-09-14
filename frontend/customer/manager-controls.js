@@ -68,7 +68,7 @@ loadAgents = async function() {
                             <h3>${safe(agent.name)}</h3>
                             <p>${safe(agent.description || "")}</p>
                         </div>
-                        <span class="status">${agent.enabled ? "Active" : "Inactive"}</span>
+                        <span class="status">${agent.enabled ? "Live" : "Draft / Paused"}</span>
                     </div>
                     <button onclick="openCustomerAgentSettings(${Number(agent.id)})">Manage</button>
                 </div>
@@ -88,6 +88,11 @@ async function openCustomerAgentSettings(agentId) {
     try {
         const d = await api(`/customer/agents/${agentId}`);
         const controls = d.controls || {};
+        const runtimeControl = controls.can_enable_disable
+            ? (d.enabled
+                ? `<label style="display:flex;gap:8px;align-items:center;margin:14px 0"><input id="ca-enabled" type="checkbox" checked> Keep AI Employee live</label><p class="muted">You may pause a live employee. Re-activation is performed by Xvond after Delivery Readiness checks.</p>`
+                : `<div class="panel" style="margin:14px 0"><strong>Awaiting Xvond Go-Live</strong><p class="muted" style="margin-bottom:0">This employee is Draft/Paused. Xvond activates production traffic only after Delivery Readiness passes.</p></div>`)
+            : "";
         target.innerHTML = `
             <div class="panel" style="margin-top:18px">
                 <div class="service-card-head"><div><h2>Manage ${safe(d.name)}</h2><p>Conversation behavior only. Business facts and integrations remain managed by Xvond.</p></div></div>
@@ -99,7 +104,7 @@ async function openCustomerAgentSettings(agentId) {
                 ${customerSelect("ca-off-topic", "Personal or off-topic messages", [["business_redirect","Business focused — recommended"],["brief_friendly","Allow brief friendly small talk"]], d.off_topic_behavior || "business_redirect")}
                 <div class="form-group"><label>Greeting</label><textarea id="ca-greeting" placeholder="Optional greeting">${safe(d.greeting || "")}</textarea></div>
                 ${controls.can_edit_prompt ? `<div class="form-group"><label>Advanced Instructions</label><textarea id="ca-instructions">${safe(d.instructions || "")}</textarea></div>` : ""}
-                ${controls.can_enable_disable ? `<label style="display:flex;gap:8px;align-items:center;margin:14px 0"><input id="ca-enabled" type="checkbox" ${d.enabled ? "checked" : ""}> AI Employee active</label>` : ""}
+                ${runtimeControl}
                 <div id="ca-message" class="error"></div>
                 <button onclick="saveCustomerAgentSettings(${Number(agentId)}, ${controls.can_edit_prompt ? "true" : "false"}, ${controls.can_enable_disable ? "true" : "false"})">Save Changes</button>
             </div>
@@ -122,7 +127,8 @@ async function saveCustomerAgentSettings(agentId, canEditPrompt, canEnableDisabl
         greeting: value("ca-greeting")
     };
     if (canEditPrompt) payload.instructions = value("ca-instructions");
-    if (canEnableDisable) payload.enabled = !!document.getElementById("ca-enabled")?.checked;
+    const runtimeCheckbox = canEnableDisable ? document.getElementById("ca-enabled") : null;
+    if (runtimeCheckbox) payload.enabled = !!runtimeCheckbox.checked;
     const message = document.getElementById("ca-message");
     if (message) message.textContent = "";
     try {

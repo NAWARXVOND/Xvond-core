@@ -70,6 +70,44 @@ def test_n8n_gateway_sends_stable_contract(monkeypatch):
     assert result["data"]["booking_id"] == "BK-1"
 
 
+def test_n8n_gateway_redacts_failed_workflow_payload(monkeypatch):
+    gateway = configured_gateway()
+    secret = "SECRET_TOKEN customer private payload"
+
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda *args, **kwargs: FakeResponse(
+            {
+                "success": False,
+                "request_id": "req-fail",
+                "action": "create_booking",
+                "error": secret,
+                "message": secret,
+                "data": {"stack": secret},
+                "error_code": "UPSTREAM_TIMEOUT",
+            }
+        ),
+    )
+
+    result = gateway.execute(
+        company_id=1,
+        agent_id=2,
+        action="create_booking",
+        request_id="req-fail",
+    )
+
+    assert result == {
+        "success": False,
+        "request_id": "req-fail",
+        "action": "create_booking",
+        "error_code": "UPSTREAM_TIMEOUT",
+        "error": "Workflow execution failed",
+        "data": None,
+    }
+    assert secret not in str(result)
+
+
 def test_n8n_gateway_rejects_request_id_mismatch(monkeypatch):
     gateway = configured_gateway()
 

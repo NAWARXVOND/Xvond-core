@@ -84,21 +84,31 @@ def test_customer_inbox_audits_handoff_lifecycle_without_message_content():
     assert '"content"' not in audit_helper
 
 
-def test_whatsapp_human_reply_is_recorded_only_after_delivery_succeeds():
+def test_whatsapp_human_reply_is_durable_and_idempotent_before_network_delivery():
     source = inspect.getsource(customer_inbox.send_human_reply)
     ownership_position = source.index("_require_handoff_owner")
-    send_position = source.index("whatsapp_sender.send_text")
-    success_check_position = source.index('if not result.get("success")')
+    key_position = source.index("idempotency_key")
     message_position = source.index("message = AIMessage(")
-    assert ownership_position < send_position < success_check_position < message_position
-    assert "WhatsApp delivery failed; the reply was not recorded as sent" in source
+    delivery_position = source.index("ensure_delivery(")
+    commit_position = source.index("db.commit()", delivery_position)
+    attempt_position = source.index("attempt_delivery(", commit_position)
+
+    assert ownership_position < key_position < message_position < delivery_position
+    assert delivery_position < commit_position < attempt_position
+    assert "client_message_id" in source
+    assert "existing_delivery" in source
+    assert 'action="customer_inbox.human_reply_prepared"' in source
+    assert "Previous WhatsApp delivery outcome is unknown; do not resend blindly" in source
+    assert "WhatsApp delivery outcome is unknown; the reply is recorded for reconciliation and will not be resent automatically" in source
+    assert "WhatsApp delivery was rejected temporarily; the saved reply can be retried without duplication" in source
 
 
 def test_website_human_reply_uses_canonical_conversation_delivery():
     source = inspect.getsource(customer_inbox.send_human_reply)
     assert 'delivery == "website_widget"' in source
-    assert "Website visitors poll the canonical conversation" in source
+    assert 'message = AIMessage(' in source
     assert 'role="human"' in source
+    assert 'action="customer_inbox.human_reply_sent"' in source
 
 
 def test_unsupported_channels_do_not_offer_fake_takeover():
@@ -135,6 +145,7 @@ def test_customer_portal_loads_owned_handoff_ui():
     assert "/return-ai" in ui
     assert "/take-over" in ui
     assert "/message" in ui
+    assert "client_message_id" in ui
 
 
 def test_customer_inbox_live_refresh_preserves_composer_until_thread_changes():
