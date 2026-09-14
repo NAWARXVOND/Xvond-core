@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
@@ -22,6 +24,7 @@ from backend.app.modules.tools.business_models import HumanHandoff
 
 router = APIRouter(prefix="/customer/inbox", tags=["Customer Conversation Inbox"])
 ACTIVE_HANDOFF_STATUSES = {"pending", "in_progress"}
+HANDOFF_MANAGER_ROLES = {"owner", "admin", "manager"}
 
 # Handoff is a channel capability, not a generic button. Only expose controls when
 # Xvond has a real delivery path back to the customer on that channel.
@@ -131,12 +134,78 @@ def _active_handoff(db, company_id: int, conversation_id: int):
     )
 
 
-def _handoff_state(db, company_id: int, conversation_id: int):
-    session = _session(db, company_id, conversation_id)
-    handoff = _active_handoff(db, company_id, conversation_id)
+def _claim_handoff(handoff: HumanHandoff, current_user: User) -> None:
+    assigned_user_id = handoff.assigned_user_id
+    if assigned_user_id is not None and assigned_user_id != current_user.id:
+        raise HTTPException(
+            409,
+            "This conversation is already owned by another teammate",
+        )
+    now = datetime.utcnow()
+    handoff.assigned_user_id = current_user.id
+    handoff.status = "in_progress"
+    if handoff.taken_over_at is None:
+        handoff.taken_over_at = now
+    handoff.updated_at = now
+
+
+def _require_handoff_owner(
+    handoff: HumanHandoff,
+    current_user: User,
+) -> None:
+    if handoff.assigned_user_id == current_user.id:
+        return
+    if handoff.assigned_user_id is None:
+        raise HTTPException(
+            409,
+            "Claim this conversation before replying",
+        )
+    raise HTTPException(
+        409,
+        "This conversation is owned by another teammate",
+    )
+
+
+def _require_handoff_close_permission(
+    handoff: HumanHandoff,
+    current_user: User,
+) -> None:
+    if handoff.assigned_user_id == current_user.id:
+        return
+    if current_user.role in HANDOFF_MANAGER_ROLES:
+        return
+    if handoff.assigned_user_id is None:
+        raise HTTPException(
+            409,
+            "Claim this conversation before returning it to AI",
+        )
+    raise HTTPException(
+        409,
+        "Only the assigned teammate or a manager can return this conversation to AI",
+    )
+
+
+def _handoff_state(
+    db,
+    current_user: User,
+    conversation_id: int,
+):
+    session = _session(db, current_user.company_id, conversation_id)
+    handoff = _active_handoff(
+        db,
+        current_user.company_id,
+        conversation_id,
+    )
     active = bool(handoff)
     if session is not None and human_handoff_active(session):
         active = True
+
+    assigned_user_id = handoff.assigned_user_id if handoff else None
+    assigned_to_me = bool(
+        assigned_user_id is not None
+        and assigned_user_id == current_user.id
+    )
+    manager_override = current_user.role in HANDOFF_MANAGER_ROLES
     return {
         "mode": "human" if active else "ai",
         "handoff_reason": (
@@ -145,6 +214,13 @@ def _handoff_state(db, company_id: int, conversation_id: int):
             else (session.handoff_reason if session else None)
         ),
         "handoff_status": handoff.status if handoff else None,
+        "handoff_assigned_user_id": assigned_user_id,
+        "handoff_assigned_to_me": assigned_to_me,
+        "handoff_claimable": bool(active and assigned_user_id is None),
+        "handoff_can_return_ai": bool(
+            active and (assigned_to_me or manager_override)
+        ),
+        "handoff_taken_over_at": handoff.taken_over_at if handoff else None,
     }
 
 
@@ -160,6 +236,11 @@ def _conversation_meta(
         "mode": "ai",
         "handoff_reason": None,
         "handoff_status": None,
+        "handoff_assigned_user_id": None,
+        "handoff_assigned_to_me": False,
+        "handoff_claimable": False,
+        "handoff_can_return_ai": False,
+        "handoff_taken_over_at": None,
     }
     capabilities = _handoff_capabilities(channel_type)
     return {
@@ -176,6 +257,11 @@ def _conversation_meta(
         "mode": handoff["mode"],
         "handoff_reason": handoff["handoff_reason"],
         "handoff_status": handoff["handoff_status"],
+        "handoff_assigned_user_id": handoff["handoff_assigned_user_id"],
+        "handoff_assigned_to_me": handoff["handoff_assigned_to_me"],
+        "handoff_claimable": handoff["handoff_claimable"],
+        "handoff_can_return_ai": handoff["handoff_can_return_ai"],
+        "handoff_taken_over_at": handoff["handoff_taken_over_at"],
         **capabilities,
         "last_message": (
             {
@@ -372,7 +458,7 @@ def list_inbox(
                     agent_map[item.agent_id],
                     last_messages.get(item.id),
                     counts.get(item.id, 0),
-                    _handoff_state(db, current_user.company_id, item.id),
+                    _handoff_state(db, current_user, item.id),
                 )
                 for item in conversations
             ],
@@ -417,7 +503,7 @@ def inbox_conversation(
                 len(messages),
                 _handoff_state(
                     db,
-                    current_user.company_id,
+                    current_user,
                     conversation.id,
                 ),
             ),
@@ -461,12 +547,12 @@ def take_over_conversation(
                 reason="customer_portal_takeover",
                 priority="normal",
                 department="customer_service",
-                status="in_progress",
+                status="pending",
             )
             db.add(handoff)
-        else:
-            handoff.status = "in_progress"
+            db.flush()
 
+        _claim_handoff(handoff, current_user)
         session = _session(db, current_user.company_id, conversation.id)
         if session is not None:
             activate_human_handoff(
@@ -481,6 +567,7 @@ def take_over_conversation(
             details={
                 "handoff_reason": handoff.reason,
                 "delivery": capabilities["human_reply_delivery"],
+                "assigned_user_id": current_user.id,
             },
         )
         db.commit()
@@ -488,6 +575,10 @@ def take_over_conversation(
             "status": "human_active",
             "conversation_id": conversation.id,
             "mode": "human",
+            "handoff_assigned_user_id": current_user.id,
+            "handoff_assigned_to_me": True,
+            "handoff_claimable": False,
+            "handoff_can_return_ai": True,
             **capabilities,
         }
     except Exception:
@@ -519,7 +610,13 @@ def return_conversation_to_ai(
             .all()
         )
         for handoff in handoffs:
+            _require_handoff_close_permission(handoff, current_user)
+
+        completed_at = datetime.utcnow()
+        for handoff in handoffs:
             handoff.status = "completed"
+            handoff.completed_at = completed_at
+            handoff.updated_at = completed_at
 
         session = _session(db, current_user.company_id, conversation.id)
         if session is not None:
@@ -529,7 +626,13 @@ def return_conversation_to_ai(
             action="customer_inbox.ai_resumed",
             conversation=conversation,
             current_user=current_user,
-            details={"completed_handoffs": len(handoffs)},
+            details={
+                "completed_handoffs": len(handoffs),
+                "override": any(
+                    item.assigned_user_id not in {None, current_user.id}
+                    for item in handoffs
+                ),
+            },
         )
         db.commit()
         return {
@@ -574,10 +677,14 @@ def send_human_reply(
                 409,
                 "Take over the conversation before replying",
             )
+        _require_handoff_owner(handoff, current_user)
 
         text = data.message.strip()
         delivery = capabilities["human_reply_delivery"]
-        audit_details = {"delivery": delivery}
+        audit_details = {
+            "delivery": delivery,
+            "assigned_user_id": current_user.id,
+        }
 
         if delivery == "whatsapp":
             session = _session(
@@ -632,6 +739,7 @@ def send_human_reply(
             )
 
         handoff.status = "in_progress"
+        handoff.updated_at = datetime.utcnow()
         message = AIMessage(
             conversation_id=conversation.id,
             role="human",
