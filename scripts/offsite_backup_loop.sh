@@ -33,6 +33,9 @@ while true; do
     restic check
     status_tmp="$BACKUP_STATUS_DIR/offsite_success_epoch.partial"
     printf '%s\n' "$(date -u +%s)" > "$status_tmp"
+    # The marker contains only a timestamp and is intentionally world-readable
+    # so the unprivileged app can report backup health from the read-only volume.
+    chmod 0644 "$status_tmp"
     mv "$status_tmp" "$BACKUP_STATUS_DIR/offsite_success_epoch"
     printf 'Encrypted offsite backup completed and repository checked.\n'
     sleep "$OFFSITE_BACKUP_INTERVAL_SECONDS"
