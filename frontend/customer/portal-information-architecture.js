@@ -115,11 +115,31 @@
 
     function renderOperationalOverview() {
         const summary = portalOverview?.summary || {};
+        const cardTarget = document.getElementById("dashboard-cards");
+
+        if (currentUser?.role === "employee") {
+            if (cardTarget) {
+                const cards = [
+                    ["Active AI Employees", summary.active_agents || 0],
+                    ["Connected Channels", summary.active_channels || 0],
+                    ["Conversations", summary.conversations || 0],
+                    ["Human Active", summary.active_handoffs || 0],
+                ];
+                cardTarget.innerHTML = cards.map(([label, value]) => `
+                    <div class="card"><span>${safe(label)}</span><strong>${safe(value)}</strong></div>
+                `).join("");
+            }
+            const serviceTarget = document.getElementById("dashboard-services");
+            if (serviceTarget) {
+                serviceTarget.innerHTML = '<p class="muted">Operator access: handle Customer Inbox conversations and human takeover. Company configuration, AI settings, team administration and billing remain manager-only.</p>';
+            }
+            return;
+        }
+
         const services = activeServices();
         const hasAI = services.some(item => item.service_code === "ai_agents");
-        if (!hasAI || currentUser?.role === "employee") return;
+        if (!hasAI) return;
 
-        const cardTarget = document.getElementById("dashboard-cards");
         if (cardTarget) {
             const cards = [
                 ["Active AI Employees", `${summary.active_agents || 0} / ${summary.agents || 0}`],
@@ -160,6 +180,50 @@
         window.renderDashboard = function structuredDashboard() {
             const result = baseRenderDashboard.apply(this, arguments);
             renderOperationalOverview();
+            return result;
+        };
+    }
+
+    const baseFallbackNavigation = window.fallbackPortalNavigation;
+    if (typeof baseFallbackNavigation === "function") {
+        window.fallbackPortalNavigation = function structuredFallbackNavigation() {
+            if (currentUser?.role === "employee") {
+                return [
+                    {id: "dashboard", label: "Overview", loader: "dashboard", group: "Workspace"},
+                    {id: "conversations", label: "Customer Inbox", loader: "conversations", group: "Operations"},
+                ];
+            }
+            return baseFallbackNavigation.apply(this, arguments);
+        };
+    }
+
+    if (typeof window.customerRoleLabel === "function") {
+        const baseRoleLabel = window.customerRoleLabel;
+        window.customerRoleLabel = function structuredRoleLabel(role) {
+            if (role === "employee") return "Staff Operator";
+            return baseRoleLabel(role);
+        };
+    }
+
+    if (typeof window.customerAssignableRoleOptions === "function") {
+        window.customerAssignableRoleOptions = function structuredAssignableRoles() {
+            const options = [["employee", "Staff Operator — Overview + Customer Inbox"]];
+            if (["owner", "admin"].includes(currentUser?.role)) {
+                options.push(["manager", "Manager — Company management access"]);
+            }
+            return options;
+        };
+    }
+
+    const baseLoadCompanyUsers = window.loadCompanyUsers;
+    if (typeof baseLoadCompanyUsers === "function") {
+        window.loadCompanyUsers = async function structuredCompanyUsers() {
+            const result = await baseLoadCompanyUsers.apply(this, arguments);
+            const page = document.getElementById("page-users");
+            const intro = page?.querySelector(".dynamic-page-content .panel .muted");
+            if (intro) {
+                intro.textContent = "Staff Operators can use Overview and Customer Inbox for human takeover without access to company configuration or billing. Managers can manage company workspaces and Staff Operator accounts, but not Owner or Company Admin accounts.";
+            }
             return result;
         };
     }
