@@ -25,6 +25,16 @@ def test_release_stops_worker_before_app_and_recreates_same_image_afterwards():
     assert stop_worker < recreate_app < recreate_worker < image_check
 
 
+def test_release_starts_workflow_profile_when_production_setting_requires_it():
+    app_ready = SOURCE.index("wait_healthy xvond-core")
+    workflow_setting = SOURCE.index("settings.N8N_ENABLED")
+    workflow_start = SOURCE.index('--profile workflow up -d workflow-postgres workflow-engine')
+    workflow_db_ready = SOURCE.index("wait_healthy xvond-workflow-postgres")
+    workflow_ready = SOURCE.index("wait_healthy xvond-workflow-engine")
+    acceptance = SOURCE.index("scripts/production_acceptance.py")
+    assert app_ready < workflow_setting < workflow_start < workflow_db_ready < workflow_ready < acceptance
+
+
 def test_release_has_mandatory_health_and_optional_customer_acceptance():
     assert "/health/ready" in SOURCE
     assert "ACCEPTANCE_COMPANY_ID" in SOURCE
