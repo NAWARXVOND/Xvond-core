@@ -89,6 +89,8 @@ def company_full_view(company_id: int, current_admin: User = Depends(require_xvo
                 "id": company.id,
                 "name": company.name,
                 "active": company.active,
+                "lifecycle_status": company.lifecycle_status,
+                "lifecycle_updated_at": company.lifecycle_updated_at,
                 "created_at": company.created_at,
             },
             "users": [
