@@ -19,6 +19,9 @@ class CustomerRecord(Base):
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # Compatibility projection for older screens. New channel identities live in
+    # CustomerIdentity so a later Website/Instagram interaction cannot erase a
+    # customer's WhatsApp identity (or vice versa).
     external_contact_id: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
     channel: Mapped[str | None] = mapped_column(String(50), nullable=True)
     tags: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
@@ -26,6 +29,34 @@ class CustomerRecord(Base):
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class CustomerIdentity(Base):
+    """One external/channel identity linked to a canonical tenant customer."""
+
+    __tablename__ = "customer_identities"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id",
+            "channel",
+            "external_id",
+            name="uq_customer_identity_company_channel_external",
+        ),
+        Index("ix_customer_identities_customer_channel", "customer_id", "channel"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), nullable=False, index=True)
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customer_records.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    channel: Mapped[str] = mapped_column(String(50), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(300), nullable=False)
+    verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class NotificationPreference(Base):
