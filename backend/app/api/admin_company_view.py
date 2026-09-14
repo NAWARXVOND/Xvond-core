@@ -84,6 +84,18 @@ def company_full_view(company_id: int, current_admin: User = Depends(require_xvo
             func.coalesce(func.sum(AIUsage.provider_cost), 0),
         ).filter(AIUsage.company_id == company_id).first()
 
+        support_view = current_admin.role == "support"
+        user_payload = [] if support_view else [
+            {
+                "id": item.id,
+                "email": item.email,
+                "full_name": item.full_name,
+                "role": item.role,
+                "active": item.active,
+            }
+            for item in users
+        ]
+
         return {
             "company": {
                 "id": company.id,
@@ -93,16 +105,8 @@ def company_full_view(company_id: int, current_admin: User = Depends(require_xvo
                 "lifecycle_updated_at": company.lifecycle_updated_at,
                 "created_at": company.created_at,
             },
-            "users": [
-                {
-                    "id": item.id,
-                    "email": item.email,
-                    "full_name": item.full_name,
-                    "role": item.role,
-                    "active": item.active,
-                }
-                for item in users
-            ],
+            "users": user_payload,
+            "user_count": len(users),
             "modules": [
                 {"name": item.module_name, "enabled": item.enabled}
                 for item in modules
