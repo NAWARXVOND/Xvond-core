@@ -9,9 +9,128 @@
     <link rel="stylesheet" href="/static/customer/portal-pro.css?v=20260905-4">
 </head>
 <body>
-<div id="login-screen" class="login-screen"><div class="login-box"><div class="brand">Xvond</div><h2>Customer Login</h2><div id="normal-login-form"><input id="login-email" type="email" placeholder="Email" autocomplete="username"><input id="login-password" type="password" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter') login()"><button onclick="login()">Login</button><button type="button" onclick="showForgotPassword()" style="margin-top:10px;background:transparent !important;border:none !important;cursor:pointer;text-decoration:underline;color:#2563eb !important;font-weight:700">Forgot Password?</button><div id="login-error" class="error"></div></div><div id="forgot-password-form" class="hidden"><p>Enter your account email. We will send a 6-digit verification code.</p><input id="forgot-email" type="email" placeholder="Email" autocomplete="email"><button onclick="requestPasswordCode()">Send Verification Code</button><button type="button" onclick="showNormalLogin()" style="margin-top:10px">Back to Login</button><div id="forgot-message" class="error"></div></div><div id="reset-password-form" class="hidden"><p>Enter the verification code sent to your email.</p><input id="reset-email" type="email" placeholder="Email" readonly><input id="reset-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit code"><input id="reset-new-password" type="password" autocomplete="new-password" placeholder="New Password"><input id="reset-confirm-password" type="password" autocomplete="new-password" placeholder="Confirm New Password"><button onclick="resetCustomerPassword()">Change Password</button><button type="button" onclick="showForgotPassword()" style="margin-top:10px">Change Email / Send New Code</button><button type="button" onclick="showNormalLogin()" style="margin-top:10px;background:transparent !important;border:1px solid #d1d5db !important;color:#374151 !important;cursor:pointer">Back to Login</button><div id="reset-message" class="error"></div></div></div></div>
+<div id="login-screen" class="login-screen">
+    <div class="login-box">
+        <div class="brand">Xvond</div>
+        <h2>Customer Login</h2>
+        <div id="normal-login-form">
+            <input id="login-email" type="email" placeholder="Email" autocomplete="username">
+            <input id="login-password" type="password" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter') login()">
+            <button onclick="login()">Login</button>
+            <button type="button" onclick="showForgotPassword()" style="margin-top:10px;background:transparent !important;border:none !important;cursor:pointer;text-decoration:underline;color:#2563eb !important;font-weight:700">Forgot Password?</button>
+            <div id="login-error" class="error"></div>
+        </div>
+        <div id="forgot-password-form" class="hidden">
+            <p>Enter your account email. We will send a 6-digit verification code.</p>
+            <input id="forgot-email" type="email" placeholder="Email" autocomplete="email">
+            <button onclick="requestPasswordCode()">Send Verification Code</button>
+            <button type="button" onclick="showNormalLogin()" style="margin-top:10px">Back to Login</button>
+            <div id="forgot-message" class="error"></div>
+        </div>
+        <div id="reset-password-form" class="hidden">
+            <p>Enter the verification code sent to your email.</p>
+            <input id="reset-email" type="email" placeholder="Email" readonly>
+            <input id="reset-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit code">
+            <input id="reset-new-password" type="password" autocomplete="new-password" placeholder="New Password">
+            <input id="reset-confirm-password" type="password" autocomplete="new-password" placeholder="Confirm New Password">
+            <button onclick="resetCustomerPassword()">Change Password</button>
+            <button type="button" onclick="showForgotPassword()" style="margin-top:10px">Change Email / Send New Code</button>
+            <button type="button" onclick="showNormalLogin()" style="margin-top:10px;background:transparent !important;border:1px solid #d1d5db !important;color:#374151 !important;cursor:pointer">Back to Login</button>
+            <div id="reset-message" class="error"></div>
+        </div>
+    </div>
+</div>
 
-<div id="portal" class="portal hidden"><aside class="sidebar"><div class="logo">Xvond</div><div class="portal-label">Customer Workspace</div><nav id="portal-nav"></nav><button class="logout" onclick="logout()">Logout</button></aside><main class="main"><header class="topbar"><div><h1 id="page-title">Overview</h1><p>AI employees, operations and business workspace</p></div><div id="user-email"></div></header><section id="page-dashboard" class="page"><div id="dashboard-cards" class="cards"></div><div class="panel" style="margin-bottom:22px"><h2>My Services</h2><div id="dashboard-services" class="service-grid"></div></div><div class="panel"><h2>Account</h2><div id="account-info"></div><hr style="margin:25px 0"><h3>Security</h3><p>Change your account password.</p><div style="max-width:420px;display:grid;gap:10px"><input id="current-password" type="password" autocomplete="current-password" placeholder="Current Password"><input id="new-password" type="password" autocomplete="new-password" placeholder="New Password"><input id="confirm-new-password" type="password" autocomplete="new-password" placeholder="Confirm New Password"><button onclick="changeCustomerPassword()">Change Password</button><div id="change-password-message" class="error"></div></div></div></section><section id="page-agents" class="page hidden"><div class="panel"><h2>My AI Employees</h2><p class="muted">Manage the approved behavior, business information and knowledge for your company.</p><div id="agents-list"></div></div></section><section id="page-chat" class="page hidden"><div class="panel"><h2>Test AI Employee</h2><label>AI Employee</label><select id="chat-agent"></select><div id="chat-box" class="chat-box"></div><div class="chat-input"><input id="chat-message" placeholder="Type a message..." onkeydown="if(event.key==='Enter') sendChat()"><button onclick="sendChat()">Send</button></div></div></section><section id="page-conversations" class="page hidden"><div class="panel"><h2>Inbox</h2><p class="muted">Loading unified conversation inbox...</p></div></section><section id="page-business" class="page hidden"><div class="cards"><div class="card"><span>Total Operations</span><strong id="customer-operations-count">0</strong></div><div class="card"><span>Open</span><strong id="customer-open-count">0</strong></div><div class="card"><span>Completed</span><strong id="customer-completed-count">0</strong></div><div class="card"><span>Human Handoffs</span><strong id="customer-handoffs-count">0</strong></div></div><div id="customer-business-content"></div></section><section id="page-usage" class="page hidden"><div class="cards"><div class="card"><span>Requests</span><strong id="usage-requests">0</strong></div><div class="card"><span>Input Tokens</span><strong id="usage-input">0</strong></div><div class="card"><span>Output Tokens</span><strong id="usage-output">0</strong></div><div class="card"><span>Total Tokens</span><strong id="usage-total">0</strong></div></div></section><section id="page-integrations" class="page hidden"><div id="customer-integrations-content"></div></section><section id="page-billing" class="page hidden"><div id="customer-billing-content"></div></section><div id="dynamic-pages"></div></main></div>
+<div id="portal" class="portal hidden">
+    <aside class="sidebar">
+        <div class="logo">Xvond</div>
+        <div class="portal-label">Customer Workspace</div>
+        <nav id="portal-nav"></nav>
+        <button class="logout" onclick="logout()">Logout</button>
+    </aside>
+
+    <main class="main">
+        <header class="topbar">
+            <div><h1 id="page-title">Overview</h1><p>AI employees, operations and business workspace</p></div>
+            <div id="user-email"></div>
+        </header>
+
+        <section id="page-dashboard" class="page">
+            <div id="dashboard-cards" class="cards"></div>
+            <div class="panel" style="margin-bottom:22px">
+                <h2>My Services</h2>
+                <div id="dashboard-services" class="service-grid"></div>
+            </div>
+            <div class="panel">
+                <h2>Account</h2>
+                <div id="account-info"></div>
+                <hr style="margin:25px 0">
+                <h3>Security</h3>
+                <p>Change your account password.</p>
+                <div style="max-width:420px;display:grid;gap:10px">
+                    <input id="current-password" type="password" autocomplete="current-password" placeholder="Current Password">
+                    <input id="new-password" type="password" autocomplete="new-password" placeholder="New Password">
+                    <input id="confirm-new-password" type="password" autocomplete="new-password" placeholder="Confirm New Password">
+                    <button onclick="changeCustomerPassword()">Change Password</button>
+                    <div id="change-password-message" class="error"></div>
+                </div>
+            </div>
+        </section>
+
+        <section id="page-agents" class="page hidden">
+            <div class="panel"><h2>My AI Employees</h2><p class="muted">Manage the approved behavior, business information and knowledge for your company.</p><div id="agents-list"></div></div>
+        </section>
+
+        <section id="page-chat" class="page hidden">
+            <div class="panel">
+                <h2>Test AI Employee</h2>
+                <label>AI Employee</label>
+                <select id="chat-agent"></select>
+                <div id="chat-box" class="chat-box"></div>
+                <div class="chat-input">
+                    <input id="chat-message" placeholder="Type a message..." onkeydown="if(event.key==='Enter') sendChat()">
+                    <button onclick="sendChat()">Send</button>
+                </div>
+            </div>
+        </section>
+
+        <section id="page-conversations" class="page hidden">
+            <div class="panel">
+                <h2>Inbox</h2>
+                <p class="muted">Loading unified conversation inbox...</p>
+            </div>
+        </section>
+
+        <section id="page-business" class="page hidden">
+            <div class="cards">
+                <div class="card"><span>Total Operations</span><strong id="customer-operations-count">0</strong></div>
+                <div class="card"><span>Open</span><strong id="customer-open-count">0</strong></div>
+                <div class="card"><span>Completed</span><strong id="customer-completed-count">0</strong></div>
+                <div class="card"><span>Human Handoffs</span><strong id="customer-handoffs-count">0</strong></div>
+            </div>
+            <div id="customer-business-content"></div>
+        </section>
+
+        <section id="page-usage" class="page hidden">
+            <div class="cards">
+                <div class="card"><span>Requests</span><strong id="usage-requests">0</strong></div>
+                <div class="card"><span>Input Tokens</span><strong id="usage-input">0</strong></div>
+                <div class="card"><span>Output Tokens</span><strong id="usage-output">0</strong></div>
+                <div class="card"><span>Total Tokens</span><strong id="usage-total">0</strong></div>
+            </div>
+        </section>
+
+        <section id="page-integrations" class="page hidden">
+            <div id="customer-integrations-content"></div>
+        </section>
+
+        <section id="page-billing" class="page hidden">
+            <div id="customer-billing-content"></div>
+        </section>
+
+        <div id="dynamic-pages"></div>
+    </main>
+</div>
 <script>localStorage.removeItem("xvond_customer_token");</script>
 <script src="/static/customer/app.js?v=20260905-1"></script>
 <script src="/static/customer/cookie-session.js?v=20260911-1"></script>
