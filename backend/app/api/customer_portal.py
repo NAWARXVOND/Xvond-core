@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends
@@ -21,6 +21,7 @@ from backend.app.modules.solutions.portal import (
     BUSINESS_CAPABILITY_MODULES,
     build_customer_portal_navigation,
 )
+from backend.app.modules.tools.business_models import HumanHandoff
 
 router = APIRouter(prefix="/customer", tags=["Customer Portal"])
 
@@ -77,6 +78,46 @@ def _service_data(db, subscription: ServiceSubscription, plan: ServicePlan) -> d
     }
 
 
+def _service_health_alerts(services: list[dict], now: datetime) -> list[dict]:
+    alerts = []
+    expires_before = now + timedelta(days=7)
+    for service in services:
+        if service.get("status") != "active":
+            continue
+        period_end = service.get("current_period_end")
+        if period_end and now < period_end <= expires_before:
+            alerts.append(
+                {
+                    "type": "subscription_expiring",
+                    "service_code": service.get("service_code"),
+                    "service_name": service.get("service_name"),
+                    "period_end": period_end,
+                }
+            )
+        for metric, values in (service.get("usage") or {}).items():
+            try:
+                used = Decimal(str(values.get("used") or 0))
+                limit = Decimal(str(values.get("limit") or 0))
+            except (InvalidOperation, ValueError, TypeError):
+                continue
+            if limit <= 0:
+                continue
+            ratio = used / limit
+            if ratio >= Decimal("0.8"):
+                alerts.append(
+                    {
+                        "type": "usage_limit",
+                        "service_code": service.get("service_code"),
+                        "service_name": service.get("service_name"),
+                        "metric": metric,
+                        "used": _plain_limit(used),
+                        "limit": _plain_limit(limit),
+                        "ratio": round(float(ratio), 4),
+                    }
+                )
+    return alerts
+
+
 def _staff_overview(db, current_user: User, company: Company) -> dict:
     agents = db.query(AIAgent).filter(AIAgent.company_id == company.id).all()
     channels = db.query(AgentChannel).filter(AgentChannel.company_id == company.id).all()
@@ -108,6 +149,7 @@ def _staff_overview(db, current_user: User, company: Company) -> dict:
             "channels": len(channels),
             "active_channels": sum(1 for item in channels if item.enabled),
         },
+        "health": None,
         "channels": [],
         "integrations": [],
     }
@@ -169,6 +211,62 @@ def overview(current_user: User = Depends(require_customer_user)):
             func.coalesce(func.sum(AIUsage.total_tokens), 0),
         ).filter(AIUsage.company_id == company_id).first()
 
+        now = datetime.utcnow()
+        since_24h = now - timedelta(hours=24)
+        usage_24h = (
+            db.query(
+                func.count(AIUsage.id),
+                func.coalesce(func.sum(AIUsage.total_tokens), 0),
+                func.coalesce(func.avg(AIUsage.latency_ms), 0),
+            )
+            .filter(
+                AIUsage.company_id == company_id,
+                AIUsage.created_at >= since_24h,
+            )
+            .one()
+        )
+        failed_ai_requests_24h = (
+            db.query(func.count(AIUsage.id))
+            .filter(
+                AIUsage.company_id == company_id,
+                AIUsage.created_at >= since_24h,
+                AIUsage.status != "success",
+            )
+            .scalar()
+            or 0
+        )
+        active_handoffs = (
+            db.query(func.count(HumanHandoff.id))
+            .filter(
+                HumanHandoff.company_id == company_id,
+                HumanHandoff.status.in_(["pending", "in_progress"]),
+            )
+            .scalar()
+            or 0
+        )
+        active_channel_agent_ids = {
+            item.agent_id for item in channels if item.enabled
+        }
+        active_agents_without_channel = [
+            item.id
+            for item in agents
+            if item.enabled and item.id not in active_channel_agent_ids
+        ]
+        service_alerts = _service_health_alerts(services, now)
+        attention_count = (
+            failed_ai_requests_24h
+            + active_handoffs
+            + len(active_agents_without_channel)
+            + len(service_alerts)
+        )
+        health_status = (
+            "critical"
+            if failed_ai_requests_24h
+            else "attention"
+            if attention_count
+            else "healthy"
+        )
+
         return {
             "company": {
                 "id": company.id,
@@ -205,6 +303,20 @@ def overview(current_user: User = Depends(require_customer_user)):
                 "channels": len(channels),
                 "active_channels": sum(1 for item in channels if item.enabled),
                 "integrations": len(integrations),
+            },
+            "health": {
+                "status": health_status,
+                "attention_count": attention_count,
+                "active_handoffs": active_handoffs,
+                "failed_ai_requests_24h": failed_ai_requests_24h,
+                "active_agents_without_channel": len(active_agents_without_channel),
+                "active_agent_ids_without_channel": active_agents_without_channel,
+                "service_alerts": service_alerts,
+                "last_24h": {
+                    "ai_requests": int(usage_24h[0] or 0),
+                    "tokens": int(usage_24h[1] or 0),
+                    "avg_latency_ms": round(float(usage_24h[2] or 0), 1),
+                },
             },
             "channels": [
                 {
