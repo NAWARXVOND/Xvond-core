@@ -9,7 +9,8 @@ def test_customer_inbox_exposes_human_handoff_actions():
     assert '@router.post("/{conversation_id}/take-over")' in source
     assert '@router.post("/{conversation_id}/return-ai")' in source
     assert '@router.post("/{conversation_id}/message")' in source
-    assert "require_customer_manager" in source
+    assert "require_customer_operator" in source
+    assert "require_customer_manager" not in source
     assert "resume_ai(session)" in source
     assert 'role="human"' in source
 
