@@ -23,18 +23,25 @@ router = APIRouter(
     tags=["Xvond Admin - Delivery Readiness"],
 )
 
+LEGACY_BUSINESS_TOOL_NAMES = frozenset({"booking", "order", "lead"})
+
 
 def _action_state(db, company_id: int, agent_id: int) -> dict:
-    assignment = (
+    assignments = (
         db.query(AgentToolAssignment)
         .filter(
             AgentToolAssignment.agent_id == agent_id,
-            AgentToolAssignment.tool_name == "action_request",
             AgentToolAssignment.enabled.is_(True),
         )
-        .first()
+        .all()
     )
-    if assignment is None:
+    by_name = {str(item.tool_name or "").strip(): item for item in assignments}
+    assignment = by_name.get("action_request")
+    legacy_business_tools = sorted(
+        set(by_name) & LEGACY_BUSINESS_TOOL_NAMES
+    )
+
+    if assignment is None and not legacy_business_tools:
         return {
             "requested": False,
             "ready": True,
@@ -42,33 +49,49 @@ def _action_state(db, company_id: int, agent_id: int) -> dict:
             "issues": [],
             "requires_workflow_engine": False,
             "required_integration_ids": [],
+            "legacy_business_tools": [],
         }
 
-    config = reveal_config(assignment.config) or {}
-    stored = config.get("actions") or {}
-    enabled_modules = _enabled_business_modules(db, company_id)
-    enabled_actions = []
     issues = []
+    if legacy_business_tools:
+        issues.append(
+            "Legacy business tools are still enabled: "
+            + ", ".join(legacy_business_tools)
+            + ". Configure canonical Business Actions before Go Live"
+        )
+
+    enabled_actions = []
     required_integration_ids = set()
+    if assignment is not None:
+        config = reveal_config(assignment.config) or {}
+        stored = config.get("actions") or {}
+        enabled_modules = _enabled_business_modules(db, company_id)
 
-    for key, value in stored.items():
-        if not isinstance(value, dict) or not value.get("enabled", False):
-            continue
-        action = {"key": key, **value}
-        enabled_actions.append(action)
-        for issue in _readiness(action, enabled_modules):
-            issues.append(f"{action.get('label') or key}: {issue}")
-        destination = action.get("destination") or {}
-        if destination.get("type") == "integration" and destination.get("integration_id"):
-            required_integration_ids.add(int(destination["integration_id"]))
+        for key, value in stored.items():
+            if not isinstance(value, dict) or not value.get("enabled", False):
+                continue
+            action = {"key": key, **value}
+            enabled_actions.append(action)
+            for issue in _readiness(action, enabled_modules):
+                issues.append(f"{action.get('label') or key}: {issue}")
+            destination = action.get("destination") or {}
+            if destination.get("type") == "integration" and destination.get("integration_id"):
+                required_integration_ids.add(int(destination["integration_id"]))
 
+        if not enabled_actions:
+            issues.append(
+                "Business Actions are enabled, but no customer operation is enabled and runtime-ready"
+            )
+
+    requested = bool(assignment is not None or legacy_business_tools)
     return {
-        "requested": bool(enabled_actions),
-        "ready": not issues,
+        "requested": requested,
+        "ready": bool(not issues and (assignment is None or enabled_actions)),
         "enabled_count": len(enabled_actions),
         "issues": issues,
         "requires_workflow_engine": bool(enabled_actions),
         "required_integration_ids": sorted(required_integration_ids),
+        "legacy_business_tools": legacy_business_tools,
     }
 
 
@@ -225,6 +248,7 @@ def _delivery_state(db, company_id: int, agent_id: int) -> dict:
                 "channels": channels["configured_count"],
                 "live_channels": channels["live_count"],
                 "enabled_actions": actions["enabled_count"],
+                "legacy_business_tools": len(actions["legacy_business_tools"]),
                 "required_connected_apps": len(actions["required_integration_ids"]),
             },
         },
