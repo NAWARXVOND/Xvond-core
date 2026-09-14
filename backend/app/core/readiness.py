@@ -113,6 +113,30 @@ def _provider_runtime(
     return real, None
 
 
+def _channel_customer_accepted(
+    *,
+    channel_type: str,
+    channel_config: dict,
+    connected: bool,
+    connection: dict | None,
+) -> bool:
+    """Return whether an enabled channel has the acceptance evidence Core can store.
+
+    Connectivity and customer acceptance are intentionally distinct. WhatsApp
+    Business App Coexistence needs one observed SMB echo to prove automatic human
+    takeover before the channel counts toward ``ready_for_customer``. This does not
+    block transport or AI replies during the controlled acceptance window.
+    """
+
+    if not connected:
+        return False
+    if channel_type != "whatsapp":
+        return True
+    if channel_config.get("coexistence") is not True:
+        return True
+    return bool(connection and connection.get("coexistence_ready") is True)
+
+
 def company_readiness(db, company_id: int):
     """Return company setup readiness without conflating setup with live traffic.
 
@@ -259,6 +283,12 @@ def company_readiness(db, company_id: int):
                     or (connection and connection["connected"] is True)
                 )
             )
+            customer_accepted = _channel_customer_accepted(
+                channel_type=channel.channel_type,
+                channel_config=channel_config,
+                connected=connected,
+                connection=connection,
+            )
             channel_results.append(
                 {
                     "id": channel.id,
@@ -266,6 +296,10 @@ def company_readiness(db, company_id: int):
                     "enabled": channel.enabled,
                     "configured": configured,
                     "connected": connected,
+                    "customer_accepted": customer_accepted,
+                    "coexistence_ready": (
+                        connection.get("coexistence_ready") if connection else None
+                    ),
                     "connection_status": (
                         connection.get("connection_status") if connection else None
                     ),
@@ -278,10 +312,16 @@ def company_readiness(db, company_id: int):
                 }
             )
         configured_channels = [item for item in channel_results if item["configured"]]
+        enabled_channels = [item for item in channel_results if item["enabled"]]
         live_channels = [
             item
-            for item in channel_results
-            if item["enabled"] and item["connected"]
+            for item in enabled_channels
+            if item["connected"]
+        ]
+        unaccepted_enabled_channels = [
+            item
+            for item in enabled_channels
+            if not item["customer_accepted"]
         ]
 
         provider_selections, provider_error = _provider_runtime(
@@ -322,7 +362,17 @@ def company_readiness(db, company_id: int):
             for item in channel_results
         ):
             warnings.append(
-                "WhatsApp is enabled locally but Meta/Coexistence is not verified"
+                "WhatsApp is enabled locally but Meta transport is not connected"
+            )
+        if any(
+            item["type"] == "whatsapp"
+            and item["enabled"]
+            and item["connected"]
+            and item["coexistence_ready"] is False
+            for item in channel_results
+        ):
+            warnings.append(
+                "WhatsApp Coexistence transport is live but human takeover acceptance is pending"
             )
         if tools and not ready_action:
             warnings.append("Tools are assigned, but no configured customer action is runtime-ready")
@@ -335,7 +385,12 @@ def company_readiness(db, company_id: int):
             and configured_channels
         )
         ready_for_customer = bool(
-            company.active and agent.enabled and setup_ready and live_channels
+            company.active
+            and agent.enabled
+            and setup_ready
+            and enabled_channels
+            and live_channels
+            and not unaccepted_enabled_channels
         )
         agent_results.append(
             {
@@ -363,7 +418,9 @@ def company_readiness(db, company_id: int):
                 "ready_action": ready_action,
                 "channels": channel_results,
                 "configured_channel_count": len(configured_channels),
+                "enabled_channel_count": len(enabled_channels),
                 "live_channel_count": len(live_channels),
+                "unaccepted_enabled_channel_count": len(unaccepted_enabled_channels),
                 "setup_ready": setup_ready,
                 "ready": setup_ready,
                 "ready_for_customer": ready_for_customer,
@@ -392,7 +449,9 @@ def company_readiness(db, company_id: int):
     if not company.active:
         company_warnings.append("Company runtime is currently stopped")
     elif not live_agents:
-        company_warnings.append("Company runtime is active but no AI employee/channel is live for customers")
+        company_warnings.append(
+            "Company runtime is active but at least one enabled customer path still needs live acceptance"
+        )
 
     setup_ready = bool(
         company_profile_ready
