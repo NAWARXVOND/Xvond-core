@@ -11,7 +11,7 @@ from backend.app.core.company_lifecycle import (
 )
 from backend.app.core.config.settings import settings
 from backend.app.core.database.connection import SessionLocal
-from backend.app.core.dependencies import require_xvond_admin
+from backend.app.core.dependencies import require_xvond_admin, require_xvond_operator
 from backend.app.core.n8n_gateway import n8n_gateway
 from backend.app.core.password_policy import validate_password
 from backend.app.core.security import hash_password
@@ -39,7 +39,7 @@ class CompanyLifecycleUpdate(BaseModel):
 
 
 @router.get("/workflow-engine/status")
-def workflow_engine_status(current_admin: User = Depends(require_xvond_admin)):
+def workflow_engine_status(current_admin: User = Depends(require_xvond_operator)):
     enabled = bool(settings.N8N_ENABLED)
     configured = bool(n8n_gateway.configured())
     if configured:
@@ -272,7 +272,7 @@ def update_company_status(
 
 
 @router.get("/companies")
-def list_companies(current_admin: User = Depends(require_xvond_admin)):
+def list_companies(current_admin: User = Depends(require_xvond_operator)):
     db = SessionLocal()
     try:
         companies = db.query(Company).order_by(Company.id.asc()).all()
