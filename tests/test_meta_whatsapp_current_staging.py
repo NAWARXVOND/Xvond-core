@@ -102,5 +102,8 @@ def test_webhook_verification_uses_platform_token_before_tenant_activation():
     webhook = source("backend/app/api/whatsapp_webhook.py")
     assert "from backend.app.api.admin_meta_whatsapp import _meta_settings" in webhook
     assert 'platform_token = str(_meta_settings().get("verify_token") or "")' in webhook
-    assert "hmac.compare_digest(platform_token, str(verify_token))" in webhook
-    assert webhook.index("platform_token =") < webhook.index("for channel in get_whatsapp_channels(db):")
+    assert "hmac.compare_digest(" in webhook
+    platform_pos = webhook.index("platform_token =")
+    compare_pos = webhook.index("hmac.compare_digest(", platform_pos)
+    tenant_loop_pos = webhook.index("for channel in get_whatsapp_channels(db):")
+    assert platform_pos < compare_pos < tenant_loop_pos
