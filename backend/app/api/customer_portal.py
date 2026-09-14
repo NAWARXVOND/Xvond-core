@@ -132,17 +132,23 @@ def _active_live_handoff_count(db, company_id: int) -> int:
     )
 
 
+def _company_portal_state(company: Company) -> dict:
+    return {
+        "id": company.id,
+        "name": company.name,
+        "active": company.active,
+        "lifecycle_status": company.lifecycle_status,
+        "lifecycle_updated_at": company.lifecycle_updated_at,
+    }
+
+
 def _staff_overview(db, current_user: User, company: Company) -> dict:
     agents = db.query(AIAgent).filter(AIAgent.company_id == company.id).all()
     channels = db.query(AgentChannel).filter(AgentChannel.company_id == company.id).all()
     conversation_count = _live_conversation_query(db, company.id).count()
     active_handoffs = _active_live_handoff_count(db, company.id)
     return {
-        "company": {
-            "id": company.id,
-            "name": company.name,
-            "active": company.active,
-        },
+        "company": _company_portal_state(company),
         "services": [],
         "subscription": None,
         "portal": {
@@ -265,11 +271,7 @@ def overview(current_user: User = Depends(require_customer_user)):
         )
 
         return {
-            "company": {
-                "id": company.id,
-                "name": company.name,
-                "active": company.active,
-            },
+            "company": _company_portal_state(company),
             "services": services,
             "subscription": ai_service,
             "portal": {
