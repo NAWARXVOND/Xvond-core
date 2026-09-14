@@ -5,18 +5,24 @@ from pydantic import BaseModel
 from redis.exceptions import RedisError
 from sqlalchemy import func
 
+from backend.app.core.config_secrets import reveal_config
 from backend.app.core.database.connection import SessionLocal
 from backend.app.core.dependencies import require_xvond_admin
 from backend.app.models.company import Company
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIUsage
+from backend.app.modules.audit.service import audit_service
 from backend.app.modules.billing.service_models import ServicePlan, ServiceSubscription
+from backend.app.modules.channels.models import AgentChannel
+from backend.app.modules.channels.whatsapp_delivery import attempt_delivery
+from backend.app.modules.channels.whatsapp_models import WhatsAppOutboundDelivery
 from backend.app.modules.channels.whatsapp_queue import whatsapp_job_queue
 from backend.app.modules.solutions.catalog import SERVICE_CATALOG
 from backend.app.modules.tools.business_models import ActionRequest
 
 router = APIRouter(prefix="/admin/operations", tags=["Xvond Admin - Operations"])
 UNRESOLVED_EXTERNAL = {"executing", "external_failed", "cancelling"}
+UNRESOLVED_DELIVERY = {"failed", "unknown"}
 RECONCILIATION_OUTCOMES = {"executed", "not_executed", "cancelled"}
 
 
@@ -45,6 +51,29 @@ def _operation_metadata(item: ActionRequest) -> dict:
         "action_type": item.action_type,
         "status": item.status,
         "created_at": item.created_at,
+    }
+
+
+def _delivery_metadata(item: WhatsAppOutboundDelivery) -> dict:
+    """Operator-safe transport metadata; never expose message/contact payloads."""
+    return {
+        "id": item.id,
+        "company_id": item.company_id,
+        "agent_id": item.agent_id,
+        "conversation_id": item.conversation_id,
+        "channel_id": item.channel_id,
+        "status": item.status,
+        "retryable": bool(item.retryable),
+        "attempts": int(item.attempts or 0),
+        "provider_message_id": item.provider_message_id,
+        "last_status_code": item.last_status_code,
+        "last_error_code": item.last_error_code,
+        "accepted_at": item.accepted_at,
+        "delivered_at": item.delivered_at,
+        "read_at": item.read_at,
+        "failed_at": item.failed_at,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
     }
 
 
@@ -149,6 +178,119 @@ def unresolved_external_operations(
             "count": len(items),
             "requests": [_operation_metadata(item) for item in items],
         }
+    finally:
+        db.close()
+
+
+@router.get("/whatsapp/deliveries/unresolved")
+def unresolved_whatsapp_deliveries(
+    company_id: int | None = None,
+    limit: int = 100,
+    current_admin: User = Depends(require_xvond_admin),
+):
+    """List unresolved transport state without tenant message/contact content."""
+    db = SessionLocal()
+    try:
+        safe_limit = max(1, min(int(limit or 100), 500))
+        query = db.query(WhatsAppOutboundDelivery).filter(
+            WhatsAppOutboundDelivery.status.in_(UNRESOLVED_DELIVERY)
+        )
+        if company_id is not None:
+            get_company_or_404(db, company_id)
+            query = query.filter(WhatsAppOutboundDelivery.company_id == company_id)
+        rows = query.order_by(WhatsAppOutboundDelivery.id.desc()).limit(safe_limit).all()
+        return {
+            "count": len(rows),
+            "deliveries": [_delivery_metadata(row) for row in rows],
+        }
+    finally:
+        db.close()
+
+
+@router.post("/whatsapp/deliveries/{delivery_id}/retry")
+def retry_whatsapp_delivery(
+    delivery_id: int,
+    current_admin: User = Depends(require_xvond_admin),
+):
+    """Retry only a provider-confirmed failed/retryable delivery.
+
+    ``unknown`` means Xvond cannot prove whether Meta accepted the prior send, so
+    automatically retrying it could duplicate a customer-facing message.
+    """
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(WhatsAppOutboundDelivery)
+            .filter(WhatsAppOutboundDelivery.id == delivery_id)
+            .with_for_update()
+            .first()
+        )
+        if row is None:
+            raise HTTPException(404, "WhatsApp delivery not found")
+        if row.status == "unknown":
+            raise HTTPException(
+                409,
+                "Delivery outcome is unknown and must be reconciled before any resend",
+            )
+        if row.status != "failed" or not row.retryable:
+            raise HTTPException(409, "WhatsApp delivery is not safely retryable")
+
+        channel = (
+            db.query(AgentChannel)
+            .filter(
+                AgentChannel.id == row.channel_id,
+                AgentChannel.company_id == row.company_id,
+                AgentChannel.agent_id == row.agent_id,
+                AgentChannel.channel_type == "whatsapp",
+                AgentChannel.enabled.is_(True),
+            )
+            .first()
+        )
+        if channel is None:
+            raise HTTPException(409, "WhatsApp channel is not active")
+        config = reveal_config(channel.config) or {}
+        audit_service.log(
+            db=db,
+            company_id=row.company_id,
+            action="whatsapp.delivery_retry_requested",
+            resource_type="whatsapp_delivery",
+            resource_id=row.id,
+            user_id=current_admin.id,
+            details={
+                "conversation_id": row.conversation_id,
+                "channel_id": row.channel_id,
+                "attempts_before": int(row.attempts or 0),
+                "previous_error_code": row.last_error_code,
+            },
+        )
+        db.commit()
+        result = attempt_delivery(db, delivery_id=row.id, config=config)
+        refreshed = db.get(WhatsAppOutboundDelivery, row.id)
+        audit_service.log(
+            db=db,
+            company_id=row.company_id,
+            action="whatsapp.delivery_retry_completed",
+            resource_type="whatsapp_delivery",
+            resource_id=row.id,
+            user_id=current_admin.id,
+            details={
+                "conversation_id": row.conversation_id,
+                "channel_id": row.channel_id,
+                "status": refreshed.status if refreshed is not None else result.get("status"),
+                "attempts": int(refreshed.attempts or 0) if refreshed is not None else result.get("attempts"),
+            },
+        )
+        db.commit()
+        return {
+            "status": "retried",
+            "delivery": _delivery_metadata(refreshed),
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
