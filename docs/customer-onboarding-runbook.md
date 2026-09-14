@@ -44,57 +44,98 @@ Exit condition: expected answers are grounded in saved business facts/knowledge 
 
 Assign only the tools required for the sold workflow. Validate integration secrets through Xvond Admin and perform a non-destructive test where possible. External workflows must honor Xvond request IDs as idempotency keys.
 
+For any employee with enabled business actions, the canonical Workflow Engine health action must succeed before employee Go Live. A configured URL/secret alone is not proof that the workflow is active.
+
 Exit condition: every enabled tool has a real execution path, safe error behavior and an owner for unresolved operations.
 
-## 8. Connect channels
+## 8. Configure channels
 
 Connect the purchased channels to the employee. A channel never gets an independent AI persona.
 
-For WhatsApp Coexistence, verify WABA/app subscription, required webhook fields, real connection state and observed SMB echo evidence before treating Coexistence as ready. For Website, validate widget origin/configuration. Voice/other channels must expose only capabilities actually supported.
+For WhatsApp Coexistence, verify Embedded Signup ownership, phone/token validity, WABA app subscription and the required `messages` and `smb_message_echoes` webhook fields. These facts establish usable Meta transport. A real Business App echo is separate evidence that automatic human takeover has worked in practice and is verified during the controlled live-channel acceptance step below.
 
-Exit condition: every enabled channel is connected to the correct Company and AI employee and source identity is stable.
+For Website, validate widget origin/configuration. Voice and other channels must expose only capabilities actually supported.
 
-## 9. Human handoff test
+Exit condition: every intended channel belongs to the correct Company and AI Employee, its source identity is stable and its configuration can pass its pre-activation checks.
 
-Test the actual channel capability. For WhatsApp/Website, verify takeover, owner assignment, human reply, no AI reply while human control is active, and explicit Return to AI. For unsupported channels, confirm the UI does not present a fake reply/takeover capability.
+## 9. Move to testing
 
-Exit condition: human control cannot race with or be overwritten by AI output.
+Operations sets Company lifecycle to `testing`. Customer Portal remains accessible and production customer runtime remains off.
 
-## 10. Business action test
+Run all validation that does not require accepting real public channel traffic: representative FAQ/service questions, unsupported questions, Knowledge retrieval, provider timeout/failure behavior, action preparation/confirmation rules, integration configuration, duplicate/idempotency tests, Admin/Customer access boundaries and channel configuration checks.
 
-For booking/order/lead/custom workflows, validate one happy-path action and the relevant failure/retry path. Verify duplicate inbound delivery cannot execute the business action twice. Unknown external outcomes go to reconciliation rather than blind retry.
+Do not pretend a real Meta/Vapi event was tested while the production route is disabled.
 
-Exit condition: a customer-facing retry cannot duplicate a business side effect.
+Exit condition: no open P0/P1 defect applies to the customer's sold path and all pre-live checks are green.
 
-## 11. Delivery test
+## 10. Business action acceptance
 
-For WhatsApp, confirm outbound delivery is durably recorded before network execution, provider message IDs are tracked, status webhooks progress the delivery state where available, failed/retryable deliveries can be handled safely, and `unknown` outcomes are never automatically resent.
+For booking/order/lead/custom workflows, validate the canonical Workflow Engine health path and at least one representative action path against the intended execution target. For mutating actions, use a controlled test record and validate the relevant failure/retry path.
 
-Exit condition: Support can distinguish prepared, accepted, delivered/read, failed and unknown transport state without reading customer content.
+Verify duplicate inbound or repeated action dispatch cannot execute a business side effect twice. Unknown external outcomes go to reconciliation rather than blind retry.
 
-## 12. Move to testing
+Exit condition: the exact sold operational path is known to execute or fail safely, and a customer-facing retry cannot duplicate a side effect.
 
-Operations sets Company lifecycle to `testing`. Customer Portal remains accessible; production runtime remains off. Run representative scripts for FAQs, service questions, unsupported questions, escalation, tool execution, duplicate messages, provider timeout/failure and channel reconnect behavior.
+## 11. Pre-live production acceptance
 
-Exit condition: no open P0/P1 defect applies to the customer's sold path.
+Run the version-controlled `scripts/production_acceptance.py` check for the target Company/AI Employee. Confirm database, migration head, Redis, real AI route, service entitlements, setup readiness, WhatsApp worker health where configured, Workflow Engine health for operational employees, unresolved delivery/action attention and backup freshness.
 
-## 13. Production acceptance
+Optionally include the live-AI probe to verify a real provider route without creating a customer conversation.
 
-Run the version-controlled production acceptance checks. Confirm database, migration head, Redis, real AI route, service entitlements, company/employee readiness, worker health, unresolved delivery/action attention, backup freshness and production routing.
+Also verify the public `/admin-ui`, `/customer-ui` and `/health/ready` routes reach Core through the intended production reverse proxy.
 
-For a real launch, also verify the public `/admin-ui` and `/customer-ui` routes reach Core through the production reverse proxy.
+Exit condition: the pre-live acceptance report is green or every non-green item has an explicit approved exception that does not affect the sold path.
 
-Exit condition: acceptance report is green or every non-green item has an explicit approved exception that does not affect the sold path.
+## 12. Controlled production activation
 
-## 14. Go Live
+External providers such as Meta and Vapi cannot prove real inbound/outbound delivery while the production route is disabled. Therefore final channel acceptance uses a controlled activation window rather than weakening the `testing` lifecycle.
 
-Set lifecycle to `live`. This transition is readiness-gated and activates company runtime; it does not bypass employee Delivery Readiness. Enable only employees/channels that passed their own go-live gate.
+In this order:
 
-Record launch timestamp, package, active employee IDs, channels, support owner and known non-blocking limitations.
+1. Set Company lifecycle to `live` only after the pre-live gate passes.
+2. Use Delivery Readiness to Go Live the intended AI Employee. Operational employees perform a real Workflow Engine health check before enablement.
+3. Activate only the channel being accepted.
+4. Immediately execute the real-channel acceptance script with a designated test customer/number/account.
+
+Do not treat this technical activation as customer handover. If the real-channel acceptance fails, deactivate the affected channel/employee or use the Company emergency stop immediately, return the lifecycle to a non-live state and resolve the failure before customer handover.
+
+Exit condition: only the minimum intended runtime is active and the team is actively performing final acceptance.
+
+## 13. Real channel and handoff acceptance
+
+For each sold channel, test the actual provider path rather than only an internal chat endpoint.
+
+For WhatsApp Coexistence, prove all of the following on the deployed image:
+
+- one real customer inbound message reaches the intended Company/AI Employee;
+- AI sends exactly one reply to the same WhatsApp conversation;
+- the conversation/source identity remains stable;
+- a reply sent from the native WhatsApp Business App produces a real `smb_message_echoes` event;
+- the echo is mirrored to the Inbox and establishes `coexistence_ready` evidence;
+- human takeover suppresses subsequent AI replies;
+- a Customer Portal operator can claim/reply on the same conversation;
+- explicit Return to AI resumes automation;
+- replaying the same webhook does not duplicate messages, actions or delivery.
+
+For Website, prove the public widget origin, visitor continuity, handoff/reply and Return to AI on the real site.
+
+For Voice, prove a real provider phone call, authenticated callback, response latency/behavior and any sold action/handoff behavior.
+
+Exit condition: every sold live channel has a real end-to-end acceptance result. A configured credential is not acceptance evidence.
+
+## 14. Customer handover
+
+Only after controlled activation and real-channel acceptance succeed should Operations declare the service launched to the customer.
+
+Record launch timestamp, package, active employee IDs, channels, support owner, acceptance evidence and known non-blocking limitations. Confirm the customer owner can access the Portal and knows the human-handoff/support process.
+
+Exit condition: the commercial launch record matches the runtime that was actually accepted.
 
 ## 15. First-day monitoring
 
-Review inbound processing, AI failures/latency, business actions, handoffs, outbound delivery statuses, queue/dead jobs and usage. Check that customer-facing conversation counts match the Inbox and no test/unclassified traffic appears in live views.
+Run production acceptance again with `--require-live`. Review inbound processing, AI failures/latency, business actions, handoffs, outbound delivery statuses, queue/dead jobs and usage. Check that customer-facing conversation counts match the Inbox and no test/unclassified traffic appears in live views.
+
+For any `unknown` external action or delivery result, reconcile before retrying. Never resend a potentially accepted side effect blindly.
 
 ## 16. Ongoing service
 
