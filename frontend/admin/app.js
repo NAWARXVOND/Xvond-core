@@ -65,13 +65,20 @@ function renderAdminAttention(data){
 
 async function loadDashboard(){
   try{
-    const data=await api("/admin/dashboard/summary");
+    const [data,worker]=await Promise.all([
+      api("/admin/dashboard/summary"),
+      api("/admin/operations/workers/whatsapp").catch(()=>({configured:false,worker_active:false,worker_lease_ttl_seconds:0,queued:0,processing:0,retrying:0,dead:0}))
+    ]);
+    const workerState=!worker.configured?"Not configured":worker.worker_active?"Online":"Offline";
     const cards=[
       ["Companies",adminNumber(data.companies)],
       ["Active Companies",adminNumber(data.active_companies)],
       ["Active Employees",`${adminNumber(data.active_agents)} / ${adminNumber(data.agents)}`],
       ["Active Channels",adminNumber(data.active_channels)],
       ["Active Services",adminNumber(data.active_subscriptions)],
+      ["WhatsApp Worker",workerState],
+      ["WhatsApp Queue",`${adminNumber(worker.queued)} queued · ${adminNumber(worker.retrying)} retrying`],
+      ["WhatsApp Dead Jobs",adminNumber(worker.dead)],
       ["AI Requests · 24h",adminNumber(data.ai_requests_24h)],
       ["AI Failures · 24h",adminNumber(data.failed_ai_requests_24h)],
       ["External Ops Pending",adminNumber(data.unresolved_external_operations)],
