@@ -9,16 +9,18 @@ INDEX = ADMIN_DIR / "index.html"
 def test_admin_scripts_are_loaded_once_and_workspace_is_consolidated():
     html = INDEX.read_text(encoding="utf-8-sig")
     scripts = re.findall(r'<script\s+src="([^"]+)"', html)
+    normalized = [script.split("?", 1)[0] for script in scripts]
 
     assert len(scripts) == len(set(scripts))
     assert not any("pilot" in script for script in scripts)
-    assert "/static/admin/company-control-center.js" in scripts
-    assert "/static/admin/privacy-boundaries.js" in scripts
-    assert scripts.index("/static/admin/privacy-boundaries.js") > scripts.index(
+    assert "/static/admin/company-control-center.js" in normalized
+    assert "/static/admin/privacy-boundaries.js" in normalized
+    assert normalized.index("/static/admin/privacy-boundaries.js") > normalized.index(
         "/static/admin/company-control-center.js"
     )
-    assert "/static/admin/customer-operations.js" not in scripts
-    assert "/static/admin/human-chat.js" not in scripts
+    assert normalized[-1] == "/static/admin/privacy-boundaries.js"
+    assert "/static/admin/customer-operations.js" not in normalized
+    assert "/static/admin/human-chat.js" not in normalized
     assert not any("company-control-center-runtime" in script for script in scripts)
     assert not any("employee-workspace" in script for script in scripts)
     assert not (ADMIN_DIR / "company-control-center-runtime.js").exists()
@@ -97,6 +99,17 @@ def test_admin_privacy_boundary_keeps_customer_content_out_of_operator_ui():
     assert "renderPrivacySafeOperations" in privacy
     assert "reconcilePrivacySafeOperation" in privacy
     assert "Customer payloads remain inside the tenant workspace" in privacy
+
+
+def test_admin_polish_contains_only_operator_safe_attention_data():
+    polish = (ADMIN_DIR / "control-center-polish.js").read_text(encoding="utf-8-sig")
+    assert "xvondCustomerOps" not in polish
+    assert "renderCustomersTab" not in polish
+    assert "renderNotificationsTab" not in polish
+    assert "renderConversationsTab" not in polish
+    assert "openHumanConversation" not in polish
+    assert "Customer content is intentionally excluded" in polish
+    assert "external operation" in polish
 
 
 def test_admin_workspace_uses_canonical_company_lifecycle_transition():
