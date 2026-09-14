@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends
@@ -14,6 +14,7 @@ from backend.app.modules.ai_agent.models import AIAgent, AIConversation, AIUsage
 from backend.app.modules.billing.service_limits import service_limits
 from backend.app.modules.billing.service_models import ServicePlan, ServiceSubscription
 from backend.app.modules.channels.models import AgentChannel
+from backend.app.modules.customer_ops.models import NotificationEvent
 from backend.app.modules.integrations.models import CompanyIntegration
 from backend.app.modules.knowledge.models import KnowledgeDocument
 from backend.app.modules.solutions.catalog import SERVICE_CATALOG
@@ -21,10 +22,22 @@ from backend.app.modules.solutions.portal import (
     BUSINESS_CAPABILITY_MODULES,
     build_customer_portal_navigation,
 )
+from backend.app.modules.tools.business_models import ActionRequest, HumanHandoff
 
 router = APIRouter(prefix="/customer", tags=["Customer Portal"])
 
 MANAGER_ROLES = {"owner", "admin", "manager"}
+OPEN_OPERATION_STATES = {
+    "pending",
+    "awaiting_confirmation",
+    "in_progress",
+    "processing",
+    "executing",
+    "external_failed",
+    "cancelling",
+    "pending_human",
+}
+ACTIVE_HANDOFF_STATES = {"pending", "in_progress"}
 
 
 def _plain_limit(value):
@@ -75,6 +88,20 @@ def _service_data(db, subscription: ServiceSubscription, plan: ServicePlan) -> d
         },
         "usage": usage,
     }
+
+
+def _limit_warning_count(services: list[dict]) -> int:
+    warnings = 0
+    for service in services:
+        for row in (service.get("usage") or {}).values():
+            try:
+                limit = Decimal(str(row.get("limit") or 0))
+                used = Decimal(str(row.get("used") or 0))
+            except (InvalidOperation, ValueError, TypeError):
+                continue
+            if limit > 0 and used >= limit:
+                warnings += 1
+    return warnings
 
 
 def _staff_overview(db, current_user: User, company: Company) -> dict:
@@ -168,6 +195,44 @@ def overview(current_user: User = Depends(require_customer_user)):
             func.count(AIUsage.id),
             func.coalesce(func.sum(AIUsage.total_tokens), 0),
         ).filter(AIUsage.company_id == company_id).first()
+        day_ago = datetime.utcnow() - timedelta(hours=24)
+        open_operations = (
+            db.query(func.count(ActionRequest.id))
+            .filter(
+                ActionRequest.company_id == company_id,
+                ActionRequest.status.in_(OPEN_OPERATION_STATES),
+            )
+            .scalar()
+            or 0
+        )
+        active_handoffs = (
+            db.query(func.count(HumanHandoff.id))
+            .filter(
+                HumanHandoff.company_id == company_id,
+                HumanHandoff.status.in_(ACTIVE_HANDOFF_STATES),
+            )
+            .scalar()
+            or 0
+        )
+        unread_notifications = (
+            db.query(func.count(NotificationEvent.id))
+            .filter(
+                NotificationEvent.company_id == company_id,
+                NotificationEvent.read.is_(False),
+            )
+            .scalar()
+            or 0
+        )
+        failed_ai_24h = (
+            db.query(func.count(AIUsage.id))
+            .filter(
+                AIUsage.company_id == company_id,
+                AIUsage.status == "failed",
+                AIUsage.created_at >= day_ago,
+            )
+            .scalar()
+            or 0
+        )
 
         return {
             "company": {
@@ -205,6 +270,11 @@ def overview(current_user: User = Depends(require_customer_user)):
                 "channels": len(channels),
                 "active_channels": sum(1 for item in channels if item.enabled),
                 "integrations": len(integrations),
+                "open_operations": int(open_operations),
+                "active_handoffs": int(active_handoffs),
+                "unread_notifications": int(unread_notifications),
+                "failed_ai_requests_24h": int(failed_ai_24h),
+                "service_limit_warnings": _limit_warning_count(services),
             },
             "channels": [
                 {
