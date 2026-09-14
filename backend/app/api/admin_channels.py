@@ -14,6 +14,7 @@ from backend.app.models.company import Company
 from backend.app.models.company_module import CompanyModule
 from backend.app.models.user import User
 from backend.app.modules.ai_agent.models import AIAgent
+from backend.app.modules.audit.service import audit_service
 from backend.app.modules.billing.limits import limits_service
 from backend.app.modules.channels.catalog import get_channel_definition, validate_channel_config
 from backend.app.modules.channels.models import AgentChannel
@@ -70,12 +71,7 @@ def _assert_unique_whatsapp_phone_number_id(
     *,
     exclude_channel_id: int | None = None,
 ) -> None:
-    """Guarantee deterministic WhatsApp routing across the whole platform.
-
-    Meta phone-number IDs identify a single inbound endpoint. Allowing the same
-    ID on two AI Employees makes webhook routing ambiguous, so configuration is
-    rejected before it can become a production incident.
-    """
+    """Guarantee deterministic WhatsApp routing across the whole platform."""
     target = str(phone_number_id or "").strip()
     if not target:
         return
@@ -150,6 +146,30 @@ def _ensure_channels_module(db, company_id: int):
     return module
 
 
+def _audit_channel(
+    db,
+    admin: User,
+    channel: AgentChannel,
+    action: str,
+    *,
+    details: dict | None = None,
+) -> None:
+    audit_service.log(
+        db=db,
+        action=action,
+        resource_type="channel",
+        resource_id=channel.id,
+        user_id=admin.id,
+        company_id=channel.company_id,
+        details={
+            "agent_id": channel.agent_id,
+            "channel_type": channel.channel_type,
+            "enabled": channel.enabled,
+            **(details or {}),
+        },
+    )
+
+
 def _has_real_runtime_provider(
     db,
     company_id: int,
@@ -209,8 +229,6 @@ def _activation_blockers(db, channel: AgentChannel) -> list[str]:
             f"{channel.channel_type.title()} channel configuration is incomplete"
         )
     elif channel.channel_type == "whatsapp":
-        # Production activation must prove the stored Meta connection works now.
-        # A syntactically complete credential set is configuration, not connectivity.
         connection = whatsapp_connection_state(
             channel_config,
             verify_remote=True,
@@ -266,8 +284,6 @@ def create_channel(
                 db,
                 data.config.get("phone_number_id"),
             )
-        # Creation is configuration only and starts disabled. Commercial channel
-        # capacity is consumed only when a channel is actually activated.
         channel = AgentChannel(
             company_id=agent.company_id,
             agent_id=agent.id,
@@ -276,13 +292,18 @@ def create_channel(
             enabled=False,
         )
         db.add(channel)
+        db.flush()
         _ensure_channels_module(db, agent.company_id)
+        _audit_channel(db, current_admin, channel, "channel.created")
         db.commit()
         db.refresh(channel)
         result = serialize_channel(channel)
         result["status"] = "created"
         return result
     except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
         db.rollback()
         raise
     finally:
@@ -348,6 +369,8 @@ def update_channel(
         ).first()
         if channel is None:
             raise HTTPException(404, "Channel not found")
+        changed_fields = []
+        previous_enabled = channel.enabled
         if data.config is not None:
             new_config = merge_config(channel.config, data.config)
             if channel.channel_type == "whatsapp":
@@ -358,6 +381,7 @@ def update_channel(
                     exclude_channel_id=channel.id,
                 )
             channel.config = new_config
+            changed_fields.append("config")
             db.flush()
         if data.enabled is True and channel.enabled is False:
             limits_service.check_channel_limit(db, channel.company_id)
@@ -369,8 +393,21 @@ def update_channel(
                 )
             _ensure_channels_module(db, channel.company_id)
             channel.enabled = True
-        elif data.enabled is False:
+            changed_fields.append("enabled")
+        elif data.enabled is False and channel.enabled is not False:
             channel.enabled = False
+            changed_fields.append("enabled")
+        if changed_fields:
+            _audit_channel(
+                db,
+                current_admin,
+                channel,
+                "channel.updated",
+                details={
+                    "changed_fields": changed_fields,
+                    "previous_enabled": previous_enabled,
+                },
+            )
         db.commit()
         db.refresh(channel)
         result = serialize_channel(channel)
@@ -406,7 +443,6 @@ def configure_whatsapp(
             for key, value in data.model_dump().items()
             if value is not None
         }
-        # Do not create new channel-level copies of employee language settings.
         incoming.pop("language", None)
         incoming.pop("dialect", None)
         new_config = merge_config(channel.config, incoming)
@@ -421,9 +457,21 @@ def configure_whatsapp(
             exclude_channel_id=channel.id,
         )
 
+        previous_enabled = channel.enabled
         channel.config = new_config
         channel.enabled = False
         _ensure_channels_module(db, channel.company_id)
+        _audit_channel(
+            db,
+            current_admin,
+            channel,
+            "channel.whatsapp_configured",
+            details={
+                "changed_fields": sorted(incoming),
+                "previous_enabled": previous_enabled,
+                "configured_secret_fields": sorted(configured_secret_fields(new_config)),
+            },
+        )
         db.commit()
         db.refresh(channel)
         blockers = _activation_blockers(db, channel)
@@ -458,8 +506,15 @@ def delete_channel(
         ).first()
         if channel is None:
             raise HTTPException(404, "Channel not found")
+        _audit_channel(db, current_admin, channel, "channel.deleted")
         db.delete(channel)
         db.commit()
         return {"status": "deleted", "channel_id": channel_id}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
