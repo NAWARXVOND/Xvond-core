@@ -1,3 +1,5 @@
+import logging
+
 from backend.app.core.ai.base import (
     AIProvider,
     AIResponse,
@@ -8,6 +10,7 @@ from backend.app.core.ai.provider_registry import (
 from backend.app.core.ai.response_language import apply_response_language
 from backend.app.core.ai.routing_quality import assert_model_quality
 from backend.app.core.config.settings import settings
+from backend.app.core.error_safety import safe_error_metadata, safe_error_type
 from backend.app.core.privacy import (
     protect_text,
     protect_tool_outputs,
@@ -15,10 +18,36 @@ from backend.app.core.privacy import (
 )
 
 
+logger = logging.getLogger("xvond.ai.engine")
+
+
+class ProviderExecutionError(RuntimeError):
+    """Safe provider-boundary error.
+
+    Raw SDK/provider exception text must never escape into runtime responses,
+    AIUsage, audit details, or customer-visible routing metadata because upstream
+    errors can contain prompts, request bodies, credentials, or customer data.
+    """
+
+    def __init__(self, provider: str, error: BaseException):
+        self.provider = str(provider or "unknown")[:100]
+        self.error_type = safe_error_type(error)
+        super().__init__(f"{self.provider} provider failed ({self.error_type})")
+
+
 class AIEngine:
 
     def __init__(self):
         self._load_core_providers()
+
+    def _register_core_provider(self, name: str, factory) -> None:
+        try:
+            provider_registry.register(name, factory())
+        except Exception as exc:
+            logger.error(
+                "AI provider could not be loaded",
+                extra={"provider": name, **safe_error_metadata(exc)},
+            )
 
     def _load_core_providers(self):
         if not settings.is_production:
@@ -26,32 +55,20 @@ class AIEngine:
             provider_registry.register("mock", MockProvider())
 
         if settings.OPENAI_API_KEY:
-            try:
-                from backend.app.core.ai.providers.openai import OpenAIProvider
-                provider_registry.register("openai", OpenAIProvider())
-            except Exception as exc:
-                print("Could not load OpenAI provider:", exc)
+            from backend.app.core.ai.providers.openai import OpenAIProvider
+            self._register_core_provider("openai", OpenAIProvider)
 
         if settings.ANTHROPIC_API_KEY:
-            try:
-                from backend.app.core.ai.providers.anthropic import AnthropicProvider
-                provider_registry.register("anthropic", AnthropicProvider())
-            except Exception as exc:
-                print("Could not load Anthropic provider:", exc)
+            from backend.app.core.ai.providers.anthropic import AnthropicProvider
+            self._register_core_provider("anthropic", AnthropicProvider)
 
         if settings.GOOGLE_API_KEY:
-            try:
-                from backend.app.core.ai.providers.google import GoogleProvider
-                provider_registry.register("google", GoogleProvider())
-            except Exception as exc:
-                print("Could not load Google provider:", exc)
+            from backend.app.core.ai.providers.google import GoogleProvider
+            self._register_core_provider("google", GoogleProvider)
 
         if settings.XAI_API_KEY:
-            try:
-                from backend.app.core.ai.providers.xai import XAIProvider
-                provider_registry.register("xai", XAIProvider())
-            except Exception as exc:
-                print("Could not load xAI provider:", exc)
+            from backend.app.core.ai.providers.xai import XAIProvider
+            self._register_core_provider("xai", XAIProvider)
 
     def register_provider(self, name: str, provider: AIProvider):
         provider_registry.register(name, provider)
@@ -99,14 +116,23 @@ class AIEngine:
                 replacements,
             )
 
-        response = provider.generate(
-            system_prompt=outbound_system_prompt,
-            user_message=outbound_user_message,
-            model=model,
-            tools=tools,
-            tool_outputs=outbound_tool_outputs,
-            continuation=continuation,
-        )
+        try:
+            response = provider.generate(
+                system_prompt=outbound_system_prompt,
+                user_message=outbound_user_message,
+                model=model,
+                tools=tools,
+                tool_outputs=outbound_tool_outputs,
+                continuation=continuation,
+            )
+        except ProviderExecutionError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "AI provider request failed",
+                extra={"provider": provider_name, "model": model, **safe_error_metadata(exc)},
+            )
+            raise ProviderExecutionError(provider_name, exc) from exc
 
         if replacements:
             response = restore_ai_response(response, replacements)
