@@ -104,6 +104,21 @@
         }
     };
 
+    // One company lifecycle source of truth. The old /admin/production routes
+    // remain backend compatibility wrappers, but the live Admin UI uses the
+    // canonical status transition directly.
+    toggleWorkspaceCompany = async function toggleCanonicalWorkspaceCompany(active) {
+        try {
+            await api(`/admin/companies/${xvondWorkspace.companyId}/status`, {
+                method: 'PATCH',
+                body: JSON.stringify({active: Boolean(active)})
+            });
+            await loadCompanyControlCenter(xvondWorkspace.companyId, 'overview');
+        } catch (error) {
+            alert(error.message);
+        }
+    };
+
     renderCompanyControlCenter = function renderPrivacyAwareCompanyControlCenter() {
         if (xvondWorkspace.tab === 'conversations') {
             xvondWorkspace.tab = 'overview';
