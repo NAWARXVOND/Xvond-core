@@ -45,11 +45,12 @@ def test_admin_attention_panel_flags_locally_active_disconnected_whatsapp():
     assert "channel.connection_issue" in ui
 
 
-def test_customer_status_surfaces_safe_meta_probe_failure():
+def test_customer_status_uses_safe_reconnect_state_without_raw_meta_diagnostics():
     api = source("backend/app/api/customer_meta_whatsapp.py")
     ui = source("frontend/customer/meta-whatsapp.js")
     assert '"connection_status": connection["connection_status"]' in api
     assert '"connection_issue": connection["connection_issue"]' in api
     assert '"meta_error_code": connection["meta_error_code"]' in api
     assert 'config.connection_status === "invalid_token"' in ui
-    assert "config.connection_issue" in ui
+    assert "config.connection_issue" not in ui
+    assert "إعادة ربط" in ui
