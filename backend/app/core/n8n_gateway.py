@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from backend.app.core.config.settings import settings
+from backend.app.core.error_safety import safe_error_metadata, safe_error_type
 
 logger = logging.getLogger("xvond.n8n")
 
@@ -93,12 +94,15 @@ class N8NActionGateway:
                         "action": normalized_action,
                         "attempt": attempt,
                         "attempts": attempts,
+                        **safe_error_metadata(exc),
                     },
                 )
                 if attempt < attempts:
                     time.sleep(min(0.25 * attempt, 1.0))
 
-        raise N8NGatewayError(f"n8n workflow execution failed: {last_error}")
+        raise N8NGatewayError(
+            f"n8n workflow execution failed ({safe_error_type(last_error)})"
+        ) from last_error
 
 
 n8n_gateway = N8NActionGateway()
