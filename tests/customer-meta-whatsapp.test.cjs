@@ -75,7 +75,7 @@ for (const sdkAlreadyLoaded of [false, true]) {
     });
 }
 
-test('Coexistence pending states are not presented as a broken generic connection', () => {
+test('Coexistence transport and human takeover verification are presented separately', () => {
     const context = vm.createContext({
         window: {addEventListener() {}},
         URL,
@@ -84,19 +84,35 @@ test('Coexistence pending states are not presented as a broken generic connectio
     });
     vm.runInContext(source, context);
 
-    const echoPending = vm.runInContext(`xvondCustomerWhatsAppStatus({
-        connected: false,
+    const takeoverPending = vm.runInContext(`xvondCustomerWhatsAppStatus({
+        connected: true,
         configured: true,
         coexistence: true,
-        connection_status: 'coexistence_echo_pending'
+        coexistence_ready: false,
+        runtime_ready: true,
+        display_phone_number: '+96890000000',
+        connection_status: 'connected'
     })`, context);
-    assert.match(echoPending.title, /بانتظار اختبار التحكم البشري/);
-    assert.match(echoPending.detail, /WhatsApp Business/);
+    assert.match(takeoverPending.title, /واتساب متصل/);
+    assert.match(takeoverPending.detail, /يستطيع الرد الآن/);
+    assert.match(takeoverPending.detail, /WhatsApp Business/);
+
+    const takeoverVerified = vm.runInContext(`xvondCustomerWhatsAppStatus({
+        connected: true,
+        configured: true,
+        coexistence: true,
+        coexistence_ready: true,
+        runtime_ready: true,
+        display_phone_number: '+96890000000',
+        connection_status: 'connected'
+    })`, context);
+    assert.match(takeoverVerified.detail, /تم التحقق منه/);
 
     const setupRequired = vm.runInContext(`xvondCustomerWhatsAppStatus({
         connected: false,
         configured: true,
         coexistence: true,
+        coexistence_ready: false,
         connection_status: 'coexistence_setup_required'
     })`, context);
     assert.match(setupRequired.title, /إعداد التعايش غير مكتمل/);
