@@ -20,7 +20,7 @@ function customerCanManageUser(user) {
 function customerAssignableRoleOptions() {
     const options = [["employee", "Staff — Overview only"]];
     if (["owner", "admin"].includes(currentUser?.role)) {
-        options.push(["manager", "Manager — Management access"]);
+        options.push(["manager", "Manager — Company management access"]);
     }
     return options;
 }
@@ -144,8 +144,8 @@ async function loadCompanyUsers() {
         const roleOptions = customerAssignableRoleOptions();
         target.innerHTML = `
             <div class="panel" style="margin-bottom:20px">
-                <h2>Company Users</h2>
-                <p class="muted">Staff sees Overview only. Managers can manage company workspaces but cannot create or disable other managers.</p>
+                <h2>Team Access</h2>
+                <p class="muted">Control who can sign in to this company workspace. Staff sees Overview only. Managers can manage company workspaces and Staff accounts, but not Owner or Company Admin accounts.</p>
                 <div id="company-user-list">
                     ${users.map(user => `
                         <div class="agent">
@@ -159,14 +159,14 @@ async function loadCompanyUsers() {
                 </div>
             </div>
             <div class="panel">
-                <h2>Add User</h2>
-                <p class="muted">${currentUser?.role === "manager" ? "Managers can add Staff accounts only." : "Owners and Company Admins can add Staff or Manager accounts."}</p>
-                <div class="form-group"><label>Full Name</label><input id="cu-name"></div>
-                <div class="form-group"><label>Email</label><input id="cu-email" type="email"></div>
-                <div class="form-group"><label>Temporary Password</label><input id="cu-password" type="password"></div>
-                <div class="form-group"><label>Access</label><select id="cu-role">${roleOptions.map(([value,label]) => `<option value="${value}">${safe(label)}</option>`).join("")}</select></div>
+                <h2>Add Team Member</h2>
+                <p class="muted">${currentUser?.role === "manager" ? "Managers can add Staff accounts only." : "Owners and Company Admins can add Staff or Manager accounts."} Set an initial password and share it securely; the user can change it from Account & Security after signing in.</p>
+                <div class="form-group"><label>Full Name</label><input id="cu-name" autocomplete="name"></div>
+                <div class="form-group"><label>Email</label><input id="cu-email" type="email" autocomplete="email"></div>
+                <div class="form-group"><label>Initial Password</label><input id="cu-password" type="password" autocomplete="new-password"></div>
+                <div class="form-group"><label>Workspace Access</label><select id="cu-role">${roleOptions.map(([value,label]) => `<option value="${value}">${safe(label)}</option>`).join("")}</select></div>
                 <div id="cu-message" class="error"></div>
-                <button onclick="createCompanyUser()">Add User</button>
+                <button onclick="createCompanyUser()">Add Team Member</button>
             </div>
         `;
     } catch (err) {
