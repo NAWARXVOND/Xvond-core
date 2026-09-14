@@ -13,16 +13,26 @@ def _activation_block():
     )[0]
 
 
+def _lifecycle_transition_block():
+    return LIFECYCLE.split("def set_company_lifecycle(", 1)[1].split(
+        "def activate_company(", 1
+    )[0]
+
+
 def test_company_activation_does_not_enable_ai_employees():
-    block = _activation_block()
-    assert "company.active = True" in block
-    assert "AIAgent.enabled: True" not in block
-    assert ".update(" not in block
+    activation = _activation_block()
+    transition = _lifecycle_transition_block()
+    assert 'set_company_lifecycle(db, company_id, "live")' in activation
+    assert "company.active = True" in transition
+    assert "AIAgent.enabled: True" not in activation
+    assert "AIAgent.enabled: True" not in transition
+    assert "AIAgent.enabled" not in transition
 
 
 def test_company_activation_documents_employee_lifecycle_authority():
-    assert "Employee Go Live" in LIFECYCLE
-    assert "does not enable AI employees" in LIFECYCLE
+    transition = _lifecycle_transition_block()
+    assert "without conflating it with AI state" in transition
+    assert "Going live is readiness-gated" in transition
     assert "Delivery Readiness" in PRODUCTION
     assert "must never enable employees" in PRODUCTION
 
