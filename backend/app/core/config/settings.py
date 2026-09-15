@@ -99,6 +99,8 @@ class Settings:
                 errors.append("PUBLIC_BASE_URL is required in production")
             elif not self.PUBLIC_BASE_URL.lower().startswith("https://"):
                 errors.append("PUBLIC_BASE_URL must use HTTPS in production")
+            if not self.TRUST_PROXY_HEADERS:
+                errors.append("TRUST_PROXY_HEADERS must be enabled in production behind the Xvond reverse proxy")
             if _looks_like_placeholder(self.DATABASE_URL):
                 errors.append("DATABASE_URL is using a placeholder credential")
             if len(self.JWT_SECRET) < 32:
