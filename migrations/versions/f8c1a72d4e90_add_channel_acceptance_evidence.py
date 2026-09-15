@@ -1,7 +1,7 @@
 """add system-owned channel acceptance evidence
 
 Revision ID: f8c1a72d4e90
-Revises: f17a62c0d9e1
+Revises: e9c14b72a630
 """
 
 from alembic import op
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 
 
 revision = "f8c1a72d4e90"
-down_revision = "f17a62c0d9e1"
+down_revision = "e9c14b72a630"
 branch_labels = None
 depends_on = None
 
