@@ -14,6 +14,7 @@ from backend.app.core.config_secrets import reveal_config
 from backend.app.core.customer_runtime_policy import is_service_access_error, safe_service_unavailable_message
 from backend.app.core.database.connection import SessionLocal
 from backend.app.modules.ai_agent.models import AIConversation, AIMessage
+from backend.app.modules.channels.acceptance import mark_customer_roundtrip
 from backend.app.modules.channels.conversation_source import bind_conversation_source
 from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.channels.vapi import build_voice_behavior_prompt, normalize_vapi_messages
@@ -217,6 +218,7 @@ def voice_chat_completions(
         conversation_id = _existing_conversation(db, channel, external_call_id)
         agent = agent_runtime.get_agent(db, channel.company_id, channel.agent_id)
         original_prompt = agent.system_prompt or ""
+        runtime_success = True
         try:
             runtime_prompt = (
                 original_prompt + "\n\n" + build_voice_behavior_prompt(config)
@@ -236,6 +238,7 @@ def voice_chat_completions(
             except HTTPException as exc:
                 if not is_service_access_error(exc):
                     raise
+                runtime_success = False
                 result = _voice_service_fallback(
                     db,
                     channel,
@@ -255,6 +258,11 @@ def voice_chat_completions(
             channel_id=channel.id,
             external_contact_id=external_call_id,
         )
+        if runtime_success:
+            mark_customer_roundtrip(
+                channel,
+                source="voice_vapi_llm_response",
+            )
         db.commit()
 
         text = str(result.get("response", {}).get("content") or "")
