@@ -4,6 +4,22 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _looks_like_placeholder(value: str | None) -> bool:
+    normalized = str(value or "").strip().upper()
+    if not normalized:
+        return False
+    markers = (
+        "GENERATE_",
+        "CHANGE_TO_",
+        "URL_ENCODED_PASSWORD",
+        "REPLACE_ME",
+        "YOUR_SECRET",
+        "YOUR_PASSWORD",
+        "EXAMPLE_SECRET",
+    )
+    return any(marker in normalized for marker in markers)
+
+
 class Settings:
     APP_NAME = os.getenv("APP_NAME", "Xvond Core")
     APP_VERSION = os.getenv("APP_VERSION", "1.0.0")
@@ -74,11 +90,17 @@ class Settings:
                 errors.append("N8N_WEBHOOK_URL is required when n8n is enabled")
             if not self.N8N_SHARED_SECRET:
                 errors.append("N8N_SHARED_SECRET is required when n8n is enabled")
+            elif _looks_like_placeholder(self.N8N_SHARED_SECRET):
+                errors.append("N8N_SHARED_SECRET is using a placeholder value")
         if self.is_production:
             if not self.REDIS_URL:
                 errors.append("REDIS_URL is required in production")
             if not self.PUBLIC_BASE_URL:
                 errors.append("PUBLIC_BASE_URL is required in production")
+            elif not self.PUBLIC_BASE_URL.lower().startswith("https://"):
+                errors.append("PUBLIC_BASE_URL must use HTTPS in production")
+            if _looks_like_placeholder(self.DATABASE_URL):
+                errors.append("DATABASE_URL is using a placeholder credential")
             if len(self.JWT_SECRET) < 32:
                 errors.append("JWT_SECRET must contain at least 32 characters in production")
             weak_secrets = {
@@ -87,16 +109,22 @@ class Settings:
                 "secret",
                 "password",
             }
-            if self.JWT_SECRET in weak_secrets:
-                errors.append("JWT_SECRET is using a development value")
+            if self.JWT_SECRET in weak_secrets or _looks_like_placeholder(self.JWT_SECRET):
+                errors.append("JWT_SECRET is using a development or placeholder value")
             if len(self.CONFIG_ENCRYPTION_KEY) < 32:
                 errors.append("CONFIG_ENCRYPTION_KEY must contain at least 32 characters in production")
+            if _looks_like_placeholder(self.CONFIG_ENCRYPTION_KEY):
+                errors.append("CONFIG_ENCRYPTION_KEY is using a placeholder value")
             if not self.SUPERADMIN_EMAIL:
                 errors.append("SUPERADMIN_EMAIL is required in production")
+            elif self.SUPERADMIN_EMAIL.strip().lower() == "admin@example.com":
+                errors.append("SUPERADMIN_EMAIL is using the example address")
             if not self.SUPERADMIN_PASSWORD:
                 errors.append("SUPERADMIN_PASSWORD is required in production")
             if self.SUPERADMIN_PASSWORD and len(self.SUPERADMIN_PASSWORD) < 12:
                 errors.append("SUPERADMIN_PASSWORD must contain at least 12 characters")
+            if _looks_like_placeholder(self.SUPERADMIN_PASSWORD):
+                errors.append("SUPERADMIN_PASSWORD is using a placeholder value")
         if errors:
             raise RuntimeError("Invalid Xvond configuration: " + "; ".join(errors))
 
