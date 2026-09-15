@@ -198,7 +198,8 @@ services:
       N8N_HOST: ${WORKFLOW_HOST:-workflow.xvond.com}
       N8N_PORT: 5678
       N8N_PROTOCOL: https
-      WEBHOOK_URL: ${WORKFLOW_PUBLIC_URL:?WORKFLOW_PUBLIC_URL is required}
+      N8N_WEBHOOK_URL: ${WORKFLOW_PUBLIC_URL:?WORKFLOW_PUBLIC_URL is required}
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       GENERIC_TIMEZONE: ${WORKFLOW_TIMEZONE:-Asia/Muscat}
       TZ: ${WORKFLOW_TIMEZONE:-Asia/Muscat}
       N8N_DIAGNOSTICS_ENABLED: "false"
