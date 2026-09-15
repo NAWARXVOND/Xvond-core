@@ -9,6 +9,7 @@ def _valid_production_settings() -> Settings:
     item.DATABASE_URL = "postgresql+psycopg://xvond:real-password@postgres:5432/xvond"
     item.REDIS_URL = "redis://redis:6379/0"
     item.PUBLIC_BASE_URL = "https://api.xvond.com"
+    item.TRUST_PROXY_HEADERS = True
     item.JWT_SECRET = "a-real-jwt-secret-with-more-than-thirty-two-characters"
     item.JWT_ALGORITHM = "HS256"
     item.ACCESS_TOKEN_EXPIRE_MINUTES = 60
@@ -58,6 +59,14 @@ def test_production_rejects_example_credentials_and_insecure_public_url():
     assert "CONFIG_ENCRYPTION_KEY is using a placeholder value" in message
     assert "SUPERADMIN_EMAIL is using the example address" in message
     assert "SUPERADMIN_PASSWORD is using a placeholder value" in message
+
+
+def test_production_requires_proxy_headers_for_real_client_rate_limits():
+    item = _valid_production_settings()
+    item.TRUST_PROXY_HEADERS = False
+
+    with pytest.raises(RuntimeError, match="TRUST_PROXY_HEADERS must be enabled in production"):
+        item.validate()
 
 
 def test_workflow_secret_placeholder_is_rejected_when_workflow_enabled():
