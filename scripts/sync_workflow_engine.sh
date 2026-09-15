@@ -24,9 +24,17 @@ compose_workflow run --rm \
     workflow-engine \
     import:workflow --input=/import/xvond-actions.workflow.json
 
+# n8n 2.x publishes a workflow version with publish:workflow. The source export
+# intentionally remains inactive for safe storage, so explicitly set the legacy
+# active flag as a compatibility guard before restart. This is required by the
+# pinned 2.36.x runtime to ensure production webhook registration on startup.
 compose_workflow run --rm \
     workflow-engine \
     publish:workflow --id="$WORKFLOW_ID"
+
+compose_workflow run --rm \
+    workflow-engine \
+    update:workflow --id="$WORKFLOW_ID" --active=true
 
 compose_workflow up -d --no-deps workflow-engine
 
