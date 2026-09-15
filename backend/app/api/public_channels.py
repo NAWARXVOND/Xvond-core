@@ -20,6 +20,7 @@ from backend.app.core.visitor_tokens import (
 from backend.app.modules.ai_agent.models import AIConversation, AIMessage
 from backend.app.modules.ai_agent.profile_models import AIAgentProfile
 from backend.app.modules.audit.service import audit_service
+from backend.app.modules.channels.acceptance import mark_customer_roundtrip
 from backend.app.modules.channels.conversation_source import bind_conversation_source
 from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.channels.vapi import build_voice_behavior_prompt
@@ -396,6 +397,10 @@ def website_chat(
                 channel_type="website",
                 channel_id=channel.id,
             )
+            mark_customer_roundtrip(
+                channel,
+                source="website_ai_response",
+            )
             db.commit()
             result["visitor_token"] = issue_website_visitor_token(
                 channel.id, result["conversation_id"]
@@ -505,6 +510,10 @@ def voice_turn(
             channel_type="voice",
             channel_id=channel.id,
             external_contact_id=data.session_id,
+        )
+        mark_customer_roundtrip(
+            channel,
+            source="voice_turn_response",
         )
         db.commit()
         return {

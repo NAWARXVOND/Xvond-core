@@ -5,6 +5,8 @@ from datetime import datetime
 from sqlalchemy.exc import IntegrityError
 
 from backend.app.modules.ai_agent.models import AIMessage
+from backend.app.modules.channels.acceptance import mark_customer_roundtrip
+from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.channels.whatsapp import whatsapp_sender
 from backend.app.modules.channels.whatsapp_models import WhatsAppOutboundDelivery
 
@@ -309,6 +311,21 @@ def apply_provider_status(
         )
     else:
         return row
+
+    if (
+        row.status in {"delivered", "read"}
+        and str(row.idempotency_key or "").endswith(":ai-reply-v1")
+    ):
+        channel = (
+            db.query(AgentChannel)
+            .filter(AgentChannel.id == row.channel_id)
+            .first()
+        )
+        if channel is not None:
+            mark_customer_roundtrip(
+                channel,
+                source="whatsapp_ai_delivery_confirmed",
+            )
 
     row.updated_at = now
     db.flush()

@@ -21,11 +21,16 @@ SENSITIVE_WORDS = (
 )
 
 ENCRYPTED_PREFIX = "xvond:enc:v1:"
+INTERNAL_CONFIG_PREFIX = "_xvond_"
 
 
 def is_sensitive_key(key: str) -> bool:
     normalized = str(key).lower()
     return any(word in normalized for word in SENSITIVE_WORDS)
+
+
+def is_internal_key(key: str) -> bool:
+    return str(key).startswith(INTERNAL_CONFIG_PREFIX)
 
 
 def _cipher() -> Fernet:
@@ -104,7 +109,7 @@ def public_config(value):
         return {
             key: public_config(item)
             for key, item in value.items()
-            if not is_sensitive_key(key)
+            if not is_sensitive_key(key) and not is_internal_key(key)
         }
 
     if isinstance(value, list):

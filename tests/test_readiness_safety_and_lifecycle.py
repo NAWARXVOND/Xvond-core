@@ -21,7 +21,8 @@ def test_readiness_language_distinguishes_runtime_from_commercial_state():
     assert "Company runtime is currently stopped" in source
 
 
-def test_coexistence_transport_needs_real_echo_before_customer_ready():
+def test_coexistence_needs_roundtrip_and_real_echo_before_customer_ready(monkeypatch):
+    monkeypatch.setattr(readiness, "customer_roundtrip_verified", lambda _config: True)
     assert readiness._channel_customer_accepted(
         channel_type="whatsapp",
         channel_config={"coexistence": True},
@@ -36,7 +37,16 @@ def test_coexistence_transport_needs_real_echo_before_customer_ready():
     ) is True
 
 
-def test_non_coexistence_connected_channel_can_be_customer_accepted():
+def test_connected_channel_needs_real_roundtrip_before_customer_accepted(monkeypatch):
+    monkeypatch.setattr(readiness, "customer_roundtrip_verified", lambda _config: False)
+    assert readiness._channel_customer_accepted(
+        channel_type="website",
+        channel_config={},
+        connected=True,
+        connection=None,
+    ) is False
+
+    monkeypatch.setattr(readiness, "customer_roundtrip_verified", lambda _config: True)
     assert readiness._channel_customer_accepted(
         channel_type="website",
         channel_config={},
