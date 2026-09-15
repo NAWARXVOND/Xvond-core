@@ -15,10 +15,11 @@ compose_workflow() {
 }
 
 wait_for_runtime_webhook() {
-    attempts="${1:-45}"
+    attempts="${1:-90}"
     count=0
+    last_error=""
     while [ "$count" -lt "$attempts" ]; do
-        if docker exec xvond-workflow-engine node -e '
+        if output="$(docker exec xvond-workflow-engine node -e '
 const secret = String(process.env.N8N_SHARED_SECRET || "");
 const requestId = `sync-${Date.now()}`;
 fetch("http://127.0.0.1:5678/webhook/xvond-actions", {
@@ -31,25 +32,41 @@ fetch("http://127.0.0.1:5678/webhook/xvond-actions", {
   body: JSON.stringify({request_id: requestId, company_id: 1, agent_id: 1, conversation_id: null, action: "health_check", data: {source: "workflow_sync"}}),
 }).then(async response => {
   const text = await response.text();
-  if (response.ok) process.exit(0);
-  if (response.status === 404 && text.includes("webhook is not registered")) process.exit(2);
-  console.error(`Workflow runtime probe failed: http_${response.status}:${text.slice(0, 300)}`);
-  process.exit(1);
+  if (!response.ok) {
+    console.error(`http_${response.status}:${text.slice(0, 300)}`);
+    process.exit(2);
+  }
+  let result;
+  try { result = JSON.parse(text); }
+  catch (_error) {
+    console.error(`invalid_json_response:${text.slice(0, 300)}`);
+    process.exit(2);
+  }
+  if (!result || result.success !== true || !result.data || String(result.data.status || "").toLowerCase() !== "ok") {
+    console.error(`invalid_contract_response:${text.slice(0, 300)}`);
+    process.exit(2);
+  }
+  process.exit(0);
 }).catch(error => {
-  console.error(`Workflow runtime probe failed: ${String(error && error.message || "unknown")}`);
+  console.error(`fetch_failed:${String(error && error.message || "unknown")}`);
   process.exit(2);
-});'; then
+});' 2>&1)"; then
             return 0
         else
             code="$?"
+            last_error="$output"
             if [ "$code" -ne 2 ]; then
+                printf '%s\n' "$last_error" >&2
                 return "$code"
             fi
         fi
         count=$((count + 1))
         sleep 1
     done
-    echo "Workflow runtime webhook did not register after restart" >&2
+    echo "Workflow runtime webhook did not become ready after restart" >&2
+    if [ -n "$last_error" ]; then
+        printf 'Last runtime probe error: %s\n' "$last_error" >&2
+    fi
     docker logs --tail 100 xvond-workflow-engine >&2 || true
     return 1
 }
