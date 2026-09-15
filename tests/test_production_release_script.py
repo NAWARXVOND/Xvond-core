@@ -61,9 +61,9 @@ def test_release_preflights_workflow_before_runtime_cutover_when_required():
     workflow_setting = SOURCE.index("settings.N8N_ENABLED")
     workflow_db_start = SOURCE.index('--profile workflow up -d workflow-postgres')
     workflow_db_ready = SOURCE.index("wait_healthy xvond-workflow-postgres")
-    workflow_start = SOURCE.index('--profile workflow up -d --no-deps workflow-engine')
+    workflow_sync = SOURCE.index('COMPOSE_FILE="$COMPOSE_FILE" sh scripts/sync_workflow_engine.sh')
     workflow_ready = SOURCE.index("wait_healthy xvond-workflow-engine")
-    workflow_probe = SOURCE.index("probe_workflow_contract")
+    workflow_probe_call = SOURCE.index("    probe_workflow_contract", workflow_ready)
     stop_worker = SOURCE.index("compose stop whatsapp-worker")
     recreate_app = SOURCE.index("--force-recreate app")
     acceptance = SOURCE.index("scripts/production_acceptance.py")
@@ -72,16 +72,15 @@ def test_release_preflights_workflow_before_runtime_cutover_when_required():
         < workflow_setting
         < workflow_db_start
         < workflow_db_ready
-        < workflow_start
+        < workflow_sync
         < workflow_ready
+        < workflow_probe_call
         < stop_worker
         < recreate_app
         < acceptance
     )
     assert "Workflow contract probe failed" in SOURCE
     assert 'action: "health_check"' in SOURCE
-    assert workflow_probe < workflow_db_start
-    assert SOURCE.index("    probe_workflow_contract", workflow_ready) < stop_worker
 
 
 def test_workflow_engine_has_real_http_healthcheck_before_release_continues():
