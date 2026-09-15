@@ -91,6 +91,14 @@ def test_workflow_sync_publishes_and_sets_active_before_restart():
     assert publish < activate < restart
 
 
+def test_workflow_sync_retries_transient_runtime_startup_failures():
+    assert 'attempts="${1:-90}"' in WORKFLOW_SYNC
+    assert 'process.exit(2)' in WORKFLOW_SYNC
+    assert 'sleep 1' in WORKFLOW_SYNC
+    assert 'invalid_contract_response' in WORKFLOW_SYNC
+    assert 'Last runtime probe error:' in WORKFLOW_SYNC
+
+
 def test_workflow_engine_has_real_http_healthcheck_before_release_continues():
     workflow = COMPOSE.split("  workflow-engine:", 1)[1].split("\nvolumes:", 1)[0]
     assert "healthcheck:" in workflow
