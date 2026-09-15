@@ -19,7 +19,11 @@ META_CONNECTION_METHODS = frozenset(
 )
 
 _GRAPH_VERSION_PATTERN = re.compile(r"^v\d+\.\d+$")
-_PROBE_CACHE_TTL_SECONDS = 60.0
+# Remote transport checks are intentionally short-lived, but must not turn the
+# WhatsApp message hot path into a Graph API polling loop. One successful check
+# is enough for ten minutes; actual inbound webhooks and delivery callbacks are
+# stronger runtime evidence between probes.
+_PROBE_CACHE_TTL_SECONDS = 600.0
 _PROBE_CACHE_MAX_ENTRIES = 1024
 _probe_cache: dict[tuple[str, ...], tuple[float, dict]] = {}
 _probe_lock = threading.Lock()
@@ -135,6 +139,26 @@ def _meta_error_code(body: bytes) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
+
+
+def _coexistence_setup_recorded(config: dict) -> bool:
+    """Return whether Embedded Signup stored the required coexistence setup.
+
+    The expensive app-subscription checks happen during onboarding. Runtime
+    message processing should not re-query those Graph endpoints repeatedly;
+    signed inbound webhooks and provider delivery callbacks provide stronger
+    ongoing evidence that the transport is functioning.
+    """
+
+    fields = {
+        str(value).strip()
+        for value in (config.get("subscribed_webhook_fields") or [])
+        if str(value).strip()
+    }
+    return (
+        config.get("waba_subscription_verified") is True
+        and {"messages", "smb_message_echoes"}.issubset(fields)
+    )
 
 
 def whatsapp_connection_state(
@@ -283,39 +307,10 @@ def whatsapp_connection_state(
         )
 
     if config.get("coexistence") is True:
-        # Transport validity is not enough for safe Business App coexistence.
-        # The app must be subscribed to both inbound messages and SMB echoes.
-        # A real echo is tracked separately as proof that automatic human
-        # takeover has been observed; it is not a prerequisite for the first
-        # AI reply, otherwise a freshly connected number deadlocks forever.
-        from backend.app.api.admin_meta_whatsapp import (
-            _coexistence_subscription_evidence,
-            _graph_request,
-            _graph_url,
-            _meta_settings,
-        )
-
-        meta = _meta_settings()
-        try:
-            evidence = _coexistence_subscription_evidence(meta)
-            subscriptions = _graph_request(
-                "GET",
-                _graph_url(
-                    graph_api_version,
-                    f"{urllib.parse.quote(str(config.get('waba_id') or ''), safe='')}/subscribed_apps",
-                ),
-                access_token=access_token,
-            )
-            subscribed = any(
-                str((row.get("whatsapp_business_api_data") or row).get("id"))
-                == str(meta["app_id"])
-                for row in subscriptions.get("data", [])
-            )
-            fields = set(evidence["subscribed_webhook_fields"])
-            setup_ok = subscribed and {"messages", "smb_message_echoes"}.issubset(fields)
-        except Exception:
-            setup_ok = False
-
+        # Embedded Signup already verified the WABA subscription and app webhook
+        # fields. Re-querying those endpoints from the customer message hot path
+        # multiplies Meta traffic and can block replies on transient probe errors.
+        setup_ok = _coexistence_setup_recorded(config)
         echo_seen = bool(config.get("coexistence_echo_received_at"))
         if not setup_ok:
             return _store(
