@@ -77,6 +77,42 @@ case "$(git status --porcelain 2>/dev/null || true)" in
         ;;
 esac
 
+if [ ! -f .env ]; then
+    echo "Refusing production deploy: .env is missing" >&2
+    exit 1
+fi
+
+# Never let the example environment accidentally become production. Report only
+# the variable name, never the secret value itself.
+placeholder_key="$(awk -F= '
+    /^[[:space:]]*#/ || !/=/{next}
+    {
+        key=$1
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+        value=substr($0, index($0, "=") + 1)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        upper=toupper(value)
+        lower=tolower(value)
+        if (
+            upper ~ /GENERATE_/ ||
+            upper ~ /CHANGE_TO_/ ||
+            upper ~ /URL_ENCODED_PASSWORD/ ||
+            upper ~ /REPLACE_ME/ ||
+            upper ~ /YOUR_SECRET/ ||
+            upper ~ /YOUR_PASSWORD/ ||
+            upper ~ /EXAMPLE_SECRET/ ||
+            (key == "SUPERADMIN_EMAIL" && lower == "admin@example.com")
+        ) {
+            print key
+            exit
+        }
+    }
+' .env)"
+if [ -n "$placeholder_key" ]; then
+    echo "Refusing production deploy: placeholder value remains for $placeholder_key" >&2
+    exit 1
+fi
+
 release_sha="$(git rev-parse HEAD)"
 release_short="$(git rev-parse --short HEAD)"
 echo "Deploying Xvond release $release_short"

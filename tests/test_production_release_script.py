@@ -11,6 +11,25 @@ def test_release_refuses_dirty_tree_and_validates_compose():
     assert "compose config" in SOURCE
 
 
+def test_release_rejects_missing_or_placeholder_environment_before_compose():
+    env_check = SOURCE.index('if [ ! -f .env ]')
+    placeholder_check = SOURCE.index('placeholder_key="$(awk')
+    placeholder_failure = SOURCE.index("placeholder value remains for")
+    compose_config = SOURCE.index("compose config >/dev/null")
+    assert env_check < placeholder_check < placeholder_failure < compose_config
+    for marker in (
+        "GENERATE_",
+        "CHANGE_TO_",
+        "URL_ENCODED_PASSWORD",
+        "REPLACE_ME",
+        "YOUR_SECRET",
+        "YOUR_PASSWORD",
+        "EXAMPLE_SECRET",
+        "admin@example.com",
+    ):
+        assert marker in SOURCE
+
+
 def test_release_takes_backup_before_recreating_application():
     backup = SOURCE.index("backup_postgres.sh")
     build = SOURCE.index("compose build app")
