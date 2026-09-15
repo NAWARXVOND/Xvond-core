@@ -48,9 +48,15 @@ fetch(url, {
   },
   body: JSON.stringify({request_id: requestId, company_id: 1, agent_id: 1, conversation_id: null, action: "health_check", data: {source: "production_release"}}),
 }).then(async response => {
-  if (!response.ok) throw new Error(`http_${response.status}`);
-  const result = await response.json();
-  if (!result || result.success !== true || !result.data || String(result.data.status || "").toLowerCase() !== "ok") throw new Error("invalid_contract_response");
+  const text = await response.text();
+  if (!response.ok) throw new Error(`http_${response.status}:${text.slice(0, 200)}`);
+  if (!text.trim()) throw new Error("empty_contract_response");
+  let result;
+  try { result = JSON.parse(text); }
+  catch (_error) { throw new Error(`invalid_json_response:${text.slice(0, 200)}`); }
+  if (!result || result.success !== true || !result.data || String(result.data.status || "").toLowerCase() !== "ok") {
+    throw new Error(`invalid_contract_response:${text.slice(0, 200)}`);
+  }
 }).catch(error => {
   console.error(`Workflow contract probe failed: ${String(error && error.message || "unknown")}`);
   process.exit(1);
@@ -174,7 +180,7 @@ fi
 if [ "$workflow_enabled" = "true" ]; then
     docker compose -f "$COMPOSE_FILE" --profile workflow up -d workflow-postgres
     wait_healthy xvond-workflow-postgres
-    docker compose -f "$COMPOSE_FILE" --profile workflow up -d --no-deps workflow-engine
+    COMPOSE_FILE="$COMPOSE_FILE" sh scripts/sync_workflow_engine.sh
     wait_healthy xvond-workflow-engine
     probe_workflow_contract
 fi
