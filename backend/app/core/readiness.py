@@ -15,6 +15,7 @@ from backend.app.models.company_profile import CompanyProfile
 from backend.app.modules.ai_agent.models import AIAgent
 from backend.app.modules.ai_agent.profile_models import AIAgentProfile
 from backend.app.modules.billing.service_models import ServicePlan, ServiceSubscription
+from backend.app.modules.channels.acceptance import customer_roundtrip_verified
 from backend.app.modules.channels.catalog import validate_channel_config
 from backend.app.modules.channels.models import AgentChannel
 from backend.app.modules.channels.whatsapp_connection import whatsapp_connection_state
@@ -123,21 +124,19 @@ def _channel_customer_accepted(
     connected: bool,
     connection: dict | None,
 ) -> bool:
-    """Return whether an enabled channel has the acceptance evidence Core can store.
+    """Return whether a live channel has evidence from the real customer path.
 
-    Connectivity and customer acceptance are intentionally distinct. WhatsApp
-    Business App Coexistence needs one observed SMB echo to prove automatic human
-    takeover before the channel counts toward ``ready_for_customer``. This does not
-    block transport or AI replies during the controlled acceptance window.
+    Configuration and transport connectivity are prerequisites, not acceptance.
+    Every channel needs a successful real round-trip marker. WhatsApp Business App
+    Coexistence additionally needs an observed SMB echo so native human takeover is
+    proven before the channel can count toward ``ready_for_customer``.
     """
 
-    if not connected:
+    if not connected or not customer_roundtrip_verified(channel_config):
         return False
-    if channel_type != "whatsapp":
-        return True
-    if channel_config.get("coexistence") is not True:
-        return True
-    return bool(connection and connection.get("coexistence_ready") is True)
+    if channel_type == "whatsapp" and channel_config.get("coexistence") is True:
+        return bool(connection and connection.get("coexistence_ready") is True)
+    return True
 
 
 def company_readiness(db, company_id: int):
@@ -295,6 +294,7 @@ def company_readiness(db, company_id: int):
                     or (connection and connection["connected"] is True)
                 )
             )
+            roundtrip_verified = customer_roundtrip_verified(channel_config)
             customer_accepted = _channel_customer_accepted(
                 channel_type=channel.channel_type,
                 channel_config=channel_config,
@@ -308,6 +308,7 @@ def company_readiness(db, company_id: int):
                     "enabled": channel.enabled,
                     "configured": configured,
                     "connected": connected,
+                    "roundtrip_verified": roundtrip_verified,
                     "customer_accepted": customer_accepted,
                     "coexistence_ready": (
                         connection.get("coexistence_ready") if connection else None
@@ -387,14 +388,24 @@ def company_readiness(db, company_id: int):
                 "WhatsApp is enabled locally but Meta transport is not connected"
             )
         if any(
+            item["enabled"]
+            and item["connected"]
+            and not item["roundtrip_verified"]
+            for item in channel_results
+        ):
+            warnings.append(
+                "Channel transport is live but a real customer round-trip has not been verified"
+            )
+        if any(
             item["type"] == "whatsapp"
             and item["enabled"]
             and item["connected"]
+            and item["roundtrip_verified"]
             and item["coexistence_ready"] is False
             for item in channel_results
         ):
             warnings.append(
-                "WhatsApp Coexistence transport is live but human takeover acceptance is pending"
+                "WhatsApp Coexistence transport and AI round-trip are live but human takeover acceptance is pending"
             )
 
         setup_ready = bool(
