@@ -57,6 +57,61 @@ fetch(url, {
 });'
 }
 
+env_value() {
+    key="$1"
+    awk -F= -v wanted="$key" '
+        /^[[:space:]]*#/ || !/=/{next}
+        {
+            current=$1
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", current)
+            if (current == wanted) {
+                value=substr($0, index($0, "=") + 1)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+                print value
+                exit
+            }
+        }
+    ' .env
+}
+
+is_placeholder_value() {
+    upper="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+    case "$upper" in
+        *GENERATE_*|*CHANGE_TO_*|*URL_ENCODED_PASSWORD*|*REPLACE_ME*|*YOUR_SECRET*|*YOUR_PASSWORD*|*EXAMPLE_SECRET*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+require_real_env() {
+    key="$1"
+    value="$(env_value "$key")"
+    if [ -z "$value" ]; then
+        echo "Refusing production deploy: required value is missing for $key" >&2
+        exit 1
+    fi
+    if is_placeholder_value "$value"; then
+        echo "Refusing production deploy: placeholder value remains for $key" >&2
+        exit 1
+    fi
+    if [ "$key" = "SUPERADMIN_EMAIL" ] && [ "$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')" = "admin@example.com" ]; then
+        echo "Refusing production deploy: placeholder value remains for $key" >&2
+        exit 1
+    fi
+}
+
+parse_bool_env() {
+    key="$1"
+    value="$(env_value "$key" | tr '[:upper:]' '[:lower:]')"
+    case "$value" in
+        1|true|yes|on) printf 'true\n' ;;
+        0|false|no|off|'') printf 'false\n' ;;
+        *)
+            echo "Refusing production deploy: invalid boolean value for $key" >&2
+            exit 1
+            ;;
+    esac
+}
+
 case "$(git status --porcelain 2>/dev/null || true)" in
     "") ;;
     *) echo "Refusing production deploy from a dirty Git working tree" >&2; exit 1 ;;
@@ -67,28 +122,34 @@ if [ ! -f .env ]; then
     exit 1
 fi
 
-placeholder_key="$(awk -F= '
-    /^[[:space:]]*#/ || !/=/{next}
-    {
-        key=$1
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
-        value=substr($0, index($0, "=") + 1)
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-        upper=toupper(value)
-        lower=tolower(value)
-        if (upper ~ /GENERATE_/) { print key; exit }
-        if (upper ~ /CHANGE_TO_/) { print key; exit }
-        if (upper ~ /URL_ENCODED_PASSWORD/) { print key; exit }
-        if (upper ~ /REPLACE_ME/) { print key; exit }
-        if (upper ~ /YOUR_SECRET/) { print key; exit }
-        if (upper ~ /YOUR_PASSWORD/) { print key; exit }
-        if (upper ~ /EXAMPLE_SECRET/) { print key; exit }
-        if (key == "SUPERADMIN_EMAIL" && lower == "admin@example.com") { print key; exit }
-    }
-' .env)"
-if [ -n "$placeholder_key" ]; then
-    echo "Refusing production deploy: placeholder value remains for $placeholder_key" >&2
-    exit 1
+# Core production secrets are mandatory on every release. Optional feature
+# secrets are validated only when that feature is enabled, so disabled profiles
+# may safely retain template placeholders without weakening active services.
+for key in \
+    DATABASE_URL \
+    DATABASE_URL_DOCKER \
+    POSTGRES_PASSWORD \
+    JWT_SECRET \
+    CONFIG_ENCRYPTION_KEY \
+    SUPERADMIN_EMAIL \
+    SUPERADMIN_PASSWORD \
+    PUBLIC_BASE_URL
+do
+    require_real_env "$key"
+done
+
+workflow_enabled="$(parse_bool_env N8N_ENABLED)"
+if [ "$workflow_enabled" = "true" ]; then
+    for key in \
+        N8N_WEBHOOK_URL \
+        N8N_SHARED_SECRET \
+        WORKFLOW_ENGINE_VERSION \
+        WORKFLOW_DB_PASSWORD \
+        WORKFLOW_ENCRYPTION_KEY \
+        WORKFLOW_PUBLIC_URL
+    do
+        require_real_env "$key"
+    done
 fi
 
 release_sha="$(git rev-parse HEAD)"
@@ -101,7 +162,14 @@ wait_healthy xvond-postgres
 wait_healthy xvond-redis
 compose run --rm --no-deps --entrypoint /bin/sh postgres-backup /opt/xvond/scripts/backup_postgres.sh
 compose build app
-workflow_enabled="$(compose run --rm --no-deps --entrypoint python app -c "from backend.app.core.config.settings import settings; print('true' if settings.N8N_ENABLED else 'false')" | tr -d '\r\n')"
+
+# Parse the built application's effective settings as a second source of truth.
+# It must agree with the feature-aware host preflight before any live cutover.
+runtime_workflow_enabled="$(compose run --rm --no-deps --entrypoint python app -c "from backend.app.core.config.settings import settings; print('true' if settings.N8N_ENABLED else 'false')" | tr -d '\r\n')"
+if [ "$runtime_workflow_enabled" != "$workflow_enabled" ]; then
+    echo "Refusing production deploy: workflow enablement differs between .env preflight and application settings" >&2
+    exit 1
+fi
 
 if [ "$workflow_enabled" = "true" ]; then
     docker compose -f "$COMPOSE_FILE" --profile workflow up -d workflow-postgres
