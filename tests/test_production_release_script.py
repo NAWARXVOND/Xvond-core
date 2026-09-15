@@ -3,6 +3,7 @@ from pathlib import Path
 
 SOURCE = Path("scripts/deploy_production.sh").read_text(encoding="utf-8")
 COMPOSE = Path("docker-compose.production.yml").read_text(encoding="utf-8")
+WORKFLOW_SYNC = Path("scripts/sync_workflow_engine.sh").read_text(encoding="utf-8")
 
 
 def test_release_refuses_dirty_tree_and_validates_compose():
@@ -81,6 +82,13 @@ def test_release_preflights_workflow_before_runtime_cutover_when_required():
     )
     assert "Workflow contract probe failed" in SOURCE
     assert 'action: "health_check"' in SOURCE
+
+
+def test_workflow_sync_publishes_and_sets_active_before_restart():
+    publish = WORKFLOW_SYNC.index('publish:workflow --id="$WORKFLOW_ID"')
+    activate = WORKFLOW_SYNC.index('update:workflow --id="$WORKFLOW_ID" --active=true')
+    restart = WORKFLOW_SYNC.index("up -d --no-deps workflow-engine")
+    assert publish < activate < restart
 
 
 def test_workflow_engine_has_real_http_healthcheck_before_release_continues():
