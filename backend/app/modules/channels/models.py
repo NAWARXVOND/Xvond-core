@@ -65,6 +65,17 @@ class AgentChannel(Base):
         nullable=False,
     )
 
+    # System-owned runtime acceptance evidence. These fields are deliberately
+    # outside ``config`` so admin/customer config APIs cannot forge customer
+    # readiness by injecting a timestamp into mutable channel configuration.
+    customer_roundtrip_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+    customer_roundtrip_source: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
 
     @validates("config")
     def protect_stored_config(self, _key, value):
