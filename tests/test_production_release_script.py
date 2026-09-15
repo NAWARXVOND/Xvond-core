@@ -13,10 +13,11 @@ def test_release_refuses_dirty_tree_and_validates_compose():
 
 def test_release_rejects_missing_or_placeholder_environment_before_compose():
     env_check = SOURCE.index('if [ ! -f .env ]')
-    placeholder_check = SOURCE.index('placeholder_key="$(awk')
-    placeholder_failure = SOURCE.index("placeholder value remains for")
+    required_core = SOURCE.index('for key in \\\n    DATABASE_URL')
+    require_real_env_call = SOURCE.index('    require_real_env "$key"', required_core)
     compose_config = SOURCE.index("compose config >/dev/null")
-    assert env_check < placeholder_check < placeholder_failure < compose_config
+    assert env_check < required_core < require_real_env_call < compose_config
+    assert "placeholder value remains for $key" in SOURCE
     for marker in (
         "GENERATE_",
         "CHANGE_TO_",
@@ -28,6 +29,16 @@ def test_release_rejects_missing_or_placeholder_environment_before_compose():
         "admin@example.com",
     ):
         assert marker in SOURCE
+
+
+def test_release_validates_workflow_secrets_only_when_enabled():
+    workflow_flag = SOURCE.index('workflow_enabled="$(parse_bool_env N8N_ENABLED)"')
+    workflow_gate = SOURCE.index('if [ "$workflow_enabled" = "true" ]; then', workflow_flag)
+    workflow_secret = SOURCE.index("N8N_SHARED_SECRET", workflow_gate)
+    workflow_db_secret = SOURCE.index("WORKFLOW_DB_PASSWORD", workflow_gate)
+    workflow_encrypt_secret = SOURCE.index("WORKFLOW_ENCRYPTION_KEY", workflow_gate)
+    compose_config = SOURCE.index("compose config >/dev/null")
+    assert workflow_flag < workflow_gate < workflow_secret < workflow_db_secret < workflow_encrypt_secret < compose_config
 
 
 def test_release_takes_backup_before_recreating_application():
